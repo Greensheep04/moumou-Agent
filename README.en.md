@@ -49,7 +49,8 @@ Per-member tasks, acceptance commands and milestones live in
 ## Quick start
 
 ```bash
-git clone <repo-url> && cd project-5202
+git clone https://github.com/Greensheep04/moumou-Agent.git
+cd moumou-Agent
 
 # 1. Environment (Python 3.11+)
 make install
@@ -145,7 +146,8 @@ runs/            runtime artifacts (not committed)
 
 | Document | Audience | Contents |
 | --- | --- | --- |
-| [docs/INTERFACES.md](docs/INTERFACES.md) | **everyone, read first** | Port signatures, input/output formats, required behaviour |
+| [docs/SETUP.md](docs/SETUP.md) | **new joiners, read first** | Dependencies, `.env`, verification, commands |
+| [docs/INTERFACES.md](docs/INTERFACES.md) | **anyone implementing a port** | Port signatures, input/output formats, conventions |
 | [docs/STATUS.md](docs/STATUS.md) | everyone | Module progress, per-member tasks, milestones |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | anyone curious about the design | Mechanism rationale, diagrams, known limits |
 | [docs/EVAL.md](docs/EVAL.md) | P3 | Task format, metric definitions, how to run |

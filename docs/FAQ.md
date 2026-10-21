@@ -61,6 +61,18 @@ git status
 
 立刻去平台后台吊销这个 key（比改历史更重要），然后重新申请。
 
+**`git push` 报 `Failed to connect to 127.0.0.1:7888`**
+
+全局 git 配置里给 github.com 单独设了代理，但代理没有启动。两种办法：
+
+```bash
+# 临时绕过，只对本次命令生效
+git -c 'http.https://github.com/.proxy=' push
+
+# 或者永久删掉这条配置
+git config --global --unset 'http.https://github.com/.proxy'
+```
+
 **分支怎么开**
 
 一人一个长期分支，例如 `feat/p1-sandbox`、`feat/p2-cli`、`feat/p3-eval`。

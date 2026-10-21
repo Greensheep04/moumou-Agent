@@ -40,7 +40,8 @@
 ## 快速开始
 
 ```bash
-git clone <repo-url> && cd project-5202
+git clone https://github.com/Greensheep04/moumou-Agent.git
+cd moumou-Agent
 
 # 1. 环境（Python 3.11+）
 make install
@@ -53,6 +54,8 @@ make demo     # 完整链路演示，用假模型，秒级完成
 make smoke    # 验证 key 和模型名
 make eval     # 跑评测集
 ```
+
+完整的环境说明（依赖、`.env`、验证步骤、常用命令）见 **[环境配置](docs/SETUP.md)**。
 
 ## 配置 API Key（每人配自己的）
 
@@ -133,7 +136,8 @@ runs/            运行时产物（不进仓库）
 
 | 文档 | 给谁看 | 内容 |
 | --- | --- | --- |
-| [接口说明](docs/INTERFACES.md) | **所有人，先看这个** | 6 个端口的签名、输入输出格式、必须保证的行为 |
+| [环境配置](docs/SETUP.md) | **新加入的人，先看这个** | 依赖、`.env`、验证步骤、常用命令 |
+| [接口说明](docs/INTERFACES.md) | **接入模块的人，先看这个** | 6 个端口的签名、输入输出格式、实现约定 |
 | [项目状态](docs/STATUS.md) | 所有人 | 各模块进度、各成员任务、里程碑 |
 | [架构说明](docs/ARCHITECTURE.md) | 想理解设计的人 | 机制原理、流程图、已知边界 |
 | [评测说明](docs/EVAL.md) | P3 | 题库格式、指标口径、怎么跑 |
