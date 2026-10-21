@@ -11,6 +11,8 @@ automatically — you should not need to edit the test.
 
 from __future__ import annotations
 
+import asyncio
+import os
 import time
 
 import pytest
@@ -107,6 +109,33 @@ async def test_shell_timeout_actually_kills_the_process(tools, ctx):
     assert not result.ok
     assert result.error and "timeout" in result.error.lower()
     assert elapsed < 5, "the tool waited for the child process instead of killing it"
+
+
+async def test_cancelling_a_tool_kills_its_child(tools, ctx):
+    """Ctrl-C during `make eval` must not leave orphaned commands behind."""
+    pid_file = ctx.workspace / "child.pid"
+    script = (
+        "import os, time; "
+        f"open({str(pid_file)!r}, 'w').write(str(os.getpid())); "
+        "time.sleep(30)"
+    )
+    task = asyncio.create_task(
+        tools["shell"].run({"command": f'python3 -c "{script}"', "timeout_s": 60}, ctx)
+    )
+
+    for _ in range(100):                      # wait for the child to announce itself
+        if pid_file.exists() and pid_file.read_text().strip():
+            break
+        await asyncio.sleep(0.05)
+
+    child_pid = int(pid_file.read_text().strip())
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    await asyncio.sleep(0.2)
+    with pytest.raises(ProcessLookupError):   # signal 0 only checks existence
+        os.kill(child_pid, 0)
 
 
 async def test_large_output_is_truncated(tools, ctx):

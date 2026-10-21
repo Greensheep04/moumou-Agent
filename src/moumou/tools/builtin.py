@@ -49,6 +49,11 @@ async def run_process(cmd: str, cwd: Path, timeout: float) -> ToolResult:
         proc.kill()
         await proc.wait()
         return ToolResult(ok=False, error=f"timeout after {timeout}s")
+    except asyncio.CancelledError:
+        # Ctrl-C during a run, or an abort: the child must not outlive us.
+        proc.kill()
+        await proc.wait()
+        raise
 
     stdout, t1 = _clip(out.decode("utf-8", "replace"))
     stderr, t2 = _clip(err.decode("utf-8", "replace"))
