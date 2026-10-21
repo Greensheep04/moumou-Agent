@@ -1,0 +1,30 @@
+id: s2_bugfix
+title: 修复一个算错的函数
+scenario: debug
+goal: |
+  项目里的 calc.py 有一个 bug：add(2, 3) 返回的是 -1，而它应该返回 5。
+  请定位并修复这个 bug。不要改变 add 的函数名和参数顺序，
+  也不要删掉文件末尾的 __main__ 块。
+acceptance:
+  - kind: command
+    target: 'python3 -c "import calc; assert calc.add(2, 3) == 5"'
+    expect: "0"
+  - kind: file_contains
+    target: calc.py
+    expect: "def add"
+setup:
+  calc.py: |
+    def add(a, b):
+        return a - b
+
+
+    if __name__ == "__main__":
+        print(add(2, 3))
+budget:
+  max_steps: 20
+  max_wall_s: 300
+human:
+  default: approve
+repeats: 1
+tags: [scenario-2]
+notes: 验证 agent 会先读文件、再改文件，而不是凭空重写整个模块。

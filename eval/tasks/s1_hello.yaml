@@ -1,0 +1,22 @@
+id: s1_hello
+title: 从零写一个可运行的脚本
+scenario: from_scratch
+goal: |
+  在当前项目里创建 hello.py。运行 `python3 hello.py` 时，必须输出：
+  hello, moumou
+  （全小写，逗号后面有一个空格，结尾换行）
+  写完之后你自己运行一次，确认输出正确。
+acceptance:
+  - kind: file_exists
+    target: hello.py
+  - kind: command
+    target: python3 hello.py
+    expect: "0"
+budget:
+  max_steps: 15
+  max_wall_s: 300
+human:
+  default: approve
+repeats: 1
+tags: [scenario-1, easy]
+notes: 最基础的路径：写文件 → 跑命令 → 机器验收。

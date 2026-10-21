@@ -1,0 +1,237 @@
+"""The facade. Everything outside ``orchestrator`` talks to this and nothing else."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from time import monotonic
+
+from pydantic import BaseModel, Field
+
+from moumou.adapters import AutoApproveHuman, InMemoryBus, LocalDirs
+from moumou.context import ContextBuilder
+from moumou.contracts import (
+    HUMAN_ID,
+    Budget,
+    Message,
+    RoleSpec,
+    TaskNode,
+)
+from moumou.orchestrator.acceptance import AcceptanceChecker
+from moumou.orchestrator.delegation import Delegation
+from moumou.orchestrator.gate import ApprovalPolicy, Gate
+from moumou.orchestrator.scheduler import Scheduler
+from moumou.orchestrator.state import Database, SqliteRoleRegistry, SqliteTaskRepo
+from moumou.orchestrator.worker import TaskRunner
+from moumou.tools import ToolRegistry, default_tools
+from moumou.trace import Recorder
+
+BOOTSTRAP_ROLE = "planner"
+
+PLANNER_PROMPT = (
+    "You receive work from a human and you own the outcome. "
+    "First decide if the job is small enough to do yourself. If it is not, call "
+    "submit_plan to split it into sub-tasks for specialists you define. "
+    "Each sub-task goal must be self-contained: a specialist sees only that goal, "
+    "the acceptance criteria, and the reports of its own dependencies. "
+    "Prefer declaring acceptance criteria that can be executed (a command, a file "
+    "existence check) over vague ones."
+)
+
+
+class Settings(BaseModel):
+    project_id: str = "default"
+    conversation_id: str = "default"
+    root: Path = Path("runs")
+    max_slots: int = 4
+    max_rounds: int = 500
+    approval: dict[str, bool] = Field(default_factory=dict)
+
+
+class RunReport(BaseModel):
+    project_id: str
+    wall_s: float
+    total: int
+    done: int
+    dead: int
+    unfinished: int
+    completion_rate: float
+    tokens_in: int
+    tokens_out: int
+    tasks: list[dict]
+
+
+class Engine:
+    def __init__(
+        self,
+        llm,
+        *,
+        human=None,
+        bus=None,
+        workspace=None,
+        tools: ToolRegistry | None = None,
+        settings: Settings | None = None,
+        memory=None,
+    ):
+        self.settings = settings or Settings()
+        root = Path(self.settings.root)
+        root.mkdir(parents=True, exist_ok=True)
+
+        self.db = Database(root / "moumou.db")
+        self.repo = SqliteTaskRepo(self.db)
+        self.roles = SqliteRoleRegistry(self.db)
+        self.trace = Recorder(root / "trace.jsonl")
+
+        self.bus = bus or InMemoryBus()
+        self.human = human or AutoApproveHuman()
+        self.workspace = workspace or LocalDirs(root / "workspaces")
+
+        self.tools = tools or ToolRegistry()
+        if not self.tools.names():
+            self.tools.register_all(*default_tools())
+
+        self.gate = Gate(
+            self.repo, self.tools, self.human, self.trace, ApprovalPolicy(self.settings.approval)
+        )
+        self.delegation = Delegation(self.repo, self.roles, self.trace, self.tools.names())
+        self.acceptance = AcceptanceChecker(self.trace)
+        self.context = ContextBuilder(memory)
+
+        self.runner = TaskRunner(
+            repo=self.repo,
+            roles=self.roles,
+            llm=llm,
+            tools=self.tools,
+            gate=self.gate,
+            context=self.context,
+            trace=self.trace,
+            bus=self.bus,
+            acceptance=self.acceptance,
+            delegation=self.delegation,
+            workspace=self.workspace,
+            human=self.human,
+        )
+        self.scheduler = Scheduler(
+            self.repo, self.runner, self.trace, self.settings.max_slots, self.settings.max_rounds
+        )
+
+    # -- submitting work -------------------------------------------------
+    def submit(
+        self,
+        goal: str,
+        *,
+        acceptance: list | None = None,
+        budget: Budget | None = None,
+    ) -> TaskNode:
+        self._ensure_bootstrap_role()
+        seq = self.repo.count_root_tasks() + 1
+        node = TaskNode(
+            id=f"t{seq}",
+            project_id=self.settings.project_id,
+            conversation_id=self.settings.conversation_id,
+            goal=goal,
+            role=BOOTSTRAP_ROLE,
+            acceptance=acceptance or [],
+            budget=budget or Budget(),
+        )
+        self.repo.add(node)
+        self.repo.transition(node.id, "READY", "submitted")
+        return self.repo.get(node.id)
+
+    def _ensure_bootstrap_role(self) -> None:
+        if self.roles.get(self.settings.project_id, BOOTSTRAP_ROLE) is not None:
+            return
+        self.roles.create(
+            RoleSpec(
+                name=BOOTSTRAP_ROLE,
+                title="Task lead",
+                description=PLANNER_PROMPT,
+                tools=sorted(self.tools.names()),
+                created_by="human",
+                reason="bootstrap role: someone has to receive work from the human",
+                project_id=self.settings.project_id,
+            )
+        )
+
+    # -- running ---------------------------------------------------------
+    async def run(self) -> RunReport:
+        self._recover()
+        started = monotonic()
+        await self.scheduler.run()
+        wall = monotonic() - started
+
+        tasks = self.repo.all_tasks()
+        ids = {t.id for t in tasks}
+        tokens_in = tokens_out = 0
+        for event in self.trace.all_events():
+            if event.task_id in ids:
+                tokens_in += event.tokens_in
+                tokens_out += event.tokens_out
+
+        done = sum(1 for t in tasks if t.status == "DONE")
+        dead = sum(1 for t in tasks if t.status == "DEAD")
+        return RunReport(
+            project_id=self.settings.project_id,
+            wall_s=round(wall, 3),
+            total=len(tasks),
+            done=done,
+            dead=dead,
+            unfinished=len(tasks) - done - dead,
+            completion_rate=round(done / len(tasks), 3) if tasks else 0.0,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            tasks=[
+                {
+                    "id": t.id,
+                    "parent_id": t.parent_id,
+                    "depth": t.depth,
+                    "role": t.role,
+                    "status": t.status,
+                    "retries": t.retries,
+                    "goal": t.goal,
+                    "artifacts": t.artifacts,
+                }
+                for t in tasks
+            ],
+        )
+
+    def _recover(self) -> None:
+        """Anything left RUNNING died with the previous process."""
+        for node in self.repo.by_status("RUNNING"):
+            self.repo.transition(node.id, "FAILED", "crashed_recovery")
+        # A task parked on a human died with the question it was waiting for;
+        # re-run it rather than leaving it stuck forever.
+        for node in self.repo.by_status("WAITING_HUMAN"):
+            self.repo.transition(node.id, "FAILED", "crashed_while_waiting")
+        for node in self.repo.by_status("FAILED"):
+            if node.retries < node.budget.max_retries:
+                self.repo.bump_retries(node.id)
+                self.repo.transition(node.id, "READY", "recovered")
+            else:
+                self.repo.transition(node.id, "DEAD", "retries_exhausted")
+
+    async def steer(self, text: str, *, recipients: list[str] | None = None) -> None:
+        """Nudge a running task. Picked up by the agent at its next step boundary."""
+        await self.bus.publish(
+            Message(
+                project_id=self.settings.project_id,
+                conversation_id=self.settings.conversation_id,
+                sender=HUMAN_ID,
+                recipients=recipients or [],
+                kind="steer",
+                content=text,
+            )
+        )
+
+    def abort(self) -> None:
+        self.scheduler.abort()
+
+    # -- lifecycle -------------------------------------------------------
+    def close(self) -> None:
+        self.trace.close()
+        self.db.close()
+
+    def __enter__(self) -> Engine:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()

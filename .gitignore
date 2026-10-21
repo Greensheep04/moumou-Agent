@@ -1,0 +1,25 @@
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.uv-cache/
+
+# tooling
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# runtime artifacts — never commit a run
+runs/
+*.db
+*.sqlite3
+
+# secrets — never commit a real key, but DO commit the template
+.env
+.env.*
+!.env.example
+
+# os
+.DS_Store
