@@ -146,7 +146,7 @@ runs/            runtime artifacts (not committed)
 
 | Document | Audience | Contents |
 | --- | --- | --- |
-| [docs/SETUP.md](docs/SETUP.md) | **new joiners, read first** | Dependencies, `.env`, verification, commands |
+| [docs/SETUP.md](docs/SETUP.md) · [EN](docs/SETUP.en.md) | **new joiners, read first** | Dependencies, `.env`, verification, commands |
 | [docs/INTERFACES.md](docs/INTERFACES.md) | **anyone implementing a port** | Port signatures, input/output formats, conventions |
 | [docs/STATUS.md](docs/STATUS.md) | everyone | Module progress, per-member tasks, milestones |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | anyone curious about the design | Mechanism rationale, diagrams, known limits |
@@ -173,3 +173,8 @@ flowchart LR
 
 **Rectangles are the orchestration core; rounded boxes are external implementations.** The core
 only reaches them through six ports — swap any implementation and nobody else edits a line.
+
+---
+
+> Environment and configuration: [docs/SETUP.md](docs/SETUP.md) ·
+> [docs/SETUP.en.md](docs/SETUP.en.md)
