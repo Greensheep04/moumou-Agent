@@ -1,6 +1,7 @@
 """Frozen contracts. Import everything data-shaped from here, never from siblings."""
 
 from .agent import MAX_ROLES_PER_PROJECT, AgentInstance, RoleSpec
+from .context import ContextPolicy
 from .human import HumanIO, HumanRequest, HumanResponse
 from .memory import MemoryRecord
 from .message import HUMAN_ID, Channel, Message, MessageKind, Scope
@@ -37,6 +38,7 @@ __all__ = [
     "AgentInstance",
     "Budget",
     "Channel",
+    "ContextPolicy",
     "HumanIO",
     "HumanRequest",
     "HumanResponse",

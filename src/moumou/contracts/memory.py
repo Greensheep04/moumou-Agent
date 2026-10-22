@@ -27,3 +27,5 @@ class MemoryRecord(BaseModel):
     score: float = 1.0              # reinforced on reuse, decays when useless
     uses: int = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    last_used_at: datetime | None = None    # decay is measured from here
+    deleted_at: datetime | None = None      # soft delete, keeps the audit trail
