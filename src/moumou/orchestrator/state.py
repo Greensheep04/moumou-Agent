@@ -80,7 +80,22 @@ CREATE TABLE IF NOT EXISTS roles (
     created_by  TEXT NOT NULL,
     reason      TEXT,
     created_at  TEXT NOT NULL,
+    version     INTEGER NOT NULL DEFAULT 1,
+    updated_at  TEXT,
     PRIMARY KEY (project_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS role_revisions (
+    seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id  TEXT NOT NULL,
+    role        TEXT NOT NULL,
+    version     INTEGER NOT NULL,
+    previous    TEXT NOT NULL,
+    proposed    TEXT NOT NULL,
+    reason      TEXT NOT NULL,
+    decision    TEXT NOT NULL,
+    note        TEXT,
+    created_at  TEXT NOT NULL
 );
 """
 
@@ -105,9 +120,14 @@ class Database:
 
     def _migrate(self) -> None:
         """Add columns introduced after a database was first created."""
-        have = {row["name"] for row in self.conn.execute("PRAGMA table_info(tasks)")}
-        if "wakeups" not in have:
-            self.conn.execute("ALTER TABLE tasks ADD COLUMN wakeups INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("tasks", "wakeups", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("roles", "version", "INTEGER NOT NULL DEFAULT 1")
+        self._ensure_column("roles", "updated_at", "TEXT")
+
+    def _ensure_column(self, table: str, column: str, ddl: str) -> None:
+        have = {row["name"] for row in self.conn.execute(f"PRAGMA table_info({table})")}
+        if column not in have:
+            self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
     def close(self) -> None:
         self.conn.close()
@@ -357,7 +377,7 @@ class SqliteRoleRegistry:
             )
         self.db.conn.execute(
             "INSERT INTO roles (project_id, name, title, description, tools, created_by, "
-            "reason, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            "reason, created_at, version, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 spec.project_id,
                 spec.name,
@@ -367,9 +387,56 @@ class SqliteRoleRegistry:
                 spec.created_by,
                 spec.reason,
                 spec.created_at.isoformat(),
+                spec.version,
+                spec.updated_at.isoformat() if spec.updated_at else None,
             ),
         )
         return spec
+
+    def revise(
+        self, project_id: str, name: str, description: str
+    ) -> RoleSpec | None:
+        """Replace a role's description and bump its version."""
+        self.db.conn.execute(
+            "UPDATE roles SET description = ?, version = version + 1, updated_at = ? "
+            "WHERE project_id = ? AND name = ?",
+            (description, datetime.now(UTC).isoformat(), project_id, name),
+        )
+        return self.get(project_id, name)
+
+    def log_revision(
+        self,
+        *,
+        project_id: str,
+        role: str,
+        version: int,
+        previous: str,
+        proposed: str,
+        reason: str,
+        decision: str,
+        note: str | None = None,
+    ) -> None:
+        self.db.conn.execute(
+            "INSERT INTO role_revisions (project_id, role, version, previous, proposed, "
+            "reason, decision, note, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                project_id,
+                role,
+                version,
+                previous,
+                proposed,
+                reason,
+                decision,
+                note,
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+
+    def revision_log(self, project_id: str) -> list[dict]:
+        rows = self.db.conn.execute(
+            "SELECT * FROM role_revisions WHERE project_id = ? ORDER BY seq", (project_id,)
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     @staticmethod
     def _to_spec(row: sqlite3.Row) -> RoleSpec:
@@ -382,4 +449,6 @@ class SqliteRoleRegistry:
             reason=row["reason"],
             project_id=row["project_id"],
             created_at=row["created_at"],
+            version=row["version"],
+            updated_at=row["updated_at"],
         )

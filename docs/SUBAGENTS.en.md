@@ -241,7 +241,51 @@ plainly and lay out the options.
 
 ---
 
-## 6. Parameters
+## 6. Role evolution
+
+Roles are invented by the model, and may also be changed by it -- but not without a
+human agreeing.
+
+### Trigger
+
+Every three finished tasks (configurable), the framework asks the model once, **after
+a run has ended**: is there a role description whose wording would have changed an
+outcome?
+
+It runs at the end rather than between tasks so it never blocks work in flight.
+
+### Proposal
+
+The model submits a structured proposal through the `submit_revision` tool:
+
+```python
+RoleRevisionDraft:
+  role: str                   # empty = nothing worth changing
+  proposed_description: str   # the new description, capped at 800 chars
+  reason: str                 # why this would have changed an outcome
+  evidence: list[str]         # which tasks support it
+```
+
+The model is told plainly: **no cosmetic rewording**; if nothing would have changed a
+result, submit an empty proposal.
+
+### Approval
+
+It goes through `HumanIO.ask(kind="review")`, and the card carries the current
+description, the proposed one and the reason side by side.
+
+| The human answers | Result |
+| --- | --- |
+| approve | the role goes to the next version and its description changes; the next prompt for that role differs |
+| reject with a note | the note feeds the next proposal, up to three rounds |
+| reject with nothing | the cycle ends; there is nothing to iterate on |
+
+### Record
+
+Every proposal and decision lands in the `role_revisions` table and the trace, so the
+report can show a role's evolution.
+
+## 7. Parameters
 
 | Parameter | Default | Where |
 | --- | --- | --- |
@@ -253,10 +297,12 @@ plainly and lay out the options.
 | Compaction trigger / target | 600k / 256k tokens | `ContextPolicy` |
 | Lessons injected | 3–5 | `ContextPolicy.memory_top_k` |
 | Board entries read | 3 | `ContextPolicy.board_entries` |
+| Role review interval | 3 tasks | `Settings.role_review_every` |
+| Role review rounds | 3 | `Settings.role_review_max_rounds` |
 
 ---
 
-## 7. Known limits
+## 8. Known limits
 
 | Limit | Impact | Note |
 | --- | --- | --- |
@@ -264,3 +310,4 @@ plainly and lay out the options.
 | Tool grants are only checked for existence | a sub-agent can be granted `shell` and the like | every dangerous call still needs human approval, but two gates became one |
 | Role descriptions age | a role invented for task one is still in use at task ten | exactly what role revision is meant to fix |
 | A woken parent sees one line of the child's failure | not the child's transcript | the trace has the detail |
+| Scripted humans auto-approve reviews in batch runs | reusing one database drifts the descriptions | not an issue when each run gets a fresh database |

@@ -115,3 +115,34 @@ FRAMEWORK_RULES = """
   agent actually reads.
 - Your output is checked against the acceptance criteria listed in the task brief.
 """
+
+
+REVISION_PROMPT = """You are reviewing how the specialists on this project have been doing.
+
+Below are the roles and how their recent tasks actually went. Propose **at most one**
+change to a role description, and only if the evidence shows the change would have
+changed an outcome. Good reasons:
+
+- the role kept failing at the same step
+- it kept touching files outside its stated job
+- its instructions made it ask for clarification it should not have needed
+
+Do not propose cosmetic rewording. If nothing here would have changed the result,
+submit an empty role and say nothing else.
+
+## Roles
+{roles}
+
+## Recent tasks
+{tasks}
+
+{guidance}
+"""
+
+REVISION_GUIDANCE = """## Feedback on your previous proposal
+
+The human rejected it with this note. Take it into account, or submit nothing if it
+leaves no proposal worth making.
+
+{note}
+"""

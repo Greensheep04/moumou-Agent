@@ -2,6 +2,7 @@ from .acceptance import AcceptanceChecker
 from .delegation import Delegation, DelegationError
 from .engine import BOOTSTRAP_ROLE, Engine, RunReport, Settings
 from .gate import ApprovalPolicy, Gate
+from .revision import RoleReviser
 from .scheduler import Scheduler
 from .state import (
     Database,
@@ -24,6 +25,7 @@ __all__ = [
     "Gate",
     "IllegalTransition",
     "RoleLimitExceeded",
+    "RoleReviser",
     "RunReport",
     "Scheduler",
     "Settings",

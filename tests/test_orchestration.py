@@ -440,3 +440,46 @@ async def test_an_agent_hands_off_a_structured_result(tmp_path):
     assert node.result.summary == "created out.txt"
     assert node.result.files == ["out.txt"]
     assert node.result.blockers == ["no tests yet"]
+
+
+async def test_a_role_review_runs_after_enough_finished_tasks(tmp_path):
+    def responder(messages, tools):
+        if str(messages[0].get("content", "")).startswith("You are reviewing how the specialists"):
+            return LLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="rv",
+                        name="submit_revision",
+                        args={
+                            "role": "planner",
+                            "proposed_description": (
+                                "Leads the task, and writes down what it already tried."
+                            ),
+                            "reason": "the lead kept re-reading the same files",
+                            "evidence": ["t1"],
+                        },
+                    )
+                ]
+            )
+        if not any(m["role"] == "assistant" for m in messages):
+            return LLMResponse(
+                tool_calls=[
+                    ToolCall(id="w", name="write_file", args={"path": "x.txt", "content": "x"})
+                ]
+            )
+        return LLMResponse(content="done")
+
+    engine = Engine(FakeLLM(responder), settings=settings(tmp_path))
+    try:
+        for index in range(3):
+            engine.submit(f"task {index}")
+        await engine.run()
+        role = engine.roles.get("p", "planner")
+        log = engine.roles.revision_log("p")
+    finally:
+        engine.close()
+
+    assert role is not None
+    assert role.version == 2, "three finished tasks should trigger one review"
+    assert "writes down what it already tried" in role.description
+    assert len(log) == 1 and log[0]["decision"] == "approve"

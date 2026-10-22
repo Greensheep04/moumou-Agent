@@ -37,6 +37,8 @@ class RoleSpec(BaseModel):
     reason: str | None = None
     project_id: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    version: int = Field(default=1, ge=1)
+    updated_at: datetime | None = None
 
     @field_validator("name")
     @classmethod
@@ -71,3 +73,30 @@ class AgentInstance(BaseModel):
     def memory_scope(self) -> str:
         """Shared by instances of the same role inside one project."""
         return f"{self.project_id}:{self.role}"
+
+
+class RoleRevisionDraft(BaseModel):
+    """A proposal to change one role's description.
+
+    An empty ``role`` means "nothing here would have changed the outcome" -- the
+    reviewer is allowed to decline, and most of the time it should.
+    """
+
+    role: str = ""
+    proposed_description: str = ""
+    reason: str = ""
+    evidence: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _complete_iff_proposing(self) -> RoleRevisionDraft:
+        if not self.role:
+            return self
+        if not self.proposed_description.strip():
+            raise ValueError("a proposal must carry the new description")
+        if not self.reason.strip():
+            raise ValueError("a proposal must say why it would have helped")
+        return self
+
+    @property
+    def is_noop(self) -> bool:
+        return not self.role

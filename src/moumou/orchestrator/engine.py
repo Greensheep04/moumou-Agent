@@ -24,6 +24,7 @@ from moumou.memory import near_duplicate as _near_duplicate
 from moumou.orchestrator.acceptance import AcceptanceChecker
 from moumou.orchestrator.delegation import Delegation
 from moumou.orchestrator.gate import ApprovalPolicy, Gate
+from moumou.orchestrator.revision import RoleReviser
 from moumou.orchestrator.scheduler import Scheduler
 from moumou.orchestrator.state import Database, SqliteRoleRegistry, SqliteTaskRepo
 from moumou.orchestrator.worker import TaskRunner
@@ -47,6 +48,10 @@ class Settings(BaseModel):
     compact_trigger_tokens: int = 600_000
     compact_target_tokens: int = 256_000
     memory_enabled: bool = True
+
+    role_review_enabled: bool = True
+    role_review_every: int = 3          # finished tasks between reviews
+    role_review_max_rounds: int = 3     # proposals per review before giving up
 
 
 class RunReport(BaseModel):
@@ -75,6 +80,7 @@ class Engine:
         memory=None,
     ):
         self.settings = settings or Settings()
+        self.llm = llm
         root = Path(self.settings.root)
         root.mkdir(parents=True, exist_ok=True)
 
@@ -114,6 +120,13 @@ class Engine:
         self.evolution = Evolution(self.memory, self.policy, self.trace)
         self.reflection = Reflection(
             llm, self.memory, self.policy, self.trace, is_duplicate=_near_duplicate
+        )
+        self.reviser = RoleReviser(
+            llm,
+            self.roles,
+            self.human,
+            self.trace,
+            max_rounds=self.settings.role_review_max_rounds,
         )
 
         self.context = ContextBuilder(self.policy, self.budget, board=self.board)
@@ -204,6 +217,7 @@ class Engine:
 
         self.db.set_meta("token_correction", str(round(self.budget.correction, 4)))
         self._maintain(tasks, started_dt)
+        await self._maybe_review_roles(tasks, started_dt)
 
         done = sum(1 for t in tasks if t.status == "DONE")
         dead = sum(1 for t in tasks if t.status == "DEAD")
@@ -265,6 +279,28 @@ class Engine:
                 task_id=node.id,
                 kind="memory",
                 name="reflection_failed",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+    async def _maybe_review_roles(self, tasks: list[TaskNode], run_started) -> None:
+        """Ask for one role improvement every N finished tasks, never mid-run."""
+        if not self.settings.role_review_enabled:
+            return
+
+        finished = [t for t in tasks if t.is_terminal and t.updated_at >= run_started]
+        pending = int(self.db.get_meta("tasks_since_review", "0") or 0) + len(finished)
+        if pending < self.settings.role_review_every:
+            self.db.set_meta("tasks_since_review", str(pending))
+            return
+
+        self.db.set_meta("tasks_since_review", "0")
+        try:
+            await self.reviser.review(self.settings.project_id, finished)
+        except Exception as exc:
+            self.trace.record(
+                task_id="-",
+                kind="role",
+                name="revision:failed",
                 error=f"{type(exc).__name__}: {exc}",
             )
 

@@ -14,7 +14,7 @@ import asyncio
 import shlex
 from pathlib import Path
 
-from moumou.contracts import TaskResult, ToolContext, ToolResult
+from moumou.contracts import RoleRevisionDraft, TaskResult, ToolContext, ToolResult
 from moumou.contracts.plan import Plan
 from moumou.tools.registry import flatten_schema
 
@@ -260,6 +260,22 @@ class SubmitResultTool:
         return ToolResult(ok=False, error="submit_result is handled by the orchestrator")
 
 
+class SubmitRevisionTool:
+    """Marker tool used by the role reviewer; the orchestrator consumes it."""
+
+    name = "submit_revision"
+    description = (
+        "Propose one change to a role description, or submit an empty role if the "
+        "evidence does not justify a change."
+    )
+    action_class = "fs_read"
+    timeout_s = 1.0
+    params_schema = flatten_schema(RoleRevisionDraft.model_json_schema())
+
+    async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
+        return ToolResult(ok=False, error="submit_revision is handled by the orchestrator")
+
+
 class SubmitPlanTool:
     """Marker tool: the runner intercepts it and never dispatches it.
 
@@ -290,5 +306,6 @@ def default_tools() -> list:
         RunPythonTool(),
         AskHumanTool(),
         SubmitResultTool(),
+        SubmitRevisionTool(),
         SubmitPlanTool(),
     ]

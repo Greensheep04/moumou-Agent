@@ -2,6 +2,33 @@
 
 [简体中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## 2026-10-23 · Role review
+
+A model may now propose a change to a role, but nothing takes effect without a human
+approving it.
+
+### Added
+
+**Trigger**: every three finished tasks, once a run has ended, the model is asked whether
+any role description would have changed an outcome. Running at the end rather than
+between tasks keeps it from blocking work in flight.
+
+**Structured proposal**: the model submits `role` / `proposed_description` / `reason` /
+`evidence` through `submit_revision`; an empty role means "nothing worth changing".
+
+**Human approval**: through `HumanIO.ask(kind="review")`, with the current and proposed
+descriptions side by side. Approve bumps the version; reject with a note feeds the next
+round, up to three; reject with no note ends the cycle.
+
+**Record**: every proposal and decision lands in the `role_revisions` table and the trace.
+
+**Documentation**: a new "Role evolution" section in the sub-agent document.
+
+### Verified
+
+- 151 automated tests pass (9 new: approve, reject, iteration with a note, empty
+  proposal, unknown role, length cap, engine-level trigger)
+
 ## 2026-10-23 · Sub-agent hand-off and failure recovery
 
 The hand-off from a sub-agent changed from prose to structured fields, and a parent is now woken
