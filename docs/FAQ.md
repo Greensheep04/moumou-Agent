@@ -1,5 +1,7 @@
 # 常见问题
 
+[简体中文](FAQ.md) · [English](FAQ.en.md)
+
 ## 环境
 
 **`ModuleNotFoundError: No module named 'moumou'`**

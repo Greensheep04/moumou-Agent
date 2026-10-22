@@ -144,16 +144,18 @@ runs/            runtime artifacts (not committed)
 
 ## Documentation
 
+Every document is available in both Chinese and English.
+
 | Document | Audience | Contents |
 | --- | --- | --- |
-| [docs/SETUP.md](docs/SETUP.md) · [EN](docs/SETUP.en.md) | **new joiners, read first** | Dependencies, `.env`, verification, commands |
-| [docs/INTERFACES.md](docs/INTERFACES.md) | **anyone implementing a port** | Port signatures, input/output formats, conventions |
-| [docs/STATUS.md](docs/STATUS.md) | everyone | Module progress, per-member tasks, milestones |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | anyone curious about the design | Mechanism rationale, diagrams, known limits |
-| [docs/EVAL.md](docs/EVAL.md) | P3 | Task format, metric definitions, how to run |
-| [docs/FAQ.md](docs/FAQ.md) | everyone | Environment, key, git and test pitfalls |
-| [docs/roles/](docs/roles/) | P1 / P2 / P3 | One detailed brief per teammate |
-| [CHANGELOG.md](CHANGELOG.md) | everyone | What each milestone delivered |
+| [docs/SETUP.en.md](docs/SETUP.en.md) · [中文](docs/SETUP.md) | **new joiners, read first** | Dependencies, `.env`, verification, commands |
+| [docs/INTERFACES.en.md](docs/INTERFACES.en.md) · [中文](docs/INTERFACES.md) | **anyone implementing a port** | Port signatures, input/output formats, conventions |
+| [docs/STATUS.en.md](docs/STATUS.en.md) · [中文](docs/STATUS.md) | everyone | Module progress, per-member tasks, milestones |
+| [docs/ARCHITECTURE.en.md](docs/ARCHITECTURE.en.md) · [中文](docs/ARCHITECTURE.md) | anyone curious about the design | Mechanism rationale, diagrams, known limits |
+| [docs/EVAL.en.md](docs/EVAL.en.md) · [中文](docs/EVAL.md) | P3 | Task format, metric definitions, how to run |
+| [docs/FAQ.en.md](docs/FAQ.en.md) · [中文](docs/FAQ.md) | everyone | Environment, key, git and test pitfalls |
+| [docs/roles/](docs/roles/) | P1 / P2 / P3 | One detailed brief per teammate, bilingual |
+| [CHANGELOG.en.md](CHANGELOG.en.md) · [中文](CHANGELOG.md) | everyone | What each milestone delivered |
 
 ## Architecture in one picture
 

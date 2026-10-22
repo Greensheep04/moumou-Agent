@@ -1,5 +1,7 @@
 # 评测说明
 
+[简体中文](EVAL.md) · [English](EVAL.en.md)
+
 ## 怎么跑
 
 ```bash
@@ -103,8 +105,11 @@ tags: [scenario-1, easy]
 
 | task | scenario | runs | completion | std | wall (s) | tokens |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| s1_hello | from_scratch | 3 | 1.00 | 0.00 | 42.1 | 18234 |
-| ... | | | | | | |
+| s1_hello | from_scratch | 1 | 1.00 | 0.00 | 4.2 | 7423 |
+| s2_bugfix | debug | 1 | 1.00 | 0.00 | 4.2 | 7695 |
+| s5_approval | needs_approval | 1 | 1.00 | 0.00 | 4.1 | 9943 |
+
+（2026-10-22 用 `deepseek-flash` 实测，3 道题共 0.057 元。）
 
 底部给出总体完成率，并列出失败的任务。
 
