@@ -128,13 +128,13 @@ class ContextBuilder:
         self,
         policy: ContextPolicy | None = None,
         budget: TokenBudget | None = None,
-        memory=None,
         board=None,
     ):
         self.policy = policy or ContextPolicy()
         self.budget = budget or TokenBudget()
-        self.memory = memory       # MemoryStore, used by the runner, not here
-        self.board = board         # ConclusionBoard, same
+        # Memory retrieval lives in the runner (it needs the role spec); the board
+        # is read here because it is keyed purely by scope.
+        self.board = board
 
     def build(
         self,

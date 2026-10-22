@@ -125,9 +125,7 @@ class Engine:
             llm, self.memory, self.policy, self.trace, is_duplicate=_near_duplicate
         )
 
-        self.context = ContextBuilder(
-            self.policy, self.budget, self.memory, board=self.board
-        )
+        self.context = ContextBuilder(self.policy, self.budget, board=self.board)
 
         self.runner = TaskRunner(
             repo=self.repo,
