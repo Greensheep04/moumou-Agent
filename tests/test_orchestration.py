@@ -169,7 +169,7 @@ def delegating_llm() -> FakeLLM:
     def responder(messages, tools):
         system, brief = messages[0]["content"], messages[1]["content"]
 
-        if "role: planner" in system:
+        if "You are the lead agent" in system:
             if "(this task has no upstream dependencies)" in brief:
                 return LLMResponse(tool_calls=[ToolCall(id="p", name="submit_plan", args=PLAN)])
             return LLMResponse(content="both deliverables are ready")
@@ -337,7 +337,7 @@ def sequential_llm() -> FakeLLM:
         system, brief = messages[0]["content"], messages[1]["content"]
         first_turn = "(this task has no upstream dependencies)" in brief
 
-        if "role: planner" in system:
+        if "You are the lead agent" in system:
             if first_turn:
                 return LLMResponse(tool_calls=[ToolCall(id="p", name="submit_plan", args=PLAN_SEQ)])
             return LLMResponse(content="verified")

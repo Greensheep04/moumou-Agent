@@ -173,3 +173,38 @@ def test_board_notes_are_pulled_in_automatically():
     ctx = ContextBuilder(ContextPolicy(), TokenBudget(), board=board).build(a_node(), a_role())
 
     assert "scaffolded the package" in ctx.messages()[0]["content"]
+
+
+# -- prompt selection -------------------------------------------------------
+
+
+def test_the_lead_role_gets_the_lead_prompt():
+    lead = RoleSpec(
+        name="planner",
+        title="Task lead",
+        description="leads the task",
+        project_id="p",
+        created_by="human",
+    )
+    ctx = builder().build(a_node(), lead)
+    system = ctx.messages()[0]["content"]
+
+    assert "You are the lead agent" in system
+    assert "integrate their work and verify" in system
+
+
+def test_specialists_are_not_told_to_decompose():
+    """Only the lead may split; a specialist has no submit_plan tool."""
+    ctx = builder().build(a_node(), a_role())
+    system = ctx.messages()[0]["content"]
+
+    assert "writes small programs" in system
+    assert "submit_plan" not in system
+
+
+def test_framework_rules_follow_the_role_text():
+    """Hard rules sit after model-authored text so they win on conflict."""
+    ctx = builder().build(a_node(), a_role())
+    system = ctx.messages()[0]["content"]
+
+    assert system.index("writes small programs") < system.index("Operating context")

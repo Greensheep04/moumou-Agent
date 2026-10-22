@@ -27,20 +27,11 @@ from moumou.orchestrator.gate import ApprovalPolicy, Gate
 from moumou.orchestrator.scheduler import Scheduler
 from moumou.orchestrator.state import Database, SqliteRoleRegistry, SqliteTaskRepo
 from moumou.orchestrator.worker import TaskRunner
+from moumou.prompts import LEAD_ROLE
 from moumou.tools import ToolRegistry, default_tools
 from moumou.trace import Recorder
 
-BOOTSTRAP_ROLE = "planner"
-
-PLANNER_PROMPT = (
-    "You receive work from a human and you own the outcome. "
-    "First decide if the job is small enough to do yourself. If it is not, call "
-    "submit_plan to split it into sub-tasks for specialists you define. "
-    "Each sub-task goal must be self-contained: a specialist sees only that goal, "
-    "the acceptance criteria, and the reports of its own dependencies. "
-    "Prefer declaring acceptance criteria that can be executed (a command, a file "
-    "existence check) over vague ones."
-)
+BOOTSTRAP_ROLE = LEAD_ROLE
 
 
 class Settings(BaseModel):
@@ -184,7 +175,10 @@ class Engine:
             RoleSpec(
                 name=BOOTSTRAP_ROLE,
                 title="Task lead",
-                description=PLANNER_PROMPT,
+                description=(
+                    "Leads the task: decides how to split it, delegates, integrates "
+                    "and verifies."
+                ),
                 tools=sorted(self.tools.names()),
                 created_by="human",
                 reason="bootstrap role: someone has to receive work from the human",

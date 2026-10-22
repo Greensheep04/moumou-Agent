@@ -66,7 +66,7 @@ def _steps(messages: list[dict]) -> int:
 def responder(messages: list[dict], tools) -> LLMResponse:
     system, brief = messages[0]["content"], messages[1]["content"]
 
-    if "role: planner" in system:
+    if "You are the lead agent" in system:
         if "(this task has no upstream dependencies)" in brief:
             return LLMResponse(tool_calls=[ToolCall(id="p1", name="submit_plan", args=PLAN)])
         return LLMResponse(

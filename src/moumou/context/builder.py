@@ -14,25 +14,10 @@ from __future__ import annotations
 import json
 
 from moumou.contracts import ContextPolicy, MemoryRecord, RoleSpec, TaskNode, ToolResult
+from moumou.prompts import FRAMEWORK_RULES, LEAD_ROLE, PLANNER_PROMPT, SPECIALIST_TEMPLATE
 
 from .compactor import CompactionResult, Compactor
 from .tokens import TokenBudget
-
-SYSTEM_TEMPLATE = """You are {title} (role: {name}) on a multi-agent software team.
-
-Your responsibility: {description}
-
-You work in your own private workspace. All file paths are relative to it.
-
-Operating rules:
-- Inspect before you edit. Never assume a file's contents.
-- One tool call at a time, then read the result before deciding what is next.
-- When the job is done, stop calling tools and reply with a short summary:
-  what you built, which files you touched, and how you verified it.
-- If the work genuinely needs several specialists, call submit_plan instead of
-  doing everything yourself. Do not call it for work you can finish alone.
-- Your output will be checked against the acceptance criteria listed below.
-"""
 
 LESSONS_HEADER = "\n## Lessons from previous runs\n"
 BOARD_HEADER = "\n## Notes from earlier work by this role\n"
@@ -209,9 +194,13 @@ class ContextBuilder:
         lesson_limit: int,
         goal_limit: int | None,
     ) -> tuple[str, str]:
-        system = SYSTEM_TEMPLATE.format(
-            title=role.title, name=role.name, description=role.description
-        )
+        if role.name == LEAD_ROLE:
+            system = PLANNER_PROMPT
+        else:
+            system = SPECIALIST_TEMPLATE.format(
+                title=role.title, name=role.name, description=role.description
+            )
+        system += FRAMEWORK_RULES
         if lesson_limit and lessons:
             system += LESSONS_HEADER + "\n".join(f"- {s}" for s in lessons[:lesson_limit])
         if notes:
