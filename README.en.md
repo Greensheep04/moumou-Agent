@@ -153,6 +153,7 @@ Every document is available in both Chinese and English.
 | [docs/INTERFACES.en.md](docs/INTERFACES.en.md) · [中文](docs/INTERFACES.md) | **anyone implementing a port** | Port signatures, input/output formats, conventions |
 | [docs/STATUS.en.md](docs/STATUS.en.md) · [中文](docs/STATUS.md) | everyone | Module progress, per-member tasks, milestones |
 | [docs/ARCHITECTURE.en.md](docs/ARCHITECTURE.en.md) · [中文](docs/ARCHITECTURE.md) | anyone curious about the design | Mechanism rationale, diagrams, known limits |
+| [docs/SUBAGENTS.en.md](docs/SUBAGENTS.en.md) · [中文](docs/SUBAGENTS.md) | anyone asking how sub-agents work | Creation, context, memory, communication |
 | [docs/EVAL.en.md](docs/EVAL.en.md) · [中文](docs/EVAL.md) | P3 | Task format, metric definitions, how to run |
 | [docs/FAQ.en.md](docs/FAQ.en.md) · [中文](docs/FAQ.md) | everyone | Environment, key, git and test pitfalls |
 | [docs/roles/](docs/roles/) | P1 / P2 / P3 | One detailed brief per teammate, bilingual |

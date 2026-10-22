@@ -2,6 +2,36 @@
 
 [简体中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## 2026-10-23 · Sub-agent hand-off and failure recovery
+
+The hand-off from a sub-agent changed from prose to structured fields, and a parent is now woken
+when a child fails so it can re-dispatch.
+
+### Added
+
+**Structured hand-off**: a sub-agent calls `submit_result` with `summary` / `files` / `notes` /
+`blockers`; the parent renders those fields, and the cap rose from 800 to 3000 characters. A plain
+text reply still works and is wrapped as `summary`.
+
+**Failure recovery**: a `DEAD` child no longer takes its parent down. The parent is woken (twice at
+most) and may re-dispatch; the replacement children carry a round prefix `t1.r1.a` so ids cannot
+collide with the first attempt.
+
+**Lead prompt**: a dedicated lead prompt spelling out the criteria for "do it yourself or delegate",
+that sub-task goals must be self-contained, that acceptance criteria must be one of six forms, and
+that a failure should not be forwarded to the human unchanged. The framework rules are appended
+after the role text, so they win on conflict.
+
+**Documentation**: a new "Sub-agents" document in Chinese and English.
+
+### Verified
+
+- 142 automated tests pass (new: hand-off rendering, `submit_result` end to end, wake-up and round
+  prefix)
+- `s2_bugfix` against the live API: the model did call `submit_result`, and the fields landed in the
+  database
+
+
 ## 2026-10-22 · Context and memory system
 
 This milestone delivers the context and long-term memory systems: four-layer context assembly,
