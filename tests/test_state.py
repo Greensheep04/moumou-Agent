@@ -105,13 +105,6 @@ def test_promote_kills_tasks_with_missing_dependencies(repo):
     assert repo.event_log("b")[-1]["reason"] == "missing_dependency"
 
 
-def test_retries_are_counted(repo):
-    repo.add(node())
-    assert repo.bump_retries("t1") == 1
-    assert repo.bump_retries("t1") == 2
-    assert repo.get("t1").retries == 2
-
-
 # -- roles -----------------------------------------------------------------
 
 

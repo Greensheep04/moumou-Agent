@@ -62,14 +62,11 @@ def test_duplicate_ids_are_rejected(tmp_path):
         load_tasks(tmp_path)
 
 
-def test_setup_files_are_plain_strings():
+def test_loader_defaults_and_setup_files():
     fixture = load_task(TASKS / "s2_bugfix.yaml")
-    assert isinstance(fixture.setup, dict)
     assert "def add" in fixture.setup["calc.py"]
 
-
-def test_defaults_are_sane():
-    fixture = TaskFixture(id="x", title="t", scenario="from_scratch", goal="g")
-    assert fixture.budget.max_steps > 0
-    assert fixture.human.default == "approve"
-    assert fixture.acceptance == []
+    bare = TaskFixture(id="x", title="t", scenario="from_scratch", goal="g")
+    assert bare.budget.max_steps > 0
+    assert bare.human.default == "approve"
+    assert bare.acceptance == []

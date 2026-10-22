@@ -140,11 +140,8 @@ def test_compaction_leaves_a_note_about_the_dropped_work():
     assert "elided" in note["content"]
 
 
-def test_policy_rejects_a_trigger_that_leaves_no_room_for_output():
+def test_policy_rejects_incoherent_thresholds():
     with pytest.raises(ValueError, match="prompt ceiling"):
         ContextPolicy(compact_trigger_tokens=900_000)
-
-
-def test_policy_rejects_a_target_above_the_trigger():
     with pytest.raises(ValueError, match="below"):
         ContextPolicy(compact_trigger_tokens=300_000, compact_target_tokens=400_000)

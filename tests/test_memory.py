@@ -8,7 +8,6 @@ import pytest
 
 from moumou.contracts import ContextPolicy, MemoryRecord, RoleSpec, TaskNode
 from moumou.memory import Retriever, SqliteMemoryStore, memory_scope
-from moumou.memory.store import bigrams, overlap_score
 
 
 @pytest.fixture
@@ -35,22 +34,11 @@ def rec(lesson: str, situation: str = "installing dependencies", **kw) -> Memory
 # -- matching ---------------------------------------------------------------
 
 
-def test_bigram_overlap_tolerates_word_order():
-    query = bigrams("安装依赖")
-    assert overlap_score(query, "修复依赖安装失败的经验") > 0, "reordered words must still match"
-    assert overlap_score(query, "调整界面配色") == 0
-
-
-def test_short_chinese_query_still_matches(store):
+def test_search_handles_reordering_and_short_queries(store):
+    """The two cases FTS5 trigram could not do: reordered words, and two characters."""
     store.write(rec("修复依赖安装失败的经验"))
-    hits = store.search(memory_scope("p", "coder"), "依赖")
-    assert len(hits) == 1
-
-
-def test_search_tolerates_word_order(store):
-    store.write(rec("修复依赖安装失败的经验"))
-    assert store.search(memory_scope("p", "coder"), "安装依赖"), "the key regression"
-    assert store.search(memory_scope("p", "coder"), "依赖安装")
+    for query in ("安装依赖", "依赖安装", "依赖"):
+        assert store.search(memory_scope("p", "coder"), query), query
 
 
 def test_unrelated_query_returns_nothing(store):

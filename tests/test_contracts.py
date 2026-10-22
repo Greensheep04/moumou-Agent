@@ -44,10 +44,15 @@ def test_task_roundtrip_through_json():
     assert again == t
 
 
-def test_task_defaults_are_independent():
+def test_mutable_defaults_are_independent():
     a, b = _task(id="a"), _task(id="b")
     a.deps.append("x")
-    assert b.deps == [], "mutable default leaked between instances"
+    assert b.deps == [], "mutable default leaked between TaskNodes"
+
+    m1 = Message(project_id="p1", conversation_id="c1", sender="a", content="hi")
+    m2 = Message(project_id="p1", conversation_id="c1", sender="b", content="yo")
+    m1.recipients.append("x")
+    assert m2.recipients == [], "mutable default leaked between Messages"
 
 
 def test_legal_and_illegal_transitions():
@@ -142,10 +147,3 @@ def test_json_schema_is_emittable_for_function_calling():
         schema = model.model_json_schema()
         assert schema["type"] == "object"
         json.dumps(schema)  # must be serialisable for the API request body
-
-
-def test_message_defaults_to_single_recipient_list():
-    m1 = Message(project_id="p1", conversation_id="c1", sender="a", content="hi")
-    m2 = Message(project_id="p1", conversation_id="c1", sender="b", content="yo")
-    m1.recipients.append("x")
-    assert m2.recipients == []

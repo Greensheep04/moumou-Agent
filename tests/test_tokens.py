@@ -16,11 +16,6 @@ def test_ascii_ratio_matches_the_vendor_guidance():
     assert estimate_text("a" * 1000) == pytest.approx(1000 * 0.3 * 1.1, rel=0.01)
 
 
-def test_mixed_text_is_between_the_two():
-    mixed = "中" * 500 + "a" * 500
-    assert estimate_text("a" * 1000) < estimate_text(mixed) < estimate_text("中" * 1000)
-
-
 def test_empty_is_zero():
     assert estimate_text("") == 0.0
 

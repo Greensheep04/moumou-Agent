@@ -66,7 +66,7 @@ async def test_failed_acceptance_retries_then_dies(tmp_path):
     assert report.tasks[0]["retries"] == 2          # 3 attempts, then give up
 
 
-async def test_risky_tool_parks_on_human_and_honours_rejection(tmp_path):
+async def test_a_risky_tool_parks_on_a_human_and_honours_rejection(tmp_path):
     human = ScriptedHuman(default="reject")
 
     def responder(messages, tools):
@@ -78,36 +78,17 @@ async def test_risky_tool_parks_on_human_and_honours_rejection(tmp_path):
 
     engine = Engine(FakeLLM(responder), human=human, settings=settings(tmp_path))
     try:
-        engine.submit(
+        task = engine.submit(
             "run a command", acceptance=[Acceptance(kind="file_exists", target="nope.txt")]
         )
         report = await engine.run()
-    finally:
-        engine.close()
-
-    assert report.dead == 1
-    assert human.requests, "the human should have been asked"
-    assert all(r.action_class == "shell" for r in human.requests)
-
-
-async def test_approval_transitions_are_audited(tmp_path):
-    human = ScriptedHuman(default="reject")
-
-    def responder(messages, tools):
-        if steps(messages) == 0:
-            return LLMResponse(
-                tool_calls=[ToolCall(id="s1", name="shell", args={"command": "echo hi"})]
-            )
-        return LLMResponse(content="blocked")
-
-    engine = Engine(FakeLLM(responder), human=human, settings=settings(tmp_path))
-    try:
-        task = engine.submit("run a command")
-        await engine.run()
         log = engine.repo.event_log(task.id)
         approvals = [e for e in engine.trace.query(task.id) if e.kind == "approval"]
     finally:
         engine.close()
+
+    assert report.dead == 1, "a rejected action cannot satisfy the acceptance check"
+    assert human.requests and all(r.action_class == "shell" for r in human.requests)
 
     reasons = [e["reason"] for e in log]
     assert any(r.startswith("approve:shell") for r in reasons)

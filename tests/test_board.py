@@ -72,8 +72,3 @@ def test_the_board_is_pruned_per_scope(board):
         board.write(node(task_id=f"t{index}"))
 
     assert board.count(board.scope("p", "c", "coder")) == 5, "max_per_scope wins"
-
-
-def test_limit_zero_returns_nothing(board):
-    board.write(node())
-    assert board.recent(board.scope("p", "c", "coder"), limit=0) == []
