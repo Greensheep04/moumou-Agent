@@ -16,6 +16,7 @@ from moumou.contracts import (
     TaskNode,
 )
 from moumou.contracts.plan import RoleDraft
+from moumou.prompts import LEAD_ROLE
 
 
 class DelegationError(ValueError):
@@ -79,6 +80,13 @@ class Delegation:
         cycle = find_cycle(plan.subtasks)
         if cycle:
             raise DelegationError(f"dependency cycle among {cycle}")
+
+        for s in plan.subtasks:
+            if s.role == LEAD_ROLE:
+                raise DelegationError(
+                    f"subtask {s.key!r} may not be assigned the lead role; that role owns "
+                    "the whole task and cannot be a delegate"
+                )
 
         existing = {r.name for r in self.roles.list(parent.project_id)}
         offered = {d.name for d in plan.roles}
