@@ -47,8 +47,9 @@ cd moumou-Agent
 make install
 
 # 2. 不需要 API key 就能跑
-make test     # 65 个测试
-make demo     # 完整链路演示，用假模型，秒级完成
+make test          # 127 个测试
+make demo          # 完整链路演示，用假模型，秒级完成
+make demo-memory   # 记忆闭环：任务失败 → 反思 → 下一次复用
 
 # 3. 需要真模型（先配 key，见下一节）
 make smoke    # 验证 key 和模型名

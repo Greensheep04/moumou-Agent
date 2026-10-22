@@ -72,7 +72,7 @@ cp .env.example .env
 make test
 ```
 
-期望结尾：`65 passed`。
+期望结尾：`127 passed`。
 
 第二步需要 key：
 
@@ -111,6 +111,7 @@ OK — the API path is wired correctly.
 | `make lint` | 代码检查 | 否 |
 | `make fmt` | 自动修复可修复的问题 | 否 |
 | `make demo` | 端到端演示（假模型，秒级） | 否 |
+| `make demo-memory` | 记忆闭环演示：失败 → 反思 → 复用 | 否 |
 | `make smoke` | 验证 key 与模型名 | **是** |
 | `make eval` | 跑评测集 | **是** |
 | `make clean` | 清理运行产物 | 否 |

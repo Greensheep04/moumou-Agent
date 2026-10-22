@@ -75,7 +75,7 @@ Two steps. The first needs no key:
 make test
 ```
 
-Expected tail: `65 passed`.
+Expected tail: `127 passed`.
 
 The second needs a key:
 
@@ -115,6 +115,7 @@ investigate that first.
 | `make lint` | Lint the code | No |
 | `make fmt` | Auto-fix what can be fixed | No |
 | `make demo` | End-to-end demo (scripted model, seconds) | No |
+| `make demo-memory` | Memory loop demo: failure → reflection → reuse | No |
 | `make smoke` | Verify the key and model id | **Yes** |
 | `make eval` | Run the evaluation set | **Yes** |
 | `make clean` | Remove runtime artifacts | No |

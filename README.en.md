@@ -56,8 +56,9 @@ cd moumou-Agent
 make install
 
 # 2. No API key needed
-make test     # 65 tests
-make demo     # full pipeline against a scripted model, finishes in seconds
+make test          # 127 tests
+make demo          # full pipeline against a scripted model, finishes in seconds
+make demo-memory   # memory loop: a task fails → reflection → the next one reuses it
 
 # 3. Needs a real model (configure the key first, see below)
 make smoke    # verify the key and model name
