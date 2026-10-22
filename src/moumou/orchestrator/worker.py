@@ -46,6 +46,8 @@ class TaskRunner:
         human,
         compactor,
         budget,
+        retriever=None,
+        memory_enabled=True,
     ):
         self.repo = repo
         self.roles = roles
@@ -61,6 +63,9 @@ class TaskRunner:
         self.human = human
         self.compactor = compactor
         self.budget = budget
+        self.retriever = retriever
+        self.memory_enabled = memory_enabled
+        self.citations: dict[str, list[str]] = {}
 
         self._steer: dict[str, list[Message]] = defaultdict(list)
         self._subscribed: set[str] = set()
@@ -90,7 +95,14 @@ class TaskRunner:
     async def _loop(
         self, node: TaskNode, role: RoleSpec, agent: AgentInstance, workspace: Path
     ) -> None:
-        ctx = self.context.build(node, role, self._dep_reports(node))
+        hits = (
+            self.retriever.fetch(node, role)
+            if self.retriever is not None and self.memory_enabled
+            else []
+        )
+        ctx = self.context.build(node, role, self._dep_reports(node), memory_hits=hits)
+        if ctx.memory_ids:
+            self.citations[node.id] = list(ctx.memory_ids)
         self._subscribe(agent.id)
         tool_specs = self.tools.subset(role.tools)
 

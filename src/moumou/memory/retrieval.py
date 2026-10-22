@@ -25,7 +25,7 @@ class Retriever:
         self.policy = policy or ContextPolicy()
 
     def query_for(self, node: TaskNode, role: RoleSpec) -> str:
-        return f"{node.goal} {role.description}".strip()[:MAX_QUERY_CHARS]
+        return f"{node.goal} {role.name}".strip()[:MAX_QUERY_CHARS]
 
     def fetch(self, node: TaskNode, role: RoleSpec) -> list[MemoryRecord]:
         if self.store is None:

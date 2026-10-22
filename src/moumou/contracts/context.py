@@ -32,6 +32,14 @@ class ContextPolicy(BaseModel):
 
     allow_llm_summary: bool = False
 
+    # reflection: which finished tasks are worth a second model call
+    reflect_after_steps: int = Field(default=8, ge=0)
+    max_lessons: int = Field(default=2, ge=0, le=5)
+
+    # evolution
+    decay_factor: float = Field(default=0.9, gt=0.0, le=1.0)
+    evict_threshold: float = Field(default=0.3, ge=0.0, le=3.0)
+
     @property
     def prompt_ceiling(self) -> int:
         return self.context_window - self.max_output_tokens

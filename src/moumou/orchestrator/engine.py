@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
 
@@ -18,6 +19,8 @@ from moumou.contracts import (
     RoleSpec,
     TaskNode,
 )
+from moumou.memory import Evolution, Reflection, Retriever, SqliteMemoryStore, memory_scope
+from moumou.memory import near_duplicate as _near_duplicate
 from moumou.orchestrator.acceptance import AcceptanceChecker
 from moumou.orchestrator.delegation import Delegation
 from moumou.orchestrator.gate import ApprovalPolicy, Gate
@@ -47,6 +50,12 @@ class Settings(BaseModel):
     max_slots: int = 4
     max_rounds: int = 500
     approval: dict[str, bool] = Field(default_factory=dict)
+
+    context_window: int = 1_000_000
+    max_output_tokens: int = 384_000
+    compact_trigger_tokens: int = 600_000
+    compact_target_tokens: int = 256_000
+    memory_enabled: bool = True
 
 
 class RunReport(BaseModel):
@@ -96,13 +105,29 @@ class Engine:
         )
         self.delegation = Delegation(self.repo, self.roles, self.trace, self.tools.names())
         self.acceptance = AcceptanceChecker(self.trace)
-        self.policy = ContextPolicy()
+        self.policy = ContextPolicy(
+            context_window=self.settings.context_window,
+            max_output_tokens=self.settings.max_output_tokens,
+            compact_trigger_tokens=self.settings.compact_trigger_tokens,
+            compact_target_tokens=self.settings.compact_target_tokens,
+        )
         self.budget = TokenBudget(
             correction=float(self.db.get_meta("token_correction", "1.0") or 1.0)
         )
         self.compactor = Compactor(self.budget, self.policy)
         self.board = ConclusionBoard(self.db)
-        self.context = ContextBuilder(self.policy, self.budget, memory, board=self.board)
+
+        self._owns_memory = memory is None
+        self.memory = memory or SqliteMemoryStore(root / "memory.db")
+        self.retriever = Retriever(self.memory, self.policy)
+        self.evolution = Evolution(self.memory, self.policy, self.trace)
+        self.reflection = Reflection(
+            llm, self.memory, self.policy, self.trace, is_duplicate=_near_duplicate
+        )
+
+        self.context = ContextBuilder(
+            self.policy, self.budget, self.memory, board=self.board
+        )
 
         self.runner = TaskRunner(
             repo=self.repo,
@@ -119,6 +144,8 @@ class Engine:
             human=self.human,
             compactor=self.compactor,
             budget=self.budget,
+            retriever=self.retriever,
+            memory_enabled=self.settings.memory_enabled,
         )
         self.scheduler = Scheduler(
             self.repo,
@@ -170,6 +197,7 @@ class Engine:
     # -- running ---------------------------------------------------------
     async def run(self) -> RunReport:
         self._recover()
+        started_dt = datetime.now(UTC)
         started = monotonic()
         await self.scheduler.run()
         wall = monotonic() - started
@@ -183,6 +211,7 @@ class Engine:
                 tokens_out += event.tokens_out
 
         self.db.set_meta("token_correction", str(round(self.budget.correction, 4)))
+        self._maintain(tasks, started_dt)
 
         done = sum(1 for t in tasks if t.status == "DONE")
         dead = sum(1 for t in tasks if t.status == "DEAD")
@@ -212,20 +241,56 @@ class Engine:
         )
 
     async def _on_terminal(self, node: TaskNode) -> None:
-        """Hand-off note for the next instance of this role. Never fatal."""
+        """Hand-off note, memory scoring and reflection. None of it is fatal."""
         try:
             self.board.write(node)
             self.trace.record(
-                task_id=node.id,
-                kind="memory",
-                name="board_written",
-                outcome=node.status,
+                task_id=node.id, kind="memory", name="board_written", outcome=node.status
             )
         except Exception as exc:      # the task is already terminal; do not disturb it
             self.trace.record(
                 task_id=node.id,
                 kind="memory",
                 name="board_write_failed",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+        if not self.settings.memory_enabled:
+            return
+
+        used = self.runner.citations.get(node.id, [])
+        try:
+            if used:
+                self.evolution.record_use(used, success=node.status == "DONE")
+
+            steps = sum(1 for event in self.trace.query(node.id) if event.kind == "llm")
+            if self.reflection.should_reflect(node, steps):
+                role = self.roles.get(node.project_id, node.role)
+                if role is not None:
+                    await self.reflection.reflect(node, role, steps=steps)
+        except Exception as exc:
+            self.trace.record(
+                task_id=node.id,
+                kind="memory",
+                name="reflection_failed",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+    def _maintain(self, tasks: list[TaskNode], run_started) -> None:
+        """Decay what went unused this run, then retire what has faded."""
+        if not self.settings.memory_enabled or self.memory is None:
+            return
+        try:
+            used = {i for ids in self.runner.citations.values() for i in ids}
+            for scope in {memory_scope(t.project_id, t.role) for t in tasks}:
+                self.evolution.decay_scope(scope, used, skip_created_after=run_started)
+                self.evolution.evict(scope)
+            hard_delete = getattr(self.memory, "hard_delete_expired", None)
+            if callable(hard_delete):
+                hard_delete(30)
+        except Exception as exc:
+            self.trace.record(
+                task_id="-", kind="memory", name="maintenance_failed",
                 error=f"{type(exc).__name__}: {exc}",
             )
 
@@ -263,6 +328,8 @@ class Engine:
     # -- lifecycle -------------------------------------------------------
     def close(self) -> None:
         self.trace.close()
+        if self._owns_memory and self.memory is not None:
+            self.memory.close()
         self.db.close()
 
     def __enter__(self) -> Engine:
