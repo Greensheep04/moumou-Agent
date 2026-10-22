@@ -8,7 +8,7 @@ from time import monotonic
 from pydantic import BaseModel, Field
 
 from moumou.adapters import AutoApproveHuman, InMemoryBus, LocalDirs
-from moumou.context import Compactor, ContextBuilder, TokenBudget
+from moumou.context import Compactor, ConclusionBoard, ContextBuilder, TokenBudget
 from moumou.contracts import (
     HUMAN_ID,
     Budget,
@@ -97,9 +97,12 @@ class Engine:
         self.delegation = Delegation(self.repo, self.roles, self.trace, self.tools.names())
         self.acceptance = AcceptanceChecker(self.trace)
         self.policy = ContextPolicy()
-        self.budget = TokenBudget()
+        self.budget = TokenBudget(
+            correction=float(self.db.get_meta("token_correction", "1.0") or 1.0)
+        )
         self.compactor = Compactor(self.budget, self.policy)
-        self.context = ContextBuilder(self.policy, self.budget, memory)
+        self.board = ConclusionBoard(self.db)
+        self.context = ContextBuilder(self.policy, self.budget, memory, board=self.board)
 
         self.runner = TaskRunner(
             repo=self.repo,
@@ -118,7 +121,12 @@ class Engine:
             budget=self.budget,
         )
         self.scheduler = Scheduler(
-            self.repo, self.runner, self.trace, self.settings.max_slots, self.settings.max_rounds
+            self.repo,
+            self.runner,
+            self.trace,
+            self.settings.max_slots,
+            self.settings.max_rounds,
+            on_terminal=self._on_terminal,
         )
 
     # -- submitting work -------------------------------------------------
@@ -174,6 +182,8 @@ class Engine:
                 tokens_in += event.tokens_in
                 tokens_out += event.tokens_out
 
+        self.db.set_meta("token_correction", str(round(self.budget.correction, 4)))
+
         done = sum(1 for t in tasks if t.status == "DONE")
         dead = sum(1 for t in tasks if t.status == "DEAD")
         return RunReport(
@@ -200,6 +210,24 @@ class Engine:
                 for t in tasks
             ],
         )
+
+    async def _on_terminal(self, node: TaskNode) -> None:
+        """Hand-off note for the next instance of this role. Never fatal."""
+        try:
+            self.board.write(node)
+            self.trace.record(
+                task_id=node.id,
+                kind="memory",
+                name="board_written",
+                outcome=node.status,
+            )
+        except Exception as exc:      # the task is already terminal; do not disturb it
+            self.trace.record(
+                task_id=node.id,
+                kind="memory",
+                name="board_write_failed",
+                error=f"{type(exc).__name__}: {exc}",
+            )
 
     def _recover(self) -> None:
         """Anything left RUNNING died with the previous process."""

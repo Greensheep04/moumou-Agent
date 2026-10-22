@@ -391,3 +391,20 @@ async def test_agent_can_ask_the_human_a_question(tmp_path):
     assert human.requests and human.requests[0].kind == "question"
     # the answer must come back to the model as a tool result
     assert any("out.txt" in str(m.get("content")) for m in llm.calls[-1])
+
+
+async def test_finished_tasks_land_on_the_conclusion_board(tmp_path):
+    engine = Engine(writer_llm("out.txt"), settings=settings(tmp_path))
+    try:
+        task = engine.submit(
+            "write out.txt", acceptance=[Acceptance(kind="file_exists", target="out.txt")]
+        )
+        await engine.run()
+        scope = engine.board.scope("p", "c", "planner")
+        notes = engine.board.recent(scope)
+    finally:
+        engine.close()
+
+    assert notes, "every terminal task must leave a hand-off note"
+    assert task.id in notes[0]
+    assert "DONE" in notes[0]

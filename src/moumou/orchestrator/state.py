@@ -53,6 +53,21 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id);
 
+CREATE TABLE IF NOT EXISTS conclusions (
+    seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope       TEXT NOT NULL,
+    task_id     TEXT NOT NULL,
+    role        TEXT NOT NULL,
+    payload     TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_conclusions_scope ON conclusions(scope, seq);
+
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS roles (
     project_id  TEXT NOT NULL,
     name        TEXT NOT NULL,
@@ -86,6 +101,18 @@ class Database:
 
     def close(self) -> None:
         self.conn.close()
+
+    # -- small key/value store (e.g. the token-estimate correction) -------
+    def get_meta(self, key: str, default: str | None = None) -> str | None:
+        row = self.conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else default
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, str(value)),
+        )
 
 
 def _to_node(row: sqlite3.Row) -> TaskNode:

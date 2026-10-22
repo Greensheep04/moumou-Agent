@@ -13,12 +13,21 @@ from moumou.contracts import TERMINAL_STATUSES
 
 
 class Scheduler:
-    def __init__(self, repo, runner, trace=None, max_slots: int = 4, max_rounds: int = 500):
+    def __init__(
+        self,
+        repo,
+        runner,
+        trace=None,
+        max_slots: int = 4,
+        max_rounds: int = 500,
+        on_terminal=None,
+    ):
         self.repo = repo
         self.runner = runner
         self.trace = trace
         self.max_slots = max_slots
         self.max_rounds = max_rounds
+        self.on_terminal = on_terminal      # async callback: board write, reflection
         self._running: dict[str, asyncio.Task] = {}
         self._aborted = False
 
@@ -81,6 +90,11 @@ class Scheduler:
             node = self.repo.get(task_id)
             if node is not None and node.status == "FAILED":
                 self._handle_failure(node)
+                node = self.repo.get(task_id)   # retry or DEAD -- re-read either way
+
+            # A delegated parent sits in PENDING; only true terminal states count.
+            if node is not None and node.is_terminal and self.on_terminal is not None:
+                await self.on_terminal(node)
 
     def _handle_failure(self, node) -> None:
         if node.retries < node.budget.max_retries:

@@ -155,3 +155,21 @@ def test_maybe_compact_is_a_noop_below_the_trigger():
     assert not result.applied
     assert ctx.compactions == 0
     assert len(ctx.messages()) == 2
+
+
+class FakeBoard:
+    def __init__(self, notes):
+        self.notes = notes
+
+    def scope(self, project_id, conversation_id, role):
+        return f"{project_id}:{conversation_id}:{role}"
+
+    def recent(self, scope, limit=3):
+        return self.notes[:limit]
+
+
+def test_board_notes_are_pulled_in_automatically():
+    board = FakeBoard(["t9 [DONE]: scaffolded the package | files: src/pkg/__init__.py"])
+    ctx = ContextBuilder(ContextPolicy(), TokenBudget(), board=board).build(a_node(), a_role())
+
+    assert "scaffolded the package" in ctx.messages()[0]["content"]

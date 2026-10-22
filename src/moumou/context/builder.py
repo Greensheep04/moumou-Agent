@@ -146,6 +146,9 @@ class ContextBuilder:
     ) -> AgentContext:
         deps = dep_reports or []
         lessons = [record.lesson for record in (memory_hits or [])]
+        if board_notes is None and self.board is not None:
+            scope = self.board.scope(node.project_id, node.conversation_id, role.name)
+            board_notes = self.board.recent(scope, self.policy.board_entries)
         notes = list(board_notes or [])
 
         dep_limit = len(deps)
