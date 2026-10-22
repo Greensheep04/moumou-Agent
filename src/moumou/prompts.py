@@ -109,7 +109,9 @@ FRAMEWORK_RULES = """
 - You work in a private workspace. All file paths are relative to it.
 - Inspect before you edit; never assume a file's contents.
 - Some tool calls pause for human approval. That is expected, not a failure.
-- When the job is done, stop calling tools and reply with a short summary: what
-  you built, which files you touched, and how you verified it.
+- When the job is done, call `submit_result` with a summary, the files you
+  touched, any notes for whoever picks this up next, and anything still blocking.
+  A plain text reply also works, but the structured hand-off is what the next
+  agent actually reads.
 - Your output is checked against the acceptance criteria listed in the task brief.
 """

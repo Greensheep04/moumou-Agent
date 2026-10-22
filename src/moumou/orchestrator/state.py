@@ -13,9 +13,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from moumou.contracts import (
+    MAX_WAKEUPS,
     Budget,
     RoleSpec,
     TaskNode,
+    TaskResult,
     TaskStatus,
     can_transition,
 )
@@ -38,6 +40,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     branch          TEXT,
     error           TEXT,
     result          TEXT,
+    wakeups         INTEGER NOT NULL DEFAULT 0,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
@@ -98,6 +101,13 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a database was first created."""
+        have = {row["name"] for row in self.conn.execute("PRAGMA table_info(tasks)")}
+        if "wakeups" not in have:
+            self.conn.execute("ALTER TABLE tasks ADD COLUMN wakeups INTEGER NOT NULL DEFAULT 0")
 
     def close(self) -> None:
         self.conn.close()
@@ -132,10 +142,20 @@ def _to_node(row: sqlite3.Row) -> TaskNode:
         artifacts=json.loads(row["artifacts"]),
         branch=row["branch"],
         error=row["error"],
-        result=row["result"],
+        result=_parse_result(row["result"]),
+        wakeups=row["wakeups"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
+
+
+def _parse_result(raw: str | None) -> TaskResult | None:
+    if not raw:
+        return None
+    try:
+        return TaskResult.model_validate_json(raw)
+    except Exception:
+        return TaskResult(summary=raw)      # rows written before the structured hand-off
 
 
 class SqliteTaskRepo:
@@ -179,8 +199,8 @@ class SqliteTaskRepo:
         self.db.conn.execute(
             """INSERT INTO tasks (id, project_id, conversation_id, parent_id, depth, goal, role,
                                    deps, acceptance, status, retries, budget, artifacts, branch,
-                                   error, result, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                   error, result, wakeups, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 node.id,
                 node.project_id,
@@ -197,7 +217,8 @@ class SqliteTaskRepo:
                 json.dumps(node.artifacts),
                 node.branch,
                 node.error,
-                node.result,
+                node.result.model_dump_json() if node.result else None,
+                node.wakeups,
                 node.created_at.isoformat(),
                 node.updated_at.isoformat(),
             ),
@@ -234,11 +255,18 @@ class SqliteTaskRepo:
             (json.dumps(deps), _now(), task_id),
         )
 
-    def set_result(self, task_id: str, result: str) -> None:
+    def set_result(self, task_id: str, result: TaskResult) -> None:
         self.db.conn.execute(
             "UPDATE tasks SET result = ?, updated_at = ? WHERE id = ?",
-            (result, _now(), task_id),
+            (result.model_dump_json(), _now(), task_id),
         )
+
+    def bump_wakeups(self, task_id: str) -> int:
+        self.db.conn.execute(
+            "UPDATE tasks SET wakeups = wakeups + 1 WHERE id = ?", (task_id,)
+        )
+        node = self.get(task_id)
+        return node.wakeups if node else 0
 
     def add_artifacts(self, task_id: str, artifacts: list[str]) -> None:
         if not artifacts:
@@ -271,7 +299,13 @@ class SqliteTaskRepo:
             if any(d is None for d in deps):
                 self.transition(node.id, "DEAD", "missing_dependency")
             elif any(d.status == "DEAD" for d in deps):
-                self.transition(node.id, "DEAD", "upstream_failed")
+                # A dead child wakes the parent so it can re-dispatch, instead of
+                # taking the whole branch down with it.
+                if node.wakeups < MAX_WAKEUPS:
+                    self.bump_wakeups(node.id)
+                    self.transition(node.id, "READY", "upstream_failed_review")
+                else:
+                    self.transition(node.id, "DEAD", "upstream_failed")
             elif all(d.status == "DONE" for d in deps):
                 self.transition(node.id, "READY", "deps_satisfied")
             else:

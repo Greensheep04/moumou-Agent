@@ -72,7 +72,7 @@ def test_promote_unblocks_when_deps_are_done(repo):
     assert repo.get("b").status == "READY"
 
 
-def test_promote_kills_children_of_dead_parents(repo):
+def test_promote_wakes_the_parent_when_a_child_dies(repo):
     repo.add(node(id="a"))
     repo.add(node(id="b", deps=["a"]))
 
@@ -80,7 +80,21 @@ def test_promote_kills_children_of_dead_parents(repo):
     repo.promote()
 
     b = repo.get("b")
-    assert b.status == "DEAD"
+    assert b.status == "READY", "the parent gets a chance to re-dispatch"
+    assert b.wakeups == 1
+    assert repo.event_log("b")[-1]["reason"] == "upstream_failed_review"
+
+
+def test_promote_gives_up_after_the_wakeup_budget(repo):
+    from moumou.contracts import MAX_WAKEUPS
+
+    repo.add(node(id="a"))
+    repo.add(node(id="b", deps=["a"], wakeups=MAX_WAKEUPS))
+    repo.transition("a", "DEAD", "gave_up")
+
+    repo.promote()
+
+    assert repo.get("b").status == "DEAD"
     assert repo.event_log("b")[-1]["reason"] == "upstream_failed"
 
 

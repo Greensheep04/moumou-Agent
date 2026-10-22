@@ -120,3 +120,18 @@ def test_applying_a_plan_creates_children_and_parks_the_parent(env):
     parked = repo.get("t1")
     assert parked.status == "PENDING"
     assert parked.deps == ["t1.a"], "the parent now depends on its children"
+
+
+def test_a_woken_parent_re_dispatches_under_a_round_prefix(env):
+    delegation, repo, _ = env
+    parent = a_parent()
+    parent.wakeups = 1
+    repo.add(parent)
+    repo.transition(parent.id, "READY", "submitted")
+    repo.transition(parent.id, "RUNNING", "dispatched")
+
+    plan = a_plan(a_spec("a"), a_spec("b", deps=["a"]), roles=[a_draft()]).model_dump()
+    children = delegation.apply(repo.get(parent.id), plan)
+
+    assert [c.id for c in children] == ["t1.r1.a", "t1.r1.b"]
+    assert children[1].deps == ["t1.r1.a"]

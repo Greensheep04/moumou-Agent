@@ -208,3 +208,23 @@ def test_framework_rules_follow_the_role_text():
     system = ctx.messages()[0]["content"]
 
     assert system.index("writes small programs") < system.index("Operating context")
+
+
+def test_structured_handoffs_render_as_fields():
+    from moumou.contracts import TaskResult
+
+    dep = a_dep(
+        result=TaskResult(
+            summary="created the parser",
+            files=["src/parser.py"],
+            notes="handles UTF-8 only",
+            blockers=["no tests yet"],
+        )
+    )
+    ctx = builder().build(a_node(), a_role(), dep_reports=[dep])
+
+    brief = ctx.messages()[1]["content"]
+    assert "created the parser" in brief
+    assert "src/parser.py" in brief
+    assert "handles UTF-8 only" in brief
+    assert "no tests yet" in brief

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from moumou.context import ConclusionBoard
-from moumou.contracts import TaskNode
+from moumou.contracts import TaskNode, TaskResult
 from moumou.orchestrator.state import Database
 
 
@@ -29,7 +29,7 @@ def node(task_id="t1", role="coder", status="DONE", **kw) -> TaskNode:
 
 
 def test_a_finished_task_leaves_a_note(board):
-    board.write(node(artifacts=["src/parser.py"], result="parser works"))
+    board.write(node(artifacts=["src/parser.py"], result=TaskResult(summary="parser works")))
 
     notes = board.recent(board.scope("p", "c", "coder"))
 

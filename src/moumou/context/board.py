@@ -35,7 +35,7 @@ class ConclusionBoard:
             "goal": node.goal[:MAX_GOAL_CHARS],
             "artifacts": node.artifacts[:MAX_FILES],
             "outcome": node.status,
-            "note": (node.result or node.error or "")[:MAX_NOTE_CHARS],
+            "note": _note_for(node),
         }
         scope = self.scope(node.project_id, node.conversation_id, node.role)
 
@@ -80,6 +80,14 @@ class ConclusionBoard:
         if note:
             line += f" — {note}"
         return line
+
+
+def _note_for(node: TaskNode) -> str:
+    if node.result is not None:
+        return node.result.as_text(MAX_NOTE_CHARS)
+    if node.error:
+        return node.error[:MAX_NOTE_CHARS]
+    return ""
 
 
 def _now() -> str:

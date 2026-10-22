@@ -132,7 +132,10 @@ class Reflection:
 
     def _prompt(self, node: TaskNode, steps: int) -> str:
         artifacts = ", ".join(node.artifacts[:10]) or "(none)"
-        detail = (node.error or node.result or "(nothing recorded)")[:600]
+        detail = node.error or ""
+        if not detail and node.result is not None:
+            detail = node.result.as_text(600)
+        detail = (detail or "(nothing recorded)")[:600]
         return PROMPT_HEADER.format(
             max_lessons=self.policy.max_lessons,
             goal=node.goal[:300],

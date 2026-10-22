@@ -115,17 +115,21 @@ class Delegation:
         self.validate(parent, plan)
         self._materialise_roles(parent, plan.roles)
 
+        # A parent woken by a dead child re-dispatches the same keys; give the
+        # second round its own namespace so ids do not collide.
+        prefix = parent.id if parent.wakeups == 0 else f"{parent.id}.r{parent.wakeups}"
+
         children: list[TaskNode] = []
         for spec in plan.subtasks:
             child = TaskNode(
-                id=f"{parent.id}.{spec.key}",
+                id=f"{prefix}.{spec.key}",
                 project_id=parent.project_id,
                 conversation_id=parent.conversation_id,
                 parent_id=parent.id,
                 depth=parent.depth + 1,
                 goal=spec.goal,
                 role=spec.role,
-                deps=[f"{parent.id}.{d}" for d in spec.deps],
+                deps=[f"{prefix}.{d}" for d in spec.deps],
                 acceptance=spec.acceptance,
                 budget=parent.budget.model_copy(),
             )

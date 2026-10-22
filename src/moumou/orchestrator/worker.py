@@ -20,6 +20,7 @@ from moumou.contracts import (
     Message,
     RoleSpec,
     TaskNode,
+    TaskResult,
     ToolResult,
 )
 
@@ -153,13 +154,16 @@ class TaskRunner:
             ctx.add_assistant(response.content, response.tool_calls or None)
 
             if not response.tool_calls:
-                await self._finish(node, workspace, response.content)
+                await self._finish(node, workspace, TaskResult(summary=response.content or ""))
                 return
 
             for call in response.tool_calls:
                 if call.name == "submit_plan":
                     # Delegation transitions the parent to PENDING itself.
                     self.delegation.apply(node, call.args)
+                    return
+                if call.name == "submit_result":
+                    await self._finish(node, workspace, _coerce_result(call.args))
                     return
                 if call.name == "ask_human":
                     result = await self._ask_human(call, node, agent)
@@ -170,14 +174,14 @@ class TaskRunner:
         raise BudgetExceeded("max_steps")
 
     # -- completion ------------------------------------------------------
-    async def _finish(self, node: TaskNode, workspace: Path, answer: str) -> None:
+    async def _finish(self, node: TaskNode, workspace: Path, result: TaskResult) -> None:
         # tools recorded artifacts against the database row, not this snapshot
         node = self.repo.get(node.id) or node
         ok, details = await self.acceptance.check(node, workspace)
         self.trace.record(
             task_id=node.id, kind="acceptance", name="verdict", ok=ok, checks=details
         )
-        self.repo.set_result(node.id, answer or "")
+        self.repo.set_result(node.id, result)
 
         if ok:
             self.repo.transition(node.id, "DONE", "accepted")
@@ -217,6 +221,10 @@ class TaskRunner:
 
     def _drain(self, agent_id: str) -> list[Message]:
         return self._steer.pop(agent_id, [])
+
+    @staticmethod
+    def _result_from(answer: str) -> TaskResult:
+        return TaskResult(summary=answer or "")
 
     def _dep_reports(self, node: TaskNode) -> list[dict]:
         reports = []
@@ -341,3 +349,11 @@ class TaskRunner:
             self.repo.transition(task_id, to, reason)
         except Exception:
             pass          # the node already moved; never mask the original error
+
+
+def _coerce_result(args: dict) -> TaskResult:
+    """A malformed submit_result must not lose the work; fall back to plain text."""
+    try:
+        return TaskResult.model_validate(args)
+    except Exception:
+        return TaskResult(summary=str(args)[:500])

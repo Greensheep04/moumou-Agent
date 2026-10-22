@@ -215,7 +215,7 @@ async def test_parent_waits_for_children_then_reviews(tmp_path):
 
     assert parent.status == "DONE"
     assert "waiting_for_children" in log
-    assert parent.result and "deliverables are ready" in parent.result
+    assert parent.result and "deliverables are ready" in parent.result.summary
 
 
 async def test_children_run_in_separate_workspaces(tmp_path):
@@ -408,3 +408,35 @@ async def test_finished_tasks_land_on_the_conclusion_board(tmp_path):
     assert notes, "every terminal task must leave a hand-off note"
     assert task.id in notes[0]
     assert "DONE" in notes[0]
+
+
+async def test_an_agent_hands_off_a_structured_result(tmp_path):
+    def responder(messages, tools):
+        return LLMResponse(
+            tool_calls=[
+                ToolCall(
+                    id="r1",
+                    name="submit_result",
+                    args={
+                        "summary": "created out.txt",
+                        "files": ["out.txt"],
+                        "notes": "contents are a placeholder",
+                        "blockers": ["no tests yet"],
+                    },
+                )
+            ]
+        )
+
+    engine = Engine(FakeLLM(responder), settings=settings(tmp_path))
+    try:
+        task = engine.submit("write a file")
+        await engine.run()
+        node = engine.repo.get(task.id)
+    finally:
+        engine.close()
+
+    assert node.status == "DONE"
+    assert node.result is not None
+    assert node.result.summary == "created out.txt"
+    assert node.result.files == ["out.txt"]
+    assert node.result.blockers == ["no tests yet"]

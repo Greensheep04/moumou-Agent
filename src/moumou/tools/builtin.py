@@ -14,7 +14,7 @@ import asyncio
 import shlex
 from pathlib import Path
 
-from moumou.contracts import ToolContext, ToolResult
+from moumou.contracts import TaskResult, ToolContext, ToolResult
 from moumou.contracts.plan import Plan
 from moumou.tools.registry import flatten_schema
 
@@ -240,6 +240,26 @@ class AskHumanTool:
         return ToolResult(ok=False, error="ask_human is handled by the orchestrator")
 
 
+class SubmitResultTool:
+    """Marker tool: intercepted by the runner, which then runs acceptance.
+
+    Its schema is the structured hand-off, so the parent gets fields instead of a
+    paragraph it has to truncate.
+    """
+
+    name = "submit_result"
+    description = (
+        "Hand the finished work back. Include a summary, the files you touched, "
+        "anything the next agent should know, and anything still blocking."
+    )
+    action_class = "fs_read"
+    timeout_s = 1.0
+    params_schema = flatten_schema(TaskResult.model_json_schema())
+
+    async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
+        return ToolResult(ok=False, error="submit_result is handled by the orchestrator")
+
+
 class SubmitPlanTool:
     """Marker tool: the runner intercepts it and never dispatches it.
 
@@ -269,5 +289,6 @@ def default_tools() -> list:
         ShellTool(),
         RunPythonTool(),
         AskHumanTool(),
+        SubmitResultTool(),
         SubmitPlanTool(),
     ]

@@ -13,7 +13,15 @@ from __future__ import annotations
 
 import json
 
-from moumou.contracts import ContextPolicy, MemoryRecord, RoleSpec, TaskNode, ToolResult
+from moumou.contracts import (
+    MAX_RESULT_CHARS,
+    ContextPolicy,
+    MemoryRecord,
+    RoleSpec,
+    TaskNode,
+    TaskResult,
+    ToolResult,
+)
 from moumou.prompts import FRAMEWORK_RULES, LEAD_ROLE, PLANNER_PROMPT, SPECIALIST_TEMPLATE
 
 from .compactor import CompactionResult, Compactor
@@ -33,8 +41,8 @@ BRIEF_TEMPLATE = """## Task
 """
 
 NO_DEPS = "(this task has no upstream dependencies)"
-#: Upstream reports are summaries; the files themselves live in the workspace.
-MAX_REPORT_CHARS = 800
+#: Upstream reports are structured hand-offs, rendered and capped here.
+MAX_REPORT_CHARS = MAX_RESULT_CHARS
 MAX_REASON_CHARS = 200
 
 
@@ -235,7 +243,7 @@ class ContextBuilder:
                 blocks.append(f"### {dep['id']} — {dep['role']} — FAILED\nreason: {reason}")
                 continue
 
-            report = (dep.get("result") or "(no report)")[:MAX_REPORT_CHARS]
+            report = _render_report(dep.get("result"))
             blocks.append(
                 f"### {dep['id']} — {dep['role']} — {status}\n"
                 f"goal: {dep['goal']}\n"
@@ -243,3 +251,12 @@ class ContextBuilder:
                 f"report: {report}"
             )
         return "\n\n".join(blocks)
+
+
+def _render_report(result) -> str:
+    if isinstance(result, TaskResult):
+        text = result.as_text(MAX_REPORT_CHARS)
+        return text or "(no report)"
+    if result:
+        return str(result)[:MAX_REPORT_CHARS]
+    return "(no report)"

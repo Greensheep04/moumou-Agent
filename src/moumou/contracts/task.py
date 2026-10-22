@@ -13,6 +13,10 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 #: Hard cap on decomposition depth. depth=0 is a top-level task.
 MAX_DEPTH = 2
+#: How many times a parent may be woken because a child died, before it gives up.
+MAX_WAKEUPS = 2
+#: Upper bound on the hand-off text a parent renders for one child.
+MAX_RESULT_CHARS = 3_000
 #: Hard cap on how many subtasks one decomposition round may emit.
 MAX_SUBTASKS = 6
 
@@ -86,6 +90,32 @@ class Acceptance(BaseModel):
         return self
 
 
+class TaskResult(BaseModel):
+    """What a finished task hands to its parent.
+
+    A plain reply still works -- the worker wraps it in ``summary`` -- but when the
+    agent calls ``submit_result`` the parent gets fields it can render instead of a
+    truncated paragraph.
+    """
+
+    summary: str = ""
+    files: list[str] = Field(default_factory=list)
+    notes: str = ""
+    blockers: list[str] = Field(default_factory=list)
+
+    def as_text(self, limit: int = MAX_RESULT_CHARS) -> str:
+        parts: list[str] = []
+        if self.summary:
+            parts.append(self.summary)
+        if self.files:
+            parts.append("files: " + ", ".join(self.files))
+        if self.notes:
+            parts.append("notes: " + self.notes)
+        if self.blockers:
+            parts.append("blockers: " + "; ".join(self.blockers))
+        return "\n".join(parts)[:limit]
+
+
 class Budget(BaseModel):
     """Per-task resource ceiling. Blowing any of these fails the task.
 
@@ -121,7 +151,8 @@ class TaskNode(BaseModel):
     artifacts: list[str] = Field(default_factory=list)   # relative to the workspace
     branch: str | None = None                            # this task's git branch
     error: str | None = None
-    result: str | None = None                            # the agent's final answer
+    result: TaskResult | None = None                     # structured hand-off to the parent
+    wakeups: int = Field(default=0, ge=0)                # times a dead child woke this task
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
