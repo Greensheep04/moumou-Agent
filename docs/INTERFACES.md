@@ -170,10 +170,23 @@ class WorkspaceProvider(Protocol):
 | --- | --- | --- |
 | `allocate` | 每个任务开跑前 | 返回已存在的目录；同一 `agent_id` 重复调用应返回同一个 |
 | `release` | 任务彻底结束后 | 只清理自己根目录下的内容 |
-| `integrate` | 子任务完成时 / 任务开跑前 | 将 `artifacts` 从 `src` 搬到 `dst`，返回实际搬运的路径列表 |
+| `integrate` | 子任务完成时 / 任务开跑前 | 将 `artifacts` 从 `src` 搬到 `dst`，返回 `IntegrateResult` |
 
 `integrate` 是「多个 Agent 各干各的」变成「一个可验证的结果」的唯一通道。
 当前参考实现是复制文件；git 版本对应的是把子任务分支合并进父分支。
+
+返回值用结果对象而不是路径列表，因为 **合并冲突是正常结果，不是异常**：
+
+```python
+class IntegrateResult(BaseModel):
+    ok: bool = True
+    copied: list[str] = []       # 成功搬运的路径
+    conflicts: list[str] = []    # 冲突的路径，相对 workspace
+    error: str | None = None
+```
+
+冲突时的约定：子任务本身仍然算完成（它的验收已经通过），冲突会写进该任务的 `error`
+字段和执行日志，父任务的上下文里能看到，由父任务决定如何合并。
 
 参考实现：`src/moumou/adapters/workspace.py`
 
@@ -189,6 +202,8 @@ class Channel(Protocol):
     def subscribe(self, agent_id: str, cb: Callable[[Message], Awaitable | None]) -> None: ...
     def history(self, scope: Scope, limit: int = 50) -> list[Message]: ...
 ```
+
+协议定义在 `src/moumou/contracts/message.py`。
 
 ### `Message`
 

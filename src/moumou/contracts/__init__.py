@@ -3,7 +3,7 @@
 from .agent import MAX_ROLES_PER_PROJECT, AgentInstance, RoleSpec
 from .human import HumanIO, HumanRequest, HumanResponse
 from .memory import MemoryRecord
-from .message import HUMAN_ID, Message, MessageKind, Scope
+from .message import HUMAN_ID, Channel, Message, MessageKind, Scope
 from .plan import Plan, RoleDraft, SubtaskSpec
 from .store import MemoryStore, TaskRepo, TraceStore
 from .task import (
@@ -21,7 +21,7 @@ from .task import (
 )
 from .tool import DEFAULT_APPROVAL, ActionClass, Tool, ToolContext, ToolResult
 from .trace import SpanKind, TraceEvent
-from .workspace import WorkspaceProvider
+from .workspace import IntegrateResult, WorkspaceProvider
 
 __all__ = [
     "DEFAULT_APPROVAL",
@@ -36,9 +36,11 @@ __all__ = [
     "ActionClass",
     "AgentInstance",
     "Budget",
+    "Channel",
     "HumanIO",
     "HumanRequest",
     "HumanResponse",
+    "IntegrateResult",
     "MemoryRecord",
     "MemoryStore",
     "Message",

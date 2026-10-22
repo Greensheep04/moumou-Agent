@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 
 from moumou.adapters import InMemoryBus
-from moumou.contracts import Message, Scope
+from moumou.contracts import Channel, Message, Scope
 
 
 @pytest.fixture
@@ -114,3 +114,4 @@ def test_bus_satisfies_the_channel_port(make_bus):
     bus = make_bus()
     for method in ("publish", "subscribe", "history"):
         assert callable(getattr(bus, method, None)), f"missing Channel.{method}"
+    assert isinstance(bus, Channel), "bus does not satisfy the Channel protocol"

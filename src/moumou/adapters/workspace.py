@@ -10,6 +10,8 @@ import re
 import shutil
 from pathlib import Path
 
+from moumou.contracts import IntegrateResult
+
 _UNSAFE = re.compile(r"[^a-zA-Z0-9._@#-]")
 
 
@@ -36,27 +38,31 @@ class LocalDirs:
             raise PermissionError(f"refusing to delete outside root: {resolved}")
         # intentionally does not delete: artifacts are evidence
 
-    def integrate(self, src: Path, dst: Path, artifacts: list[str]) -> list[str]:
+    def integrate(self, src: Path, dst: Path, artifacts: list[str]) -> IntegrateResult:
         """Naive integration: copy each artifact up to the parent.
 
-        P1 replaces this with ``git merge`` of the child's branch. The contract
-        is the same either way: after this returns, the parent's workspace
-        contains the child's deliverables at the same relative paths.
+        P1 replaces this with ``git merge`` of the child's branch. Copying can
+        never conflict, so ``conflicts`` is always empty here -- but the result
+        shape is the same one the git backend has to fill in.
         """
         src_root, dst_root = Path(src).resolve(), Path(dst).resolve()
         for root in (src_root, dst_root):
             if not root.is_relative_to(self.root):
-                raise PermissionError(f"integration escapes root: {root}")
+                return IntegrateResult(
+                    ok=False, error=f"integration escapes root: {root}"
+                )
 
         copied: list[str] = []
         for rel in artifacts:
             source = (src_root / rel).resolve()
             target = (dst_root / rel).resolve()
             if not source.is_relative_to(src_root) or not target.is_relative_to(dst_root):
-                raise PermissionError(f"artifact path escapes workspace: {rel}")
+                return IntegrateResult(
+                    ok=False, copied=copied, error=f"artifact escapes workspace: {rel}"
+                )
             if not source.is_file():
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
             copied.append(rel)
-        return copied
+        return IntegrateResult(ok=True, copied=copied)

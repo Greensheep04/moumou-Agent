@@ -12,6 +12,7 @@ from moumou.context import ContextBuilder
 from moumou.contracts import (
     HUMAN_ID,
     Budget,
+    Channel,
     Message,
     RoleSpec,
     TaskNode,
@@ -66,7 +67,7 @@ class Engine:
         llm,
         *,
         human=None,
-        bus=None,
+        bus: Channel | None = None,
         workspace=None,
         tools: ToolRegistry | None = None,
         settings: Settings | None = None,

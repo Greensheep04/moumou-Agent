@@ -200,6 +200,7 @@ class TaskRunner:
                     "goal": dep.goal,
                     "artifacts": dep.artifacts,
                     "result": dep.result,
+                    "error": dep.error,
                 }
             )
         return reports
@@ -241,14 +242,23 @@ class TaskRunner:
             source = self.workspace.allocate(
                 dep.project_id, dep.conversation_id, f"{dep.role}@{dep.id}"
             )
-            copied = self.workspace.integrate(source, workspace, dep.artifacts)
-            if copied:
+            result = self.workspace.integrate(source, workspace, dep.artifacts)
+            if result.copied:
                 self.trace.record(
                     task_id=node.id,
                     kind="task",
                     name="materialised_from_dep",
                     source=dep.id,
-                    files=copied,
+                    files=result.copied,
+                )
+            if result.conflicts or not result.ok:
+                self.trace.record(
+                    task_id=node.id,
+                    kind="task",
+                    name="materialise_failed",
+                    source=dep.id,
+                    conflicts=result.conflicts,
+                    error=result.error,
                 )
 
     def _integrate_into_parent(self, node: TaskNode, workspace: Path) -> None:
@@ -261,14 +271,30 @@ class TaskRunner:
         target = self.workspace.allocate(
             parent.project_id, parent.conversation_id, f"{parent.role}@{parent.id}"
         )
-        copied = self.workspace.integrate(workspace, target, node.artifacts)
-        if copied:
+        result = self.workspace.integrate(workspace, target, node.artifacts)
+
+        # A conflict is not a failure of this task: the work was accepted, it is
+        # the parent that has to reconcile it. Record it so the parent can see it.
+        if result.conflicts:
+            self.repo.set_error(node.id, "integration_conflict:" + ",".join(result.conflicts))
+            self.trace.record(
+                task_id=node.id,
+                kind="task",
+                name="integration_conflict",
+                parent=parent.id,
+                conflicts=result.conflicts,
+            )
+        elif not result.ok:
+            self.trace.record(
+                task_id=node.id, kind="task", name="integration_failed", error=result.error
+            )
+        if result.copied:
             self.trace.record(
                 task_id=node.id,
                 kind="task",
                 name="integrated_into_parent",
                 parent=parent.id,
-                files=copied,
+                files=result.copied,
             )
 
     def _fail(self, task_id: str, error: str) -> None:
