@@ -87,10 +87,15 @@ class Acceptance(BaseModel):
 
 
 class Budget(BaseModel):
-    """Per-task resource ceiling. Blowing any of these fails the task."""
+    """Per-task resource ceiling. Blowing any of these fails the task.
+
+    ``max_tokens`` is a raw cumulative count, not a bill: with prefix caching most
+    of a growing transcript is billed at the cache-hit rate. It exists to stop a
+    runaway loop, not to model cost.
+    """
 
     max_steps: int = Field(default=30, ge=1)
-    max_tokens: int = Field(default=200_000, ge=1_000)
+    max_tokens: int = Field(default=12_000_000, ge=1_000)
     max_wall_s: int = Field(default=900, ge=10)
     max_retries: int = Field(default=2, ge=0, le=5)
 

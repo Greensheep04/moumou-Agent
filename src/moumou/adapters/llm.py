@@ -29,6 +29,7 @@ class LLMResponse(BaseModel):
     tool_calls: list[ToolCall] = Field(default_factory=list)
     tokens_in: int = 0
     tokens_out: int = 0
+    cache_hit_tokens: int = 0      # reported for the cost analysis, not for budgets
     model: str = ""
 
     @property
@@ -158,5 +159,6 @@ class DeepSeekClient:
             tool_calls=calls,
             tokens_in=int(usage.get("prompt_tokens") or 0),
             tokens_out=int(usage.get("completion_tokens") or 0),
+            cache_hit_tokens=int(usage.get("prompt_cache_hit_tokens") or 0),
             model=data.get("model", self.model),
         )

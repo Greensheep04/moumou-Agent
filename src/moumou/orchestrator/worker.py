@@ -44,6 +44,8 @@ class TaskRunner:
         delegation,
         workspace,
         human,
+        compactor,
+        budget,
     ):
         self.repo = repo
         self.roles = roles
@@ -57,6 +59,8 @@ class TaskRunner:
         self.delegation = delegation
         self.workspace = workspace
         self.human = human
+        self.compactor = compactor
+        self.budget = budget
 
         self._steer: dict[str, list[Message]] = defaultdict(list)
         self._subscribed: set[str] = set()
@@ -110,12 +114,28 @@ class TaskRunner:
                     count=len(nudges),
                 )
 
+            compaction = ctx.maybe_compact(self.compactor)
+            if compaction.applied:
+                self.trace.record(
+                    task_id=node.id,
+                    kind="memory",
+                    name="compacted",
+                    agent_id=agent.id,
+                    before=compaction.tokens_before,
+                    after=compaction.tokens_after,
+                    layer=compaction.layer,
+                    dropped_turns=compaction.dropped_turns,
+                )
+
+            estimated = self.budget.estimate(ctx.messages())
             with self.trace.span(
                 task_id=node.id, kind="llm", name=f"{role.name}:step{step}", agent_id=agent.id
             ) as span:
                 response = await self.llm.chat(ctx.messages(), tool_specs)
                 span.tokens_in = response.tokens_in
                 span.tokens_out = response.tokens_out
+                span.payload["tokens_cached"] = response.cache_hit_tokens
+            self.budget.observe(estimated, response.tokens_in)
             tokens += response.tokens
 
             ctx.add_assistant(response.content, response.tool_calls or None)

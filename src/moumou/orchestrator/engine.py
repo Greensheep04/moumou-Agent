@@ -8,11 +8,12 @@ from time import monotonic
 from pydantic import BaseModel, Field
 
 from moumou.adapters import AutoApproveHuman, InMemoryBus, LocalDirs
-from moumou.context import ContextBuilder
+from moumou.context import Compactor, ContextBuilder, TokenBudget
 from moumou.contracts import (
     HUMAN_ID,
     Budget,
     Channel,
+    ContextPolicy,
     Message,
     RoleSpec,
     TaskNode,
@@ -95,7 +96,10 @@ class Engine:
         )
         self.delegation = Delegation(self.repo, self.roles, self.trace, self.tools.names())
         self.acceptance = AcceptanceChecker(self.trace)
-        self.context = ContextBuilder(memory)
+        self.policy = ContextPolicy()
+        self.budget = TokenBudget()
+        self.compactor = Compactor(self.budget, self.policy)
+        self.context = ContextBuilder(self.policy, self.budget, memory)
 
         self.runner = TaskRunner(
             repo=self.repo,
@@ -110,6 +114,8 @@ class Engine:
             delegation=self.delegation,
             workspace=self.workspace,
             human=self.human,
+            compactor=self.compactor,
+            budget=self.budget,
         )
         self.scheduler = Scheduler(
             self.repo, self.runner, self.trace, self.settings.max_slots, self.settings.max_rounds

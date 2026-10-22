@@ -1,15 +1,22 @@
-"""Context assembly — the cheapest version that can still run a task.
+"""Context assembly, four layers deep.
 
-Token budgeting and summarisation are deliberately deferred to v0.2. What is
-already correct here: every agent gets its own message list built from the role,
-the task, upstream results, and retrieved memories — never the whole chat log.
+    role        who I am and how I must behave          (never trimmed)
+    task        goal, acceptance, upstream reports      (trimmed under pressure)
+    experience  lessons retrieved from long-term memory (trimmed next)
+    dialogue    this task's tool history                (compacted at runtime)
+
+Everything that decides *what is allowed in* lives here; everything that decides
+*how much fits* lives in the compactor.
 """
 
 from __future__ import annotations
 
 import json
 
-from moumou.contracts import RoleSpec, TaskNode, ToolResult
+from moumou.contracts import ContextPolicy, MemoryRecord, RoleSpec, TaskNode, ToolResult
+
+from .compactor import CompactionResult, Compactor
+from .tokens import TokenBudget
 
 SYSTEM_TEMPLATE = """You are {title} (role: {name}) on a multi-agent software team.
 
@@ -27,6 +34,9 @@ Operating rules:
 - Your output will be checked against the acceptance criteria listed below.
 """
 
+LESSONS_HEADER = "\n## Lessons from previous runs\n"
+BOARD_HEADER = "\n## Notes from earlier work by this role\n"
+
 BRIEF_TEMPLATE = """## Task
 {goal}
 
@@ -37,27 +47,40 @@ BRIEF_TEMPLATE = """## Task
 {deps}
 """
 
+NO_DEPS = "(this task has no upstream dependencies)"
+#: Upstream reports are summaries; the files themselves live in the workspace.
+MAX_REPORT_CHARS = 800
+MAX_REASON_CHARS = 200
 
-def _render_result(r: ToolResult) -> str:
-    parts = [f"ok={str(r.ok).lower()}"]
-    if r.exit_code is not None:
-        parts.append(f"exit_code={r.exit_code}")
-    if r.stdout:
-        parts.append("stdout:\n" + r.stdout)
-    if r.stderr:
-        parts.append("stderr:\n" + r.stderr)
-    if r.error:
-        parts.append("error: " + r.error)
-    if r.artifacts:
-        parts.append("artifacts: " + ", ".join(r.artifacts))
+
+def _render_result(result: ToolResult) -> str:
+    parts = [f"ok={str(result.ok).lower()}"]
+    if result.exit_code is not None:
+        parts.append(f"exit_code={result.exit_code}")
+    if result.stdout:
+        parts.append("stdout:\n" + result.stdout)
+    if result.stderr:
+        parts.append("stderr:\n" + result.stderr)
+    if result.error:
+        parts.append("error: " + result.error)
+    if result.artifacts:
+        parts.append("artifacts: " + ", ".join(result.artifacts))
     return "\n".join(parts)
 
 
 class AgentContext:
     """One agent's message list. Mutable, but only through the methods below."""
 
-    def __init__(self, messages: list[dict]):
+    def __init__(
+        self,
+        messages: list[dict],
+        pinned: int = 2,
+        memory_ids: list[str] | None = None,
+    ):
         self._messages = messages
+        self.pinned = pinned                  # role + brief: never compacted
+        self.memory_ids = list(memory_ids or [])
+        self.compactions = 0
 
     def messages(self) -> list[dict]:
         return self._messages
@@ -67,14 +90,14 @@ class AgentContext:
         if tool_calls:
             msg["tool_calls"] = [
                 {
-                    "id": c.id,
+                    "id": call.id,
                     "type": "function",
                     "function": {
-                        "name": c.name,
-                        "arguments": json.dumps(c.args, ensure_ascii=False),
+                        "name": call.name,
+                        "arguments": json.dumps(call.args, ensure_ascii=False),
                     },
                 }
-                for c in tool_calls
+                for call in tool_calls
             ]
         self._messages.append(msg)
 
@@ -87,6 +110,13 @@ class AgentContext:
         for text in texts:
             self._messages.append({"role": "user", "content": f"[Human steering] {text}"})
 
+    def maybe_compact(self, compactor: Compactor) -> CompactionResult:
+        """One big cut when over the trigger, never a per-step nibble."""
+        result = compactor.compact(self._messages, self.pinned)
+        if result.applied:
+            self.compactions += 1
+        return result
+
     def __len__(self) -> int:
         return len(self._messages)
 
@@ -94,51 +124,130 @@ class AgentContext:
 class ContextBuilder:
     """Builds the opening messages for one (task, role) pair."""
 
-    def __init__(self, memory=None):
-        self.memory = memory       # optional MemoryStore; wired in v0.4
+    def __init__(
+        self,
+        policy: ContextPolicy | None = None,
+        budget: TokenBudget | None = None,
+        memory=None,
+        board=None,
+    ):
+        self.policy = policy or ContextPolicy()
+        self.budget = budget or TokenBudget()
+        self.memory = memory       # MemoryStore, used by the runner, not here
+        self.board = board         # ConclusionBoard, same
 
     def build(
         self,
         node: TaskNode,
         role: RoleSpec,
         dep_reports: list[dict] | None = None,
-        memory_snippets: list[str] | None = None,
+        memory_hits: list[MemoryRecord] | None = None,
+        board_notes: list[str] | None = None,
     ) -> AgentContext:
-        system = SYSTEM_TEMPLATE.format(
-            title=role.title, name=role.name, description=role.description
+        deps = dep_reports or []
+        lessons = [record.lesson for record in (memory_hits or [])]
+        notes = list(board_notes or [])
+
+        dep_limit = len(deps)
+        lesson_limit = len(lessons)
+        goal_limit: int | None = None
+        system, brief = self._render(
+            node, role, deps, lessons, notes, dep_limit, lesson_limit, goal_limit
         )
-        if memory_snippets:
-            system += "\n## Lessons from previous runs\n" + "\n".join(
-                f"- {s}" for s in memory_snippets
+
+        for kind, value in self._ladder():
+            if self._fits(system, brief):
+                break
+            if kind == "deps":
+                dep_limit = min(dep_limit, value)
+            elif kind == "lessons":
+                lesson_limit = min(lesson_limit, value)
+            else:
+                goal_limit = value
+            system, brief = self._render(
+                node, role, deps, lessons, notes, dep_limit, lesson_limit, goal_limit
             )
-
-        acceptance = (
-            "\n".join(f"- [{a.kind}] {a.target}" for a in node.acceptance)
-            if node.acceptance
-            else "- (none declared — your own summary is the only check)"
-        )
-
-        deps = self._render_deps(dep_reports or [])
-        brief = BRIEF_TEMPLATE.format(goal=node.goal, acceptance=acceptance, deps=deps)
 
         return AgentContext(
             [
                 {"role": "system", "content": system},
                 {"role": "user", "content": brief},
-            ]
+            ],
+            pinned=2,
+            memory_ids=[record.id for record in (memory_hits or [])],
         )
 
+    # -- internals -------------------------------------------------------
     @staticmethod
-    def _render_deps(dep_reports: list[dict]) -> str:
-        if not dep_reports:
-            return "(this task has no upstream dependencies)"
+    def _ladder():
+        """Reduction order: upstream reports first, then lessons, then the goal."""
+        return [
+            ("deps", 3),
+            ("lessons", 3),
+            ("deps", 1),
+            ("lessons", 1),
+            ("deps", 0),
+            ("lessons", 0),
+            ("goal", 200),
+        ]
+
+    def _fits(self, system: str, brief: str) -> bool:
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": brief}]
+        return self.budget.estimate(messages) <= self.policy.opening_budget_tokens
+
+    def _render(
+        self,
+        node: TaskNode,
+        role: RoleSpec,
+        deps: list[dict],
+        lessons: list[str],
+        notes: list[str],
+        dep_limit: int,
+        lesson_limit: int,
+        goal_limit: int | None,
+    ) -> tuple[str, str]:
+        system = SYSTEM_TEMPLATE.format(
+            title=role.title, name=role.name, description=role.description
+        )
+        if lesson_limit and lessons:
+            system += LESSONS_HEADER + "\n".join(f"- {s}" for s in lessons[:lesson_limit])
+        if notes:
+            system += BOARD_HEADER + "\n".join(f"- {s}" for s in notes)
+
+        acceptance = (
+            "\n".join(f"- [{item.kind}] {item.target}" for item in node.acceptance)
+            if node.acceptance
+            else "- (none declared — your own summary is the only check)"
+        )
+        goal = node.goal if goal_limit is None else node.goal[:goal_limit]
+
+        brief = BRIEF_TEMPLATE.format(
+            goal=goal,
+            acceptance=acceptance,
+            deps=self._render_deps(deps[:dep_limit]),
+        )
+        return system, brief
+
+    @staticmethod
+    def _render_deps(deps: list[dict]) -> str:
+        if not deps:
+            return NO_DEPS
+
         blocks = []
-        for r in dep_reports:
-            files = ", ".join(r.get("artifacts") or []) or "(none)"
+        for dep in deps:
+            status = dep.get("status")
+            files = ", ".join(dep.get("artifacts") or []) or "(none)"
+
+            if status == "DEAD":
+                reason = (dep.get("error") or "unknown")[:MAX_REASON_CHARS]
+                blocks.append(f"### {dep['id']} — {dep['role']} — FAILED\nreason: {reason}")
+                continue
+
+            report = (dep.get("result") or "(no report)")[:MAX_REPORT_CHARS]
             blocks.append(
-                f"### {r['id']} — {r['role']} — {r['status']}\n"
-                f"goal: {r['goal']}\n"
+                f"### {dep['id']} — {dep['role']} — {status}\n"
+                f"goal: {dep['goal']}\n"
                 f"files: {files}\n"
-                f"report: {r.get('result') or '(no report)'}"
+                f"report: {report}"
             )
         return "\n\n".join(blocks)
