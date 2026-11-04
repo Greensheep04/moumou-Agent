@@ -1,6 +1,6 @@
 """P1 filesystem behavior: boundaries, complete operations and bounded output."""
+
 import json
-from pathlib import Path
 
 import pytest
 
@@ -46,14 +46,10 @@ async def test_append_list_search_and_delete_directory(tools, ctx):
 async def test_patch_requires_unique_old_text(tools, ctx):
     assert "apply_patch" in tools
     (ctx.workspace / "a.txt").write_text("old old", encoding="utf-8")
-    ambiguous = await tools["apply_patch"].run(
-        {"path": "a.txt", "old": "old", "new": "new"}, ctx
-    )
+    ambiguous = await tools["apply_patch"].run({"path": "a.txt", "old": "old", "new": "new"}, ctx)
     assert not ambiguous.ok
     assert (ctx.workspace / "a.txt").read_text(encoding="utf-8") == "old old"
-    patched = await tools["apply_patch"].run(
-        {"path": "a.txt", "old": "old old", "new": "new"}, ctx
-    )
+    patched = await tools["apply_patch"].run({"path": "a.txt", "old": "old old", "new": "new"}, ctx)
     assert patched.ok and patched.artifacts == ["a.txt"]
 
 
@@ -75,16 +71,17 @@ async def test_protected_paths_cannot_be_deleted(tools, ctx, path):
 
 
 async def test_link_to_other_workspace_is_rejected(tools, ctx, tmp_path):
-    import subprocess
     import os
+    import subprocess
 
     outside = tmp_path.parent / (tmp_path.name + "-private")
     outside.mkdir()
     (outside / "secret.txt").write_text("private", encoding="utf-8")
     link = ctx.workspace / "link"
     if os.name == "nt":
-        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(outside)], check=True,
-                       capture_output=True)
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(outside)], check=True, capture_output=True
+        )
     else:
         link.symlink_to(outside, target_is_directory=True)
     try:
@@ -96,4 +93,3 @@ async def test_link_to_other_workspace_is_rejected(tools, ctx, tmp_path):
             os.rmdir(link)
         else:
             link.unlink()
-

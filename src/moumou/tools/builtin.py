@@ -10,17 +10,22 @@ Two rules every tool here follows, because the contract tests enforce them:
 
 from __future__ import annotations
 
-import asyncio
-import shlex
 from pathlib import Path
 
 from moumou.contracts import RoleRevisionDraft, TaskResult, ToolContext, ToolResult
 from moumou.contracts.plan import Plan
-from moumou.tools.registry import flatten_schema
 from moumou.sandbox.local import LocalJail
+from moumou.sandbox.process import run_process as run_process
+from moumou.tools.execution import RunPythonTool, ShellTool
 from moumou.tools.filesystem import (
-    ReadFileTool, WriteFileTool, DeleteFileTool, ListFilesTool, SearchFilesTool, ApplyPatchTool,
+    ApplyPatchTool,
+    DeleteFileTool,
+    ListFilesTool,
+    ReadFileTool,
+    SearchFilesTool,
+    WriteFileTool,
 )
+from moumou.tools.registry import flatten_schema
 
 MAX_OUTPUT = 8 * 1024
 
@@ -28,44 +33,6 @@ MAX_OUTPUT = 8 * 1024
 def resolve_in(workspace: Path, rel: str) -> Path:
     """Resolve ``rel`` inside ``workspace`` or raise PermissionError."""
     return LocalJail(workspace).resolve(rel)
-
-
-def _clip(text: str) -> tuple[str, bool]:
-    if len(text) > MAX_OUTPUT:
-        return text[:MAX_OUTPUT] + "\n[truncated]", True
-    return text, False
-
-
-async def run_process(cmd: str, cwd: Path, timeout: float) -> ToolResult:
-    proc = await asyncio.create_subprocess_shell(
-        cmd,
-        cwd=str(cwd),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except TimeoutError:
-        proc.kill()
-        await proc.wait()
-        return ToolResult(ok=False, error=f"timeout after {timeout}s")
-    except asyncio.CancelledError:
-        # Ctrl-C during a run, or an abort: the child must not outlive us.
-        proc.kill()
-        await proc.wait()
-        raise
-
-    stdout, t1 = _clip(out.decode("utf-8", "replace"))
-    stderr, t2 = _clip(err.decode("utf-8", "replace"))
-    code = proc.returncode or 0
-    return ToolResult(
-        ok=code == 0,
-        stdout=stdout,
-        stderr=stderr,
-        exit_code=code,
-        error=None if code == 0 else f"exit code {code}",
-        truncated=t1 or t2,
-    )
 
 
 class EchoTool:
@@ -81,57 +48,6 @@ class EchoTool:
 
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
         return ToolResult(ok=True, stdout=str(args.get("text", "")))
-
-
-class ShellTool:
-    name = "shell"
-    description = "Run a shell command in the workspace. Requires human approval."
-    action_class = "shell"
-    timeout_s = 120.0
-    params_schema = {
-        "type": "object",
-        "properties": {
-            "command": {"type": "string"},
-            "timeout_s": {"type": "number", "default": 60},
-        },
-        "required": ["command"],
-    }
-
-    async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
-        command = args.get("command")
-        if not isinstance(command, str) or not command.strip():
-            return ToolResult(ok=False, error="`command` must be a non-empty string")
-        try:
-            timeout = float(args.get("timeout_s", 60))
-        except (TypeError, ValueError):
-            timeout = 60.0
-        return await run_process(command, ctx.workspace, timeout)
-
-
-class RunPythonTool:
-    name = "run_python"
-    description = "Run a Python file in the workspace and return its output."
-    action_class = "shell"
-    timeout_s = 120.0
-    params_schema = {
-        "type": "object",
-        "properties": {"path": {"type": "string"}, "args": {"type": "string", "default": ""}},
-        "required": ["path"],
-    }
-
-    async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
-        rel = args.get("path")
-        if not isinstance(rel, str) or not rel:
-            return ToolResult(ok=False, error="`path` must be a non-empty string")
-        try:
-            p = resolve_in(ctx.workspace, rel)
-        except PermissionError as e:
-            return ToolResult(ok=False, error=str(e))
-        if not p.is_file():
-            return ToolResult(ok=False, error=f"no such file: {rel}")
-        extra = str(args.get("args", ""))
-        cmd = f"python3 {shlex.quote(str(p))} {extra}".strip()
-        return await run_process(cmd, ctx.workspace, self.timeout_s)
 
 
 class AskHumanTool:

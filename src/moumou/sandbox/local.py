@@ -1,4 +1,5 @@
 """Application-level path checks, not an OS sandbox."""
+
 from pathlib import Path, PureWindowsPath
 
 
@@ -24,4 +25,3 @@ class LocalJail:
 
     def relative(self, path: Path) -> str:
         return path.relative_to(self.root).as_posix()
-

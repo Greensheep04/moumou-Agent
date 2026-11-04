@@ -1,4 +1,5 @@
 """Workspace-scoped UTF-8 file tools."""
+
 import asyncio
 import os
 import shutil
@@ -51,8 +52,12 @@ class WriteFileTool(FileTool):
     description = "Create, overwrite or append a UTF-8 file in the workspace."
     action_class = "fs_write"
     params_schema = _schema(
-        {"path": PATH, "content": TEXT,
-         "mode": {"type": "string", "enum": ["overwrite", "append"]}}, ["path", "content"]
+        {
+            "path": PATH,
+            "content": TEXT,
+            "mode": {"type": "string", "enum": ["overwrite", "append"]},
+        },
+        ["path", "content"],
     )
 
     def execute(self, args, jail):
@@ -83,7 +88,10 @@ def _walk(jail, path):
                 if not child.is_symlink() and not os.path.islink(os.path.join(root, name)):
                     # Junctions may resolve to another directory inside this jail;
                     # do not descend into reparse points either.
-                    if not getattr(os.lstat(os.path.join(root, name)), "st_file_attributes", 0) & 1024:
+                    if (
+                        not getattr(os.lstat(os.path.join(root, name)), "st_file_attributes", 0)
+                        & 1024
+                    ):
                         safe.append(name)
             except (OSError, ValueError):
                 continue
@@ -126,8 +134,12 @@ class SearchFilesTool(FileTool):
                 with path.open(encoding="utf-8", errors="replace") as stream:
                     for line, text in enumerate(stream, 1):
                         if query in text:
-                            yield {"path": jail.relative(path), "line": line,
-                                   "text": text.rstrip("\r\n")}
+                            yield {
+                                "path": jail.relative(path),
+                                "line": line,
+                                "text": text.rstrip("\r\n"),
+                            }
+
         output, truncated = json_output(matches())
         return ToolResult(ok=True, stdout=output, truncated=truncated)
 
@@ -182,4 +194,3 @@ class ApplyPatchTool(FileTool):
         with path.open("w", encoding="utf-8", newline="") as stream:
             stream.write(text.replace(old, new, 1))
         return ToolResult(ok=True, artifacts=[jail.relative(path)], stdout="patched")
-

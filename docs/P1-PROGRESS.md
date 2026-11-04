@@ -12,3 +12,4 @@ Pre-flight: filesystem tools consume LocalJail; process tools consume bounded ou
 Pending external validation: P0 acceptance of local isolation and synchronous workspace semantics, P3 test-set integration, real GitHub push and real search credentials.
 Stage 0: baseline 138 passed / 4 failed (Windows python3 assumptions); logs runs/p1-verification/baseline.txt.
 Stage 1: filesystem RED 6 failed / 2 passed, GREEN 18 passed (2 process tests excluded); ordinary file behavior and junction escape covered. Original 4 baseline failures remain for stage 2.
+Stage 2: process RED 5 failed / 3 passed; GREEN process+contract 22 passed. Whole suite 160 passed after separating P1 tool limit (110s) from P0 acceptance timeout (unbounded finite positive). Windows Job Objects and POSIX process groups clean descendants. Python3-prefix compatibility keeps existing P0 acceptance code unchanged.

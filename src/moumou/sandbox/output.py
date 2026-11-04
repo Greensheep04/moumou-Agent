@@ -1,4 +1,5 @@
 """Bounded UTF-8 output helpers."""
+
 import json
 
 MAX_OUTPUT = 8192
@@ -22,4 +23,3 @@ def json_output(items) -> tuple[str, bool]:
         kept.append(item)
         used += size
     return json.dumps(kept, ensure_ascii=False), False
-
