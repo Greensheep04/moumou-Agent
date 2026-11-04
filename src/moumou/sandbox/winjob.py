@@ -72,7 +72,47 @@ class Job:
             self.close()
             raise
 
+    def resume(self, pid):
+        """Resume the primary thread only after the suspended process owns a Job."""
+        self.kernel.CreateToolhelp32Snapshot.restype = w.HANDLE
+        self.kernel.OpenThread.restype = w.HANDLE
+        self.kernel.ResumeThread.restype = w.DWORD
+        snapshot = self.kernel.CreateToolhelp32Snapshot(0x00000004, 0)  # TH32CS_SNAPTHREAD
+        if snapshot == w.HANDLE(-1).value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            entry = _ThreadEntry()
+            entry.dwSize = ctypes.sizeof(entry)
+            valid = self.kernel.Thread32First(w.HANDLE(snapshot), ctypes.byref(entry))
+            while valid:
+                if entry.th32OwnerProcessID == pid:
+                    thread = self.kernel.OpenThread(0x0002, False, entry.th32ThreadID)
+                    if not thread:
+                        raise ctypes.WinError(ctypes.get_last_error())
+                    try:
+                        if self.kernel.ResumeThread(w.HANDLE(thread)) == 0xFFFFFFFF:
+                            raise ctypes.WinError(ctypes.get_last_error())
+                        return
+                    finally:
+                        self.kernel.CloseHandle(w.HANDLE(thread))
+                valid = self.kernel.Thread32Next(w.HANDLE(snapshot), ctypes.byref(entry))
+            raise OSError("suspended process primary thread not found")
+        finally:
+            self.kernel.CloseHandle(w.HANDLE(snapshot))
+
     def close(self):
         if self.handle:
             self.kernel.CloseHandle(w.HANDLE(self.handle))
             self.handle = None
+
+
+class _ThreadEntry(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", w.DWORD),
+        ("cntUsage", w.DWORD),
+        ("th32ThreadID", w.DWORD),
+        ("th32OwnerProcessID", w.DWORD),
+        ("tpBasePri", w.LONG),
+        ("tpDeltaPri", w.LONG),
+        ("dwFlags", w.DWORD),
+    ]

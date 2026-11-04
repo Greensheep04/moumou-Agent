@@ -113,3 +113,69 @@ def test_seed_repository_and_safe_release(tmp_path):
     ws.release(path)
     assert not path.exists()
     assert ws.allocate("p", "c", "a").exists()
+
+
+def test_dependency_edit_and_delete_use_imported_file_baseline(tmp_path):
+    ws = provider(tmp_path)
+    a, b, parent = [ws.allocate("p", "c", n) for n in ("a", "b", "parent")]
+    (a / "x.txt").write_text("first")
+    assert ws.integrate(a, parent, ["x.txt"]).ok
+    assert ws.integrate(a, b, ["x.txt"]).ok
+    (b / "x.txt").write_text("revised")
+    revised = ws.integrate(b, parent, ["x.txt"])
+    assert revised.ok, revised
+    assert (parent / "x.txt").read_text() == "revised"
+    (b / "x.txt").unlink()
+    deleted = ws.integrate(b, parent, ["x.txt"])
+    assert deleted.ok, deleted
+    assert not (parent / "x.txt").exists()
+
+
+def test_dependency_subset_and_committed_changes_keep_provenance(tmp_path):
+    ws = provider(tmp_path)
+    a, b, parent = [ws.allocate("p", "c", n) for n in ("a", "b", "parent")]
+    (a / "x.txt").write_text("first")
+    (a / "extra.txt").write_text("extra")
+    assert ws.integrate(a, parent, ["x.txt", "extra.txt"]).ok
+    assert ws.integrate(a, b, ["x.txt"]).ok
+    (b / "x.txt").write_text("revised")
+    (b / "private.txt").write_text("private")
+    ws.git(b, "add", ".")
+    ws.git(b, "commit", "-m", "commit own work")
+    result = ws.integrate(b, parent, ["x.txt"])
+    assert result.ok, result
+    assert (parent / "x.txt").read_text() == "revised"
+    assert (parent / "extra.txt").read_text() == "extra"
+    assert not (parent / "private.txt").exists()
+
+
+def test_newly_selected_path_uses_its_own_imported_baseline(tmp_path):
+    ws = provider(tmp_path)
+    a, b, parent = [ws.allocate("p", "c", n) for n in ("a", "b", "parent")]
+    (b / "own.txt").write_text("own")
+    assert ws.integrate(b, parent, ["own.txt"]).ok
+    ws.git(b, "add", "own.txt")
+    ws.git(b, "commit", "-m", "own work before receiving dependency")
+    (a / "later.txt").write_text("first")
+    assert ws.integrate(a, b, ["later.txt"]).ok
+    assert ws.integrate(a, parent, ["later.txt"]).ok
+    (b / "later.txt").write_text("revised")
+    assert ws.integrate(b, parent, ["later.txt"]).ok
+    assert (parent / "later.txt").read_text() == "revised"
+
+
+def test_import_does_not_hide_preexisting_committed_own_work(tmp_path):
+    ws = provider(tmp_path)
+    seed, a, b, parent = [ws.allocate("p", "c", n) for n in ("seed", "a", "b", "parent")]
+    (seed / "x.txt").write_text("first\nmiddle\nlast\n")
+    for dst in (a, b, parent):
+        assert ws.integrate(seed, dst, ["x.txt"]).ok
+    (b / "x.txt").write_text("FIRST\nmiddle\nlast\n")
+    ws.git(b, "add", "x.txt")
+    ws.git(b, "commit", "-m", "own edit")
+    (a / "x.txt").write_text("first\nmiddle\nLAST\n")
+    assert ws.integrate(a, b, ["x.txt"]).ok
+    assert ws.integrate(a, parent, ["x.txt"]).ok
+    result = ws.integrate(b, parent, ["x.txt"])
+    assert result.ok, result
+    assert (parent / "x.txt").read_text() == "FIRST\nmiddle\nLAST\n"

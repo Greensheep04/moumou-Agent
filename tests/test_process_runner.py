@@ -121,3 +121,48 @@ async def test_timeout_or_cancel_cleans_descendant_tree(tools, ctx, cancel):
                 await task
             except asyncio.CancelledError:
                 pass
+
+
+async def test_completed_parent_cleans_background_child_before_stream_eof(tools, ctx):
+    script = (
+        "import subprocess,sys;"
+        "subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)']);"
+        "print('parent completed',flush=True)"
+    )
+    result = await tools["shell"].run(
+        {"command": command([sys.executable, "-c", script]), "timeout_s": 2}, ctx
+    )
+    assert result.ok, result
+    assert result.stdout.strip() == "parent completed"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows suspended launch containment")
+async def test_windows_process_cannot_run_before_job_attachment(ctx, monkeypatch):
+    import time
+
+    from moumou.sandbox import winjob
+    from moumou.sandbox.process import run_command
+
+    marker = ctx.workspace / "started.txt"
+    original = winjob.Job
+
+    class DelayedJob:
+        def __init__(self, pid):
+            time.sleep(0.3)
+            assert not marker.exists(), "process ran before assignment to its Job"
+            self.inner = original(pid)
+
+        def resume(self, pid):
+            self.inner.resume(pid)
+
+        def close(self):
+            self.inner.close()
+
+    monkeypatch.setattr(winjob, "Job", DelayedJob)
+    result = await run_command(
+        [sys.executable, "-c", "open('started.txt','w').write('started')"],
+        ctx.workspace,
+        2,
+    )
+    assert result.ok, result
+    assert marker.read_text() == "started"

@@ -1,10 +1,12 @@
 """Structured local Git operations; remote writes use a separate approval class."""
 
+import asyncio
 import re
 
 from moumou.contracts import ToolResult
 from moumou.sandbox.local import LocalJail
 from moumou.sandbox.process import run_command
+from moumou.tools.execution import snapshot
 from moumou.workspace.git import git_args
 
 
@@ -67,10 +69,15 @@ class GitTool:
                 cmd = ["merge", "--no-edit", "--no-gpg-sign", ref_name(args.get("branch"))]
             else:
                 raise ValueError("unsupported Git operation")
-            result = await run_command(git_args(jail.root, *cmd), jail.root, 30, ctx.env)
-            if result.ok and op in ("merge", "commit"):
-                # File tools and execution tools already report concrete modifications.
-                result.artifacts = []
+            before = await asyncio.to_thread(snapshot, jail) if op == "merge" else {}
+            result = await run_command(
+                git_args(jail.root, *cmd), jail.root, 30, ctx.env, strip_git_env=True
+            )
+            if op == "merge":
+                after = await asyncio.to_thread(snapshot, jail)
+                result.artifacts = sorted(
+                    k for k in before.keys() | after.keys() if before.get(k) != after.get(k)
+                )
             return result
         except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError) as exc:
             return ToolResult(ok=False, error=str(exc)[:1024])
@@ -107,6 +114,7 @@ class GitPushTool:
                 jail.root,
                 60,
                 {**ctx.env, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"},
+                strip_git_env=True,
             )
             for field in ("stdout", "stderr", "error"):
                 text = getattr(result, field)

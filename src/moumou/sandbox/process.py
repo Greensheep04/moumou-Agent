@@ -22,10 +22,14 @@ def timeout_value(value):
     return value
 
 
-async def run_command(command, cwd: Path, timeout=60.0, env=None):
+async def run_command(command, cwd: Path, timeout=60.0, env=None, *, strip_git_env=False):
     timeout = timeout_value(timeout)
     child_env = dict(os.environ)
     child_env.update(env or {})
+    if strip_git_env:
+        child_env = {k: v for k, v in child_env.items() if not k.upper().startswith("GIT_")}
+        child_env["GIT_TERMINAL_PROMPT"] = "0"
+        child_env["GCM_INTERACTIVE"] = "never"
     child_env.setdefault("PYTHONIOENCODING", "utf-8")
     # Existing P0 acceptance checks use python3. Keep that alias tied to the
     # active project environment without rewriting general shell expressions.
@@ -43,7 +47,7 @@ async def run_command(command, cwd: Path, timeout=60.0, env=None):
         "stderr": asyncio.subprocess.PIPE,
     }
     if os.name == "nt":
-        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000004  # suspended
     else:
         kwargs["start_new_session"] = True
     proc = None
@@ -88,8 +92,15 @@ async def run_command(command, cwd: Path, timeout=60.0, env=None):
             job = Job(proc.pid)
         readers = [asyncio.create_task(drain(proc.stdout)), asyncio.create_task(drain(proc.stderr))]
 
+        if job:
+            job.resume(proc.pid)
+
         async def collect():
-            await proc.wait()
+            # asyncio Process.wait() can itself await inherited pipe EOF.
+            # returncode is set by the child watcher independently of pipe EOF.
+            while proc.returncode is None:
+                await asyncio.sleep(0.01)
+            await cleanup()
             return await asyncio.gather(*readers)
 
         out, err = await asyncio.wait_for(collect(), timeout)

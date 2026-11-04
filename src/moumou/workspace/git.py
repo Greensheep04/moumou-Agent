@@ -30,7 +30,7 @@ def git_args(path, *args):
     ]
 
 
-def run_git(path, *args, data=None, env=None, check=True):
+def run_git(path, *args, data=None, env=None, check=True, binary_output=False):
     child_env = dict(os.environ)
     # Never inherit index/worktree redirections from an enclosing Git command.
     for key in list(child_env):
@@ -44,7 +44,8 @@ def run_git(path, *args, data=None, env=None, check=True):
         env=child_env,
         timeout=30,
     )
-    result.stdout = result.stdout.decode("utf-8", "replace")
+    if not binary_output:
+        result.stdout = result.stdout.decode("utf-8", "replace")
     result.stderr = result.stderr.decode("utf-8", "replace")
     if check and result.returncode:
         raise ValueError(result.stderr.strip()[:1024] or "git command failed")
@@ -149,6 +150,29 @@ class GitWorkspaces:
             ) as exc:
                 return IntegrateResult(ok=False, error=str(exc)[:1024])
 
+    def _ref(self, path, name, fallback):
+        result = self.git(path, "rev-parse", "--verify", name, check=False)
+        return result.stdout.strip() if result.returncode == 0 else fallback
+
+    def _input_ref(self, path):
+        return "refs/p1/inputs/" + identity(str(path))
+
+    def _tree(self, repo, base, entries):
+        index = self.root / (".index-" + uuid.uuid4().hex)
+        env = {"GIT_INDEX_FILE": str(index)}
+        try:
+            self.git(repo, "read-tree", base, env=env)
+            for rel, blob in entries.items():
+                if blob is None:
+                    self.git(repo, "update-index", "--force-remove", "--", rel, env=env)
+                else:
+                    mode, oid = blob
+                    self.git(repo, "update-index", "--add", "--cacheinfo", mode, oid, rel, env=env)
+            return self.git(repo, "write-tree", env=env).stdout.strip()
+        finally:
+            index.unlink(missing_ok=True)
+            Path(str(index) + ".lock").unlink(missing_ok=True)
+
     def _integrate(self, src, dst, artifacts):
         src, dst = self._managed(src), self._managed(dst)
         src_common = self.git(
@@ -173,54 +197,113 @@ class GitWorkspaces:
             dest_jail.resolve(normalized, mutable=True)
             if path.is_dir():
                 raise ValueError("artifacts must name files, not directories")
-            entries[normalized] = path
+            if path.is_file():
+                oid = self.git(
+                    src, "hash-object", "-w", "--no-filters", "--", str(path)
+                ).stdout.strip()
+                mode = "100755" if os.name != "nt" and os.access(path, os.X_OK) else "100644"
+                entries[normalized] = (mode, oid)
+            else:
+                entries[normalized] = None
         if self.git(dst, "status", "--porcelain").stdout.strip():
             raise ValueError("destination workspace is dirty; commit or resolve changes first")
         if self.git(dst, "rev-parse", "--verify", "MERGE_HEAD", check=False).returncode == 0:
             raise ValueError("destination already has an unfinished merge")
 
-        delivery_ref = "refs/p1/deliveries/" + identity(str(src), str(dst))
-        previous = self.git(src, "rev-parse", "--verify", delivery_ref, check=False)
-        base = (
-            previous.stdout.strip()
-            if previous.returncode == 0
-            else self.git(src, "rev-parse", "refs/p1/baseline").stdout.strip()
-        )
+        baseline = self.git(src, "rev-parse", "refs/p1/baseline").stdout.strip()
+        source_input = self._ref(src, self._input_ref(src), baseline)
+        target_input = self._ref(dst, self._input_ref(dst), baseline)
+        delivery_tree = self._tree(src, source_input, entries)
+        delivery = self.git(
+            src,
+            "commit-tree",
+            delivery_tree,
+            "-p",
+            source_input,
+            data=b"P1 declared artifact delivery\n",
+        ).stdout.strip()
+        old_head = self.git(dst, "rev-parse", "HEAD").stdout.strip()
         index = self.root / (".index-" + uuid.uuid4().hex)
         env = {"GIT_INDEX_FILE": str(index)}
+        refs = {}
         try:
-            self.git(src, "read-tree", base, env=env)
-            for rel, path in entries.items():
-                if path.is_file():
-                    oid = self.git(
-                        src, "hash-object", "-w", "--stdin", data=path.read_bytes()
-                    ).stdout.strip()
-                    mode = "100755" if os.name != "nt" and os.access(path, os.X_OK) else "100644"
-                    self.git(src, "update-index", "--add", "--cacheinfo", mode, oid, rel, env=env)
-                else:
-                    self.git(src, "update-index", "--force-remove", "--", rel, env=env)
-            tree = self.git(src, "write-tree", env=env).stdout.strip()
-            old_tree = self.git(src, "rev-parse", base + "^{tree}").stdout.strip()
-            if tree == old_tree:
-                return IntegrateResult(ok=True, copied=list(entries))
-            commit = self.git(
-                src, "commit-tree", tree, "-p", base, data=b"P1 declared artifact delivery\n"
-            ).stdout.strip()
+            self.git(dst, "read-tree", old_head, env=env)
+            for rel in entries:
+                pair_ref = "refs/p1/delivered/" + identity(str(src), str(dst), rel)
+                base = self._ref(src, pair_ref, source_input)
+                patch = self.git(
+                    src,
+                    "--literal-pathspecs",
+                    "diff",
+                    "--binary",
+                    "--full-index",
+                    "--no-renames",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    base,
+                    delivery,
+                    "--",
+                    rel,
+                    binary_output=True,
+                ).stdout
+                if patch:
+                    applied = self.git(
+                        dst,
+                        "apply",
+                        "--cached",
+                        "--3way",
+                        "--whitespace=nowarn",
+                        "-",
+                        data=patch,
+                        env=env,
+                        check=False,
+                    )
+                    if applied.returncode:
+                        conflicts = self.git(
+                            dst, "diff", "--name-only", "--diff-filter=U", "-z", env=env
+                        ).stdout
+                        paths = sorted(filter(None, conflicts.split("\0"))) or [rel]
+                        # All conflict stages live only in the disposable index.
+                        return IntegrateResult(ok=False, conflicts=paths, error="merge_conflict")
+                refs[pair_ref] = delivery
+            merged_tree = self.git(dst, "write-tree", env=env).stdout.strip()
         finally:
             index.unlink(missing_ok=True)
             Path(str(index) + ".lock").unlink(missing_ok=True)
 
-        merged = self.git(
-            dst, "merge", "--no-ff", "--no-edit", "--no-gpg-sign", commit, check=False
-        )
-        if merged.returncode:
-            conflicts = self.git(dst, "diff", "--name-only", "--diff-filter=U", "-z").stdout
-            paths = sorted(filter(None, conflicts.split("\0")))
-            aborted = self.git(dst, "merge", "--abort", check=False)
-            if aborted.returncode and paths:
-                raise ValueError("merge failed and rollback failed; manual recovery required")
-            return IntegrateResult(
-                ok=False, conflicts=paths, error="merge_conflict" if paths else merged.stderr[:1024]
-            )
-        self.git(src, "update-ref", delivery_ref, commit)
+        input_tree = self._tree(dst, target_input, entries)
+        input_commit = self.git(
+            dst,
+            "commit-tree",
+            input_tree,
+            "-p",
+            target_input,
+            data=b"P1 imported artifact baseline\n",
+        ).stdout.strip()
+        refs[self._input_ref(dst)] = input_commit
+        old_tree = self.git(dst, "rev-parse", old_head + "^{tree}").stdout.strip()
+        new_head = old_head
+        if merged_tree != old_tree:
+            new_head = self.git(
+                dst,
+                "commit-tree",
+                merged_tree,
+                "-p",
+                old_head,
+                "-p",
+                delivery,
+                data=b"Merge P1 declared artifacts\n",
+            ).stdout.strip()
+            # Destination cleanliness was checked above. Materialize the already
+            # verified index tree; do not run merge drivers in the real index.
+            self.git(dst, "read-tree", "--reset", "-u", new_head)
+        commands = [f"update {name} {value}" for name, value in refs.items()]
+        if new_head != old_head:
+            commands.append(f"update HEAD {new_head} {old_head}")
+        try:
+            self.git(dst, "update-ref", "--stdin", data=("\n".join(commands) + "\n").encode())
+        except (OSError, ValueError, subprocess.SubprocessError):
+            if new_head != old_head:
+                self.git(dst, "read-tree", "--reset", "-u", old_head)
+            raise
         return IntegrateResult(ok=True, copied=list(entries))
