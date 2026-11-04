@@ -1,0 +1,14 @@
+# P1 execution ledger
+Plan: docs/plans/2026-11-04-p1-execution-and-tools.md
+Base: e3b9e7a4c1ab7f486cb16ca7704e957cdc4f1cc9
+Branch: feat/p1-sandbox
+
+Ruling: Use the dedicated fresh clone on a feature branch as the isolated development checkout; an extra managed worktree would relocate code away from the user's D:\Projects convention.
+Ruling: Keep contracts and P0 orchestration unchanged. Implement synchronous bounded workspace operations to satisfy the existing port; blocking Git latency remains documented.
+Ruling: LocalJail is application-level validation only, shell/Python are trusted approved code execution. Docker remains optional; arbitrary-code OS isolation is not claimed.
+Ruling: Integration snapshots declared artifacts including deletions into a delivery commit based on a common baseline; no undeclared branch content is merged. Conflicts roll back the destination and are returned as relative paths. Git metadata operations are trusted provider internals.
+Ruling: Preserve Windows and POSIX execution support; adapt only test command construction and PID checks where the existing tests assume POSIX. Do not weaken assertions.
+Pre-flight: filesystem tools consume LocalJail; process tools consume bounded output helpers; Git tools consume process runner; workspace integration consumes LocalJail and shared Git helpers; default_tools preserves marker tools.
+Pending external validation: P0 acceptance of local isolation and synchronous workspace semantics, P3 test-set integration, real GitHub push and real search credentials.
+Stage 0: baseline 138 passed / 4 failed (Windows python3 assumptions); logs runs/p1-verification/baseline.txt.
+Stage 1: filesystem RED 6 failed / 2 passed, GREEN 18 passed (2 process tests excluded); ordinary file behavior and junction escape covered. Original 4 baseline failures remain for stage 2.

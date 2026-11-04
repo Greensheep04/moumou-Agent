@@ -17,17 +17,17 @@ from pathlib import Path
 from moumou.contracts import RoleRevisionDraft, TaskResult, ToolContext, ToolResult
 from moumou.contracts.plan import Plan
 from moumou.tools.registry import flatten_schema
+from moumou.sandbox.local import LocalJail
+from moumou.tools.filesystem import (
+    ReadFileTool, WriteFileTool, DeleteFileTool, ListFilesTool, SearchFilesTool, ApplyPatchTool,
+)
 
 MAX_OUTPUT = 8 * 1024
 
 
 def resolve_in(workspace: Path, rel: str) -> Path:
     """Resolve ``rel`` inside ``workspace`` or raise PermissionError."""
-    ws = Path(workspace).resolve()
-    candidate = (ws / rel).resolve()
-    if not candidate.is_relative_to(ws):
-        raise PermissionError(f"path escapes workspace: {rel}")
-    return candidate
+    return LocalJail(workspace).resolve(rel)
 
 
 def _clip(text: str) -> tuple[str, bool]:
@@ -81,85 +81,6 @@ class EchoTool:
 
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
         return ToolResult(ok=True, stdout=str(args.get("text", "")))
-
-
-class ReadFileTool:
-    name = "read_file"
-    description = "Read a UTF-8 text file from the workspace."
-    action_class = "fs_read"
-    timeout_s = 10.0
-    params_schema = {
-        "type": "object",
-        "properties": {"path": {"type": "string", "description": "path relative to workspace"}},
-        "required": ["path"],
-    }
-
-    async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
-        rel = args.get("path")
-        if not isinstance(rel, str) or not rel:
-            return ToolResult(ok=False, error="`path` must be a non-empty string")
-        try:
-            p = resolve_in(ctx.workspace, rel)
-        except PermissionError as e:
-            return ToolResult(ok=False, error=str(e))
-        if not p.is_file():
-            return ToolResult(ok=False, error=f"no such file: {rel}")
-        text, truncated = _clip(p.read_text(encoding="utf-8", errors="replace"))
-        return ToolResult(ok=True, stdout=text, truncated=truncated)
-
-
-class WriteFileTool:
-    name = "write_file"
-    description = "Create or overwrite a UTF-8 text file inside the workspace."
-    action_class = "fs_write"
-    timeout_s = 10.0
-    params_schema = {
-        "type": "object",
-        "properties": {
-            "path": {"type": "string"},
-            "content": {"type": "string"},
-        },
-        "required": ["path", "content"],
-    }
-
-    async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
-        rel, content = args.get("path"), args.get("content")
-        if not isinstance(rel, str) or not rel:
-            return ToolResult(ok=False, error="`path` must be a non-empty string")
-        if not isinstance(content, str):
-            return ToolResult(ok=False, error="`content` must be a string")
-        try:
-            p = resolve_in(ctx.workspace, rel)
-        except PermissionError as e:
-            return ToolResult(ok=False, error=str(e))
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content, encoding="utf-8")
-        return ToolResult(ok=True, stdout=f"wrote {len(content)} bytes", artifacts=[rel])
-
-
-class DeleteFileTool:
-    name = "delete_file"
-    description = "Delete a file inside the workspace. Requires human approval."
-    action_class = "fs_delete"
-    timeout_s = 10.0
-    params_schema = {
-        "type": "object",
-        "properties": {"path": {"type": "string"}},
-        "required": ["path"],
-    }
-
-    async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
-        rel = args.get("path")
-        if not isinstance(rel, str) or not rel:
-            return ToolResult(ok=False, error="`path` must be a non-empty string")
-        try:
-            p = resolve_in(ctx.workspace, rel)
-        except PermissionError as e:
-            return ToolResult(ok=False, error=str(e))
-        if not p.is_file():
-            return ToolResult(ok=False, error=f"no such file: {rel}")
-        p.unlink()
-        return ToolResult(ok=True, stdout=f"deleted {rel}")
 
 
 class ShellTool:
@@ -302,6 +223,9 @@ def default_tools() -> list:
         ReadFileTool(),
         WriteFileTool(),
         DeleteFileTool(),
+        ListFilesTool(),
+        SearchFilesTool(),
+        ApplyPatchTool(),
         ShellTool(),
         RunPythonTool(),
         AskHumanTool(),
