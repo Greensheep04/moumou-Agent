@@ -74,3 +74,45 @@ class GitTool:
             return result
         except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError) as exc:
             return ToolResult(ok=False, error=str(exc)[:1024])
+
+
+class GitPushTool:
+    name = "git_push"
+    description = "Push a named local branch to a configured remote; requires human approval."
+    action_class = "git_push"
+    timeout_s = 70.0
+    params_schema = {
+        "type": "object",
+        "properties": {
+            "remote": {"type": "string", "default": "origin"},
+            "branch": {"type": "string"},
+        },
+        "required": ["branch"],
+    }
+
+    async def run(self, args, ctx):
+        try:
+            jail = LocalJail(ctx.workspace)
+            remote = ref_name(args.get("remote", "origin"))
+            branch = ref_name(args.get("branch"))
+            result = await run_command(
+                git_args(
+                    jail.root,
+                    "push",
+                    "--porcelain",
+                    "--",
+                    remote,
+                    f"refs/heads/{branch}:refs/heads/{branch}",
+                ),
+                jail.root,
+                60,
+                {**ctx.env, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"},
+            )
+            for field in ("stdout", "stderr", "error"):
+                text = getattr(result, field)
+                if text:
+                    text = re.sub(r"(https?://)[^/\s@]+@", r"\1[redacted]@", text)
+                    setattr(result, field, text)
+            return result
+        except (OSError, ValueError, TypeError, AttributeError, RuntimeError) as exc:
+            return ToolResult(ok=False, error=str(exc)[:1024])

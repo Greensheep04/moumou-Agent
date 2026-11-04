@@ -25,8 +25,9 @@ from moumou.tools.filesystem import (
     SearchFilesTool,
     WriteFileTool,
 )
+from moumou.tools.git import GitPushTool, GitTool
 from moumou.tools.registry import flatten_schema
-from moumou.tools.git import GitTool
+from moumou.tools.search import WebSearchTool
 
 MAX_OUTPUT = 8 * 1024
 
@@ -138,6 +139,8 @@ def default_tools() -> list:
     return [
         EchoTool(),
         GitTool(),
+        GitPushTool(),
+        WebSearchTool(),
         ReadFileTool(),
         WriteFileTool(),
         DeleteFileTool(),
