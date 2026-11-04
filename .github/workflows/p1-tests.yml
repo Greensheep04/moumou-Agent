@@ -1,0 +1,22 @@
+name: P1 tests
+on:
+  push:
+  pull_request:
+jobs:
+  p1:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-win-py311.lock
+      - run: python -m pip install --no-deps -e .
+      - run: python -m pytest -q
+      - run: python -m ruff check src tests
+      - run: python -m moumou.demo.p1
+
