@@ -26,6 +26,7 @@ from moumou.tools.filesystem import (
     WriteFileTool,
 )
 from moumou.tools.registry import flatten_schema
+from moumou.tools.git import GitTool
 
 MAX_OUTPUT = 8 * 1024
 
@@ -136,6 +137,7 @@ class SubmitPlanTool:
 def default_tools() -> list:
     return [
         EchoTool(),
+        GitTool(),
         ReadFileTool(),
         WriteFileTool(),
         DeleteFileTool(),
