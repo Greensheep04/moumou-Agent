@@ -24,7 +24,7 @@ def alive(pid):
             # Linux zombies have exited but await reaping by their adopted parent.
             stat = __import__("pathlib").Path(f"/proc/{pid}/stat")
             return not (stat.exists() and stat.read_text().split()[2] == "Z")
-        except ProcessLookupError:
+        except (ProcessLookupError, FileNotFoundError):
             return False
     import ctypes
 
