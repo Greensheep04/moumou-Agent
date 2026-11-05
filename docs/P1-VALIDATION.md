@@ -51,3 +51,8 @@
 
 这些事项不应被本地测试通过替代。
 
+## 2026-11-05 远程验证补充
+
+feat/p1-sandbox 已推送，提交 2ac5a2b；[Windows/Ubuntu CI](https://github.com/Greensheep04/moumou-Agent/actions/runs/41978444389) 的依赖安装、pytest、ruff 和 P1 demo 均通过。此记录更新上文当时尚未推送/运行 CI 的状态。开发者直接推送不等于 git_push 工具经 Gate 的真实远端验收。
+
+本轮按约定先完成无密钥开发；Tavily 真实调用和真实模型联调由团队后续完成。P0 接入边界、P3 评测入口改动和 P2 人工审批仍需要对应负责人审阅，不视为已确认。

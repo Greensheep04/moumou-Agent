@@ -6,4 +6,3 @@ dependencies:
   - pip
 # Create using --prefix for the machine's configured environment location.
 # Then install requirements-win-py311.lock and the project editable as documented.
-

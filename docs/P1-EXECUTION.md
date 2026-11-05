@@ -134,4 +134,3 @@ Git 本地操作和推送会移除继承/上下文中的 GIT_* 重定向及配�
 - test_p1_integration.py：既有 Engine 的并行交付、依赖传递和脚本执行。
 
 验证结果及审查修复记录见 `docs/P1-PROGRESS.md`。持续提交可用 `git log --graph --oneline origin/main..HEAD` 展示；正式报告中的提交历史截图应在最终分支与团队贡献记录确定后补充。
-
