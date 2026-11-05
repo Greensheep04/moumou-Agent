@@ -66,4 +66,8 @@ class SubtaskSpec(BaseModel):
 class Plan(BaseModel):
     reasoning: str = ""
     roles: list[RoleDraft] = Field(default_factory=list)
-    subtasks: list[SubtaskSpec]
+    subtasks: list[SubtaskSpec] = Field(description=(
+        "Delegated specialist work only; respect any explicit task count and dependency "
+        "structure in the goal. The parent automatically resumes to review and finalize; "
+        "do not create another lead/finalization subtask."
+    ))

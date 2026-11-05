@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 #: Hard cap on decomposition depth. depth=0 is a top-level task.
 MAX_DEPTH = 2
@@ -54,7 +54,7 @@ def can_transition(src: str, dst: str) -> bool:
 
 
 AcceptanceKind = Literal[
-    "command",        # run ``target``; ``expect`` is the required exit code (default "0")
+    "command",        # run ``target``; ``expect`` explicitly gives the required exit code
     "pytest",         # run pytest on ``target``; ``expect`` is the exit code (default "0")
     "file_exists",    # ``target`` must exist relative to the workspace
     "file_not_exists",
@@ -70,9 +70,29 @@ class Acceptance(BaseModel):
     without executable criteria the completion-rate metric is just an opinion.
     """
 
+    model_config = ConfigDict(json_schema_extra={
+        "anyOf": [
+            {
+                "properties": {
+                    "kind": {"enum": ["command", "file_contains", "json_key"]},
+                    "expect": {"type": "string"},
+                },
+                "required": ["expect"],
+            },
+            {"properties": {"kind": {"enum": ["pytest", "file_exists", "file_not_exists"]}}},
+        ],
+    })
+
     kind: AcceptanceKind
     target: str
-    expect: str | None = None
+    expect: str | None = Field(
+        default=None,
+        description=(
+            "Required and non-null for command (string exit code, e.g. '0'), "
+            "file_contains (regex), and json_key (dotted key or key=JSON value). "
+            "For pytest, omitted/null means exit code 0. File existence checks need no expect."
+        ),
+    )
     timeout_s: int = Field(default=120, ge=1)
     description: str = ""
 

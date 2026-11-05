@@ -23,6 +23,7 @@ from moumou.contracts import (
     TaskResult,
     ToolResult,
 )
+from moumou.orchestrator.delegation import DelegationError
 
 
 class BudgetExceeded(RuntimeError):
@@ -159,8 +160,25 @@ class TaskRunner:
 
             for call in response.tool_calls:
                 if call.name == "submit_plan":
-                    # Delegation transitions the parent to PENDING itself.
-                    self.delegation.apply(node, call.args)
+                    # Invalid proposals are tool feedback, not failed task attempts.
+                    try:
+                        self.delegation.apply(node, call.args)
+                    except DelegationError as exc:
+                        result = ToolResult(
+                            ok=False,
+                            error=(
+                                f"invalid_plan: {str(exc)[:2000]}\n"
+                                "No subtasks were created. Correct the plan and "
+                                "call submit_plan again."
+                            ),
+                        )
+                        self.trace.record(
+                            task_id=node.id, kind="delegate", name="plan_rejected",
+                            agent_id=agent.id, error=result.error,
+                        )
+                        ctx.add_tool_result(call.id, result)
+                        continue
+                    # Successful delegation transitions the parent to PENDING itself.
                     return
                 if call.name == "submit_result":
                     await self._finish(node, workspace, _coerce_result(call.args))
