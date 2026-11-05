@@ -105,6 +105,7 @@ class GitPushTool:
             result = await run_command(
                 git_args(
                     jail.root,
+                    "-c", "push.followTags=false",
                     "push",
                     "--porcelain",
                     "--",

@@ -18,7 +18,13 @@ from pathlib import Path
 
 from moumou.adapters import ScriptedHuman
 from moumou.eval.loader import TaskFixture
-from moumou.eval.workspace import BACKENDS, create_run_dir, git_workspace, write_setup
+from moumou.eval.workspace import (
+    BACKENDS,
+    create_run_dir,
+    git_workspace,
+    reserve_batch_dir,
+    write_setup,
+)
 from moumou.orchestrator import Engine, Settings
 
 
@@ -88,6 +94,9 @@ async def run_all(
     fixtures: list[TaskFixture], llm, root: Path, repeats: int | None = None,
     *, workspace_backend: str = "local"
 ) -> list[FixtureResult]:
+    if workspace_backend not in BACKENDS:
+        raise ValueError(f"unknown workspace backend: {workspace_backend}")
+    root = reserve_batch_dir(root)
     results: list[FixtureResult] = []
     for fixture in fixtures:
         n = repeats or fixture.repeats

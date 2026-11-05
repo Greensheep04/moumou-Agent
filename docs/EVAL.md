@@ -127,6 +127,6 @@ tags: [scenario-1, easy]
 python -m moumou.eval.cli --workspace-backend git --only s2_bugfix --repeats 3 --out runs/eval/p1-git-batch-001
 ```
 
-每批指定新的 --out；已存在的题目/repeat 目录会被拒绝，避免把旧数据库、产物和历史混入新结果。每次运行先把 fixture.setup 写入独立 seed 仓库并提交，再分配各 Agent 的 worktree，因此初始文件对全部 Agent 可见，父工作区保持干净。local 模式维持原有目录结构，并同样拒绝 setup 越界或写入 Git 管理文件。
+每批指定新的 --out；非空批次目录在构造模型前被拒绝，并用独占 .batch 标记预留新批次，防止换题覆盖旧 report。已存在的题目/repeat 目录也会被拒绝，避免把旧数据库、产物和历史混入新结果。每次运行先把 fixture.setup 写入独立 seed 仓库并提交，再分配各 Agent 的 worktree，因此初始文件对全部 Agent 可见，父工作区保持干净。local 模式维持原有目录结构，并同样拒绝 setup 越界或写入 Git 管理文件。
 
 上面的命令需要团队配置有效的模型密钥；无密钥回归使用 tests/test_eval_workspace.py 和 python -m moumou.demo.p1，不等同于真实模型完成率。指标定义保持本文件原有口径。

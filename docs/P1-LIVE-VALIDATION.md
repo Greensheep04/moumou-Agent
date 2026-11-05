@@ -26,7 +26,7 @@ python -m moumou.demo.p1_live --check push --execute-push --source . --remote-ur
 
 通过 Gate 分别执行 scripted approve/reject 后，使用 ls-remote 核对：批准分支等于源 HEAD，拒绝分支不存在。JSON 会标记 approval_mode=scripted；这证明审批逻辑与远端写入关系，不能宣称已经完成 P2 的真人交互演示。测试后保留远端批准分支供核对，不自动删除。
 
-认证沿用系统 Git 凭证。不要在 URL 中放密码或 Token。Git 连接超时返回结构化失败。
+认证沿用系统 Git 凭证。不要在 URL 中放密码或 Token；密码、HTTP 用户信息、查询和片段在建立克隆前被拒绝。本地测试远端使用绝对路径。推送关闭附带 tag。Git 校验超时时保存分支、预期 SHA、trace 和阶段，各 ref 区分“已验证为空”与“尚未验证”，以便核对可能已发生的远端写入。
 
 ## 验收记录
 

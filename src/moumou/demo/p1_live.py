@@ -86,7 +86,8 @@ def _remote_ref(checkout, branch):
 
 async def validate_push(root: Path, source: Path, remote_url: str) -> dict:
     parsed = urlsplit(remote_url)
-    if parsed.scheme in ("http", "https") and (parsed.username or parsed.password):
+    if (parsed.password is not None or parsed.query or parsed.fragment
+            or parsed.scheme in ("http", "https") and parsed.username is not None):
         raise ValueError("remote URL must not contain credentials")
     if not remote_url or remote_url.startswith("-") or "\0" in remote_url:
         raise ValueError("invalid remote URL")
@@ -94,26 +95,49 @@ async def validate_push(root: Path, source: Path, remote_url: str) -> dict:
     root.mkdir(parents=True, exist_ok=False)
     suffix = uuid.uuid4().hex[:12]
     approved, rejected = f"p1-verify/approved-{suffix}", f"p1-verify/rejected-{suffix}"
-    checkout, head = await asyncio.to_thread(
-        _prepare_push, root, source, remote_url, approved, rejected
-    )
-    human = ScriptedHuman(default="reject", on_ask=lambda req: (
-        "approve" if req.action_class == "git_push" and req.payload.get("branch") == approved
-        else "reject"
-    ))
-    with _engine(root, human) as engine:
-        accepted = await _execute(engine, "git_push", {"branch": approved}, checkout)
-        denied = await _execute(engine, "git_push", {"branch": rejected}, checkout)
-    accepted_ref = await asyncio.to_thread(_remote_ref, checkout, approved)
-    denied_ref = await asyncio.to_thread(_remote_ref, checkout, rejected)
-    ok = (accepted.ok and accepted_ref == head and not denied.ok
-          and denied.error == "rejected_by_human" and denied_ref is None)
-    return _save(root, {
-        "check": "push", "ok": ok, "source_commit": head, "approval_mode": "scripted",
-        "approved_branch": approved, "approved_ref": accepted_ref,
-        "rejected_branch": rejected, "rejected_ref": denied_ref, "rejected_error": denied.error,
-        "error": None if ok else accepted.error or "remote state did not match Gate decisions",
-    })
+    summary = {
+        "check": "push", "ok": False, "source_commit": None, "approval_mode": "scripted",
+        "approved_branch": approved, "approved_ref": None, "approved_ref_verified": False,
+        "rejected_branch": rejected, "rejected_ref": None, "rejected_ref_verified": False,
+        "rejected_error": None, "stage": "prepare", "error": None,
+    }
+    try:
+        checkout, head = await asyncio.to_thread(
+            _prepare_push, root, source, remote_url, approved, rejected
+        )
+        summary["source_commit"] = head
+        human = ScriptedHuman(default="reject", on_ask=lambda req: (
+            "approve" if req.action_class == "git_push" and req.payload.get("branch") == approved
+            else "reject"
+        ))
+        summary["stage"] = "gate"
+        with _engine(root, human) as engine:
+            accepted = await _execute(engine, "git_push", {"branch": approved}, checkout)
+            denied = await _execute(engine, "git_push", {"branch": rejected}, checkout)
+        summary["rejected_error"] = denied.error
+        summary["stage"] = "verify_approved"
+        summary["approved_ref"] = await asyncio.to_thread(_remote_ref, checkout, approved)
+        summary["approved_ref_verified"] = True
+        summary["stage"] = "verify_rejected"
+        summary["rejected_ref"] = await asyncio.to_thread(_remote_ref, checkout, rejected)
+        summary["rejected_ref_verified"] = True
+        summary["ok"] = (accepted.ok and summary["approved_ref"] == head and not denied.ok
+                         and denied.error == "rejected_by_human"
+                         and summary["rejected_ref"] is None)
+        summary["error"] = (None if summary["ok"] else accepted.error
+                            or "remote state did not match Gate decisions")
+        summary["stage"] = "complete"
+    except (OSError, ValueError, RuntimeError, TimeoutExpired) as exc:
+        summary["error"] = (
+            f"{type(exc).__name__} during {summary['stage']}; remote state may be unknown"
+        )
+    except asyncio.CancelledError:
+        summary["error"] = "cancelled; remote state may be unknown"
+        raise
+    finally:
+        _save(root, summary)
+    return summary
+
 
 
 def parse_args(argv=None):

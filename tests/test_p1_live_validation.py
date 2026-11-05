@@ -98,3 +98,62 @@ def test_cli_reports_git_timeout_without_traceback(monkeypatch, capsys):
     monkeypatch.setattr(p1_live, "validate_push", timed_out)
     assert p1_live.main(["--check", "push", "--execute-push", "--remote-url", "remote.git"]) == 1
     assert not json.loads(capsys.readouterr().out)["ok"]
+
+
+async def test_push_does_not_follow_annotated_tags(tmp_path, monkeypatch):
+    source = repository(tmp_path / "source")
+    run_git(source, "tag", "-a", "source-release", "-m", "source annotation")
+    remote = tmp_path / "remote.git"
+    run_git(tmp_path, "init", "--bare", str(remote))
+    original = p1_live._prepare_push
+
+    def with_follow_tags(*args):
+        checkout, head = original(*args)
+        run_git(checkout, "config", "push.followTags", "true")
+        return checkout, head
+
+    monkeypatch.setattr(p1_live, "_prepare_push", with_follow_tags)
+    summary = await p1_live.validate_push(tmp_path / "check", source, str(remote))
+    assert summary["ok"]
+    assert run_git(remote, "tag", "--list").stdout == ""
+
+
+@pytest.mark.parametrize("remote", [
+    "https://example.invalid/repo.git?token=secret",
+    "https://example.invalid/repo.git#secret",
+    "ssh://git:secret@example.invalid/repo.git",
+])
+async def test_remote_credentials_rejected_before_git_calls(tmp_path, monkeypatch, remote):
+    def unexpected(*args):
+        raise AssertionError("remote with credentials reached Git")
+    monkeypatch.setattr(p1_live, "_prepare_push", unexpected)
+    with pytest.raises(ValueError, match="credential"):
+        await p1_live.validate_push(tmp_path / "check", tmp_path, remote)
+
+
+async def test_post_push_timeout_preserves_remote_recovery_evidence(tmp_path, monkeypatch):
+    from subprocess import TimeoutExpired
+    source = repository(tmp_path / "source")
+    remote = tmp_path / "remote.git"
+    run_git(tmp_path, "init", "--bare", str(remote))
+    original = p1_live._remote_ref
+    reads = 0
+
+    def timed_out(checkout, branch):
+        nonlocal reads
+        reads += 1
+        if reads == 3:
+            raise TimeoutExpired(["git", "ls-remote"], 30)
+        return original(checkout, branch)
+
+    monkeypatch.setattr(p1_live, "_remote_ref", timed_out)
+    result = await p1_live.validate_push(tmp_path / "check", source, str(remote))
+    saved = json.loads((tmp_path / "check/summary.json").read_text(encoding="utf-8"))
+    assert saved == result and not result["ok"]
+    assert result["stage"] == "verify_approved" and not result["approved_ref_verified"]
+    assert result["source_commit"] == run_git(source, "rev-parse", "HEAD").stdout.strip()
+    assert result["approved_branch"].startswith("p1-verify/approved-")
+    assert run_git(remote, "rev-parse", result["approved_branch"]).stdout.strip() == result[
+        "source_commit"
+    ]
+    assert Path(result["trace"]).is_file()

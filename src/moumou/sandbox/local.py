@@ -10,6 +10,10 @@ class LocalJail:
     def resolve(self, path: str, *, mutable: bool = False) -> Path:
         if not isinstance(path, str) or not path or "\0" in path:
             raise ValueError("path must be a non-empty string")
+        # Windows strips these suffixes during file creation, including .git aliases.
+        if any(part not in (".", "..") and part.endswith((".", " "))
+               for part in PureWindowsPath(path).parts):
+            raise PermissionError("invalid_path")
         candidate = (self.root / path).resolve()
         if not candidate.is_relative_to(self.root):
             raise PermissionError("path_outside_workspace")

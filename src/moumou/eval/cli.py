@@ -17,7 +17,7 @@ from moumou.adapters import DeepSeekClient
 from moumou.config import LLMSettings
 from moumou.eval.loader import load_tasks
 from moumou.eval.runner import render_markdown, run_all
-from moumou.eval.workspace import BACKENDS
+from moumou.eval.workspace import BACKENDS, check_batch_dir
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -48,6 +48,11 @@ async def main_async(args: argparse.Namespace) -> int:
         return 2
 
     out = Path(args.out)
+    try:
+        check_batch_dir(out)
+    except OSError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     out.mkdir(parents=True, exist_ok=True)
 
     llm = DeepSeekClient(

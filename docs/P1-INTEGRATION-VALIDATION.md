@@ -29,3 +29,28 @@
 - 评测明确选择 git 时，setup 形成每次运行独立的已提交 seed；拒绝复用已有 repeat 目录，重新评测必须提供新输出路径。
 - 对两个后端都校验 setup 路径与 fixture ID，避免评测初始化绕过工作区约束。
 - 只增加 P3 runner/CLI 的最小 Provider 接线，保留原有指标定义、共享契约及审批策略；最终由 P3 审阅。
+
+## 独立审查与一次修复
+
+审查发现 1 项严重路径隔离问题和 5 项重要问题，均有明确失败回归后修复：
+
+1. Windows 尾随点/空格可把 .git. 解释为 .git，影响初始化仓库配置：LocalJail 在解析和写入前拒绝此类组件，覆盖新建和已有管理目录。
+2. 推送可能遵循配置携带 annotated tags：git_push 显式设置 push.followTags=false。
+3. URL 密码、查询参数或片段可能保留在克隆配置：建立克隆前拒绝这些凭据形式。
+4. setup 同名别名和文件/父目录冲突：写入前统一检查，不保留部分初始化文件。
+5. 同一批输出目录下换题运行可能覆盖已有 report：CLI 构造模型前拒绝非空目录，run_all 使用独占 .batch 标记预留新批次。
+6. 推送后的远端校验超时可能丢失分支信息：summary 保存阶段、预期 SHA、分支、trace 和每个 ref 是否已验证；未知状态明确标记，不当作不存在。
+
+修复专项 72 passed in 53.97s。回归失败证据：review-path-red.txt、review-remaining-red.txt、review-evidence-red.txt；通过记录：review-green.txt，均位于 runs/p1-integration。
+
+审查另记录一项低优先级限制：本地测试远端应使用绝对路径；相对远端路径目前按验证克隆目录解释。本轮未修改这一行为。
+
+## 同步接口性能交接
+
+独立审查在 Windows 的两个单文件临时场景中测得：初始化并分配两个工作区约 0.86/0.98 秒，单次整合约 1.53/1.58 秒。这是小样本交接数据，不是跨平台基准；同步操作会占用事件循环，需 P0 根据实际任务规模确认可接受性。本轮不变更共享同步接口。
+
+审查未判断的真实 Tavily/模型行为、实际成本和任务完成率按约定留给团队；真人交互、最终 CI/推送和团队签收需各自证据。一般 OS 级隔离、恶意并发文件系统操作、多进程锁与大仓库优化不属于本轮保证。
+
+## 修复后最终本地验证
+
+python -m pytest -q：254 passed in 120.52s。python -m ruff check src tests：All checks passed。全分支 git diff --check 通过。共享 contracts 与 orchestrator 相对本轮起点没有变化。全量日志：runs/p1-integration/final-suite.txt。

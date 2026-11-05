@@ -28,12 +28,19 @@ def create_run_dir(root: Path, fixture_id: str, repeat: int) -> Path:
 def write_setup(workspace: Path, setup: dict[str, str]) -> None:
     jail = LocalJail(workspace)
     targets = []
+    keys = set()
     for rel, content in setup.items():
         windows = PureWindowsPath(rel)
         if windows.drive or windows.root or ".." in windows.parts:
             raise ValueError("setup path must be relative and inside the workspace")
         target = jail.resolve(rel.replace("\\", "/"), mutable=True)
+        key = tuple(part.casefold() for part in target.relative_to(jail.root).parts)
+        if key in keys:
+            raise ValueError("setup paths collide")
+        keys.add(key)
         targets.append((target, content))
+    if any(key[:length] in keys for key in keys for length in range(1, len(key))):
+        raise ValueError("setup file conflicts with an ancestor file")
     for target, content in targets:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
@@ -47,3 +54,18 @@ def git_workspace(run_dir: Path, setup: dict[str, str]) -> GitWorkspaces:
     run_git(seed, "add", "--force", "--all", "--", ".")
     run_git(seed, "commit", "--allow-empty", "-m", "evaluation fixture baseline")
     return GitWorkspaces(run_dir / "workspaces", seed=seed)
+
+
+def check_batch_dir(root: Path) -> None:
+    root = Path(root)
+    if root.exists() and (not root.is_dir() or any(root.iterdir())):
+        raise FileExistsError("batch output already contains evidence; use a fresh --out")
+
+
+def reserve_batch_dir(root: Path) -> Path:
+    root = Path(root).resolve()
+    check_batch_dir(root)
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / ".batch").open("x", encoding="utf-8") as marker:
+        marker.write("Evaluation batch reserved; use a new output path for another batch.\n")
+    return root

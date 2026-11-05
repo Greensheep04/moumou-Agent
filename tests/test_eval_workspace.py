@@ -192,3 +192,60 @@ async def test_git_evaluation_reports_conflict_without_losing_target(tmp_path):
     conflicts = [e for e in events(result) if e["name"] == "integration_conflict"]
     assert len(conflicts) == 1 and conflicts[0]["payload"]["conflicts"] == ["same.txt"]
     assert (parent_path(result) / "same.txt").read_text(encoding="utf-8") in {"A", "B"}
+
+
+@pytest.mark.parametrize("path", [".git./config", ".git /config", "nested./out.txt",
+                                  "nested /out.txt", ".GiT.../config"])
+@pytest.mark.parametrize("backend", ["local", "git"])
+async def test_setup_rejects_windows_trailing_aliases(tmp_path, backend, path):
+    with pytest.raises((ValueError, PermissionError)):
+        await run_once(fixture(setup={path: "[custom]\n\tx = yes\n"}), FakeLLM(responder),
+                       tmp_path, 0, workspace_backend=backend)
+
+
+@pytest.mark.parametrize("setup", [
+    {"note.txt": "first", "NOTE.txt": "second"},
+    {"sub/file.txt": "first", "sub\\file.txt": "second"},
+])
+async def test_setup_rejects_colliding_file_names(tmp_path, setup):
+    with pytest.raises((ValueError, PermissionError)):
+        await run_once(fixture(setup=setup), FakeLLM(responder), tmp_path, 0,
+                       workspace_backend="git")
+
+
+@pytest.mark.parametrize("setup", [
+    {"file": "a", "file/sub.txt": "b"},
+    {"File/sub.txt": "b", "file": "a"},
+    {"x": "a", "./x": "b"},
+])
+def test_setup_preflights_collisions_before_writing(tmp_path, setup):
+    from moumou.eval.workspace import write_setup
+    with pytest.raises(ValueError, match="collid|ancestor"):
+        write_setup(tmp_path, setup)
+    assert list(tmp_path.iterdir()) == []
+
+
+async def test_run_all_rejects_existing_batch_before_model_calls(tmp_path):
+    root = tmp_path / "batch"
+    root.mkdir()
+    (root / "report.md").write_text("previous report", encoding="utf-8")
+    llm = FakeLLM(responder)
+    with pytest.raises(FileExistsError):
+        await run_all([fixture(id="new_fixture")], llm, root, workspace_backend="git")
+    assert llm.calls == []
+    assert (root / "report.md").read_text(encoding="utf-8") == "previous report"
+
+
+async def test_cli_rejects_prior_batch_before_constructing_model(tmp_path, monkeypatch):
+    from moumou.eval import cli
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-placeholder")
+    (tmp_path / "report.md").write_text("previous report", encoding="utf-8")
+    (tmp_path / "old_fixture").mkdir()
+
+    def unexpected(**kwargs):
+        raise AssertionError("model constructed before rejecting prior batch")
+    monkeypatch.setattr(cli, "DeepSeekClient", unexpected)
+    args = parse_args(["--only", "s2_bugfix", "--workspace-backend", "git",
+                       "--out", str(tmp_path)])
+    assert await cli.main_async(args) == 2
+    assert (tmp_path / "report.md").read_text(encoding="utf-8") == "previous report"

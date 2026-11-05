@@ -93,3 +93,14 @@ async def test_link_to_other_workspace_is_rejected(tools, ctx, tmp_path):
             os.rmdir(link)
         else:
             link.unlink()
+
+
+@pytest.mark.parametrize("path", [".git./config", ".git /config", "nested./out.txt",
+                                  "nested /out.txt", ".GiT.../config"])
+@pytest.mark.parametrize("existing_git", [False, True])
+def test_jail_rejects_windows_trailing_alias_components(tmp_path, path, existing_git):
+    from moumou.sandbox.local import LocalJail
+    if existing_git:
+        (tmp_path / ".git").mkdir()
+    with pytest.raises((ValueError, PermissionError)):
+        LocalJail(tmp_path).resolve(path, mutable=True)
