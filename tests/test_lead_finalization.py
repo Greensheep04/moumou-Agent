@@ -147,9 +147,10 @@ def test_handoff_evidence_respects_context_budget_and_truncation():
     assert MARKER not in ctx.messages()[1]["content"]
 
 
+@pytest.mark.parametrize("strict", [False, True])
 @pytest.mark.parametrize("content,expected_done,expected_dead", [("good", 2, 0), ("bad", 1, 1)])
 async def test_direct_lead_submission_still_executes_parent_acceptance(
-    tmp_path, content, expected_done, expected_dead
+    tmp_path, content, expected_done, expected_dead, strict
 ):
     closing_briefs = []
 
@@ -189,7 +190,8 @@ async def test_direct_lead_submission_still_executes_parent_acceptance(
 
     llm = FakeLLM(respond)
     settings = Settings(
-        root=tmp_path / "run", project_id="p", memory_enabled=False, role_review_enabled=False
+        root=tmp_path / "run", project_id="p", memory_enabled=False, role_review_enabled=False,
+        require_subtask_acceptance=strict,
     )
     with Engine(
         llm,

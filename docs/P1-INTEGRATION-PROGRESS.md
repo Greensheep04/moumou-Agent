@@ -60,3 +60,11 @@ HKGAI 基础接口可用的结论保留；完整多 Agent 链路尚未跑通。�
 ## 三批提交与框架符合性核对
 
 负责人已确认按计划恢复、收尾优化、脱敏文档分三批提交推送，先不合并 main。源码两批分别为 a03c8c9、64066b7。提交前全量 279 passed in 137.31s，第一批独立快照 44 passed；公开字段/端口、审批与最终验收保持兼容。新增框架符合性评估指出 P0 职责重叠、P2/P3 联调与正式评测边界，并修正重复注册工具的文档示例。最终 CI 见 PR #1 Checks，详细判断见 P1-FRAMEWORK-COMPATIBILITY.md。
+
+## 2026-11-05 CI 竞态修复与严格子任务验收（本地待审阅）
+
+重新核对基线 4e680a0：push workflow 42014292938 最新重跑、PR workflow 42014301001 均 Windows/Ubuntu 成功。截图首次 Ubuntu 失败来自测试探针检查与读取 /proc stat 之间进程退出的竞态；新增确定性回归先复现后修复，未隐藏失败历史。
+
+新增 Engine Settings.require_subtask_acceptance=False。显式开启时，在任何计划写入前拒绝任一空子任务验收，沿用 invalid_plan 纠错与原步骤预算；默认兼容。更新计划字段说明与 lead 验收提示，父子最终机器检查、审批和 P2/P3 接口不变。上一轮三项空验收真实计划离线回放，默认接受/严格拒绝，新增 API 请求为 0。
+
+专项 48 passed，全量 293 passed in 147.32s，Ruff 通过，独立审查未发现阻塞项。本轮未提交或推送，远程基线绿色不代表本轮新代码 CI。后续每次提交并推送后核对精确 SHA 的 push/PR 双平台 workflows，失败读取 job 日志并报告。提交建议、覆盖边界和整体进度见 P1-SUBTASK-ACCEPTANCE-VALIDATION.md。

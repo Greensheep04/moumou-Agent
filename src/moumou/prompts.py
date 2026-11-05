@@ -55,6 +55,12 @@ So every goal must stand on its own:
 Criteria are executed by code, not read by a person. Each one must be exactly one
 of: command, pytest, file_exists, file_not_exists, file_contains, json_key.
 
+For every sub-task that delivers code or files, include a non-empty acceptance list
+that tests its goal. An empty list produces self_report, not machine verification;
+strict sub-task acceptance mode rejects such plans before creating children. Checks
+run in the child's workspace, with its dependency artifacts already delivered. Do not
+make a child depend on files that only a later task will create.
+
 Prefer a command that actually runs the thing. If a requirement cannot be written
 in one of those six forms, the task is probably too vague to delegate -- sharpen
 it first.
