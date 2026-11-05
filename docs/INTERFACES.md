@@ -36,7 +36,7 @@ from moumou.orchestrator import Engine, Settings
 from moumou.tools import ToolRegistry, default_tools
 
 registry = ToolRegistry()
-registry.register_all(*default_tools(), GitTool(), GitPushTool(), WebSearchTool())
+registry.register_all(*default_tools())  # 已含文件、执行、Git 与搜索工具，避免重复注册
 
 engine = Engine(
     llm,
@@ -165,7 +165,7 @@ class Tool(Protocol):
 class WorkspaceProvider(Protocol):
     def allocate(self, project_id: str, conversation_id: str, agent_id: str) -> Path: ...
     def release(self, path: Path) -> None: ...
-    def integrate(self, src: Path, dst: Path, artifacts: list[str]) -> list[str]: ...
+    def integrate(self, src: Path, dst: Path, artifacts: list[str]) -> IntegrateResult: ...
 ```
 
 | 方法 | 调用时机 | 约定 |
