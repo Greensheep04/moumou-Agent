@@ -24,3 +24,7 @@
 一次独立审查发现的 1 项严重和 5 项重要问题已用失败回归复现并集中修复。专项 72 passed；最终全量 254 passed in 120.52s，ruff 与差异检查通过。细节及已知限制见 P1-INTEGRATION-VALIDATION.md。真实搜索、模型和人工确认仍待团队处理。
 
 GitHub 工具真实推送已完成：在独立克隆中通过 Gate 走脚本化批准/拒绝，两条远端结果均核对。具体 SHA、验证分支及证据见 P1-LIVE-VALIDATION.md。
+
+## 团队审查入口
+
+[PR #1](https://github.com/Greensheep04/moumou-Agent/pull/1) 已创建为草稿，作者为项目成员真实 Git 身份，供 P0/P3 审阅。最终 Windows/Ubuntu 测试、代码检查和 demo 的状态见 PR Checks。main 尚未合并。

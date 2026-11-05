@@ -19,7 +19,7 @@
 
 ## 外部状态
 
-原有版本的 Windows/Ubuntu CI 已通过，见 https://github.com/Greensheep04/moumou-Agent/actions/runs/41978444389 。本轮最终提交的远程 CI 在推送后补充。
+原有版本的 Windows/Ubuntu CI 已通过，见 https://github.com/Greensheep04/moumou-Agent/actions/runs/41978444389 。本轮最终提交的远程 CI 以 [PR #1 的实时检查](https://github.com/Greensheep04/moumou-Agent/pull/1/checks) 为准。
 
 真实搜索和真实模型调用按约定暂缓。P0/P3 跨成员确认、P2 人工审批以及最终答辩截图仍由团队完成。脚本化 Gate 验证不能代替真人交互验收。
 
@@ -58,3 +58,7 @@ python -m pytest -q：254 passed in 120.52s。python -m ruff check src tests：A
 ## GitHub 工具推送验证
 
 最终代码 f9032008934b622d29ea01c85b3cfd66953b021b 经独立克隆与 Gate 验证通过：批准远端分支 p1-verify/approved-eea29443d2c6 指向源 HEAD，拒绝分支 p1-verify/rejected-eea29443d2c6 未创建。审批为 scripted；不是 P2 真人界面验收。原始 JSON/trace 位于 runs/p1-integration/github-live/bb7307fe5e07/。
+
+## 团队审查入口
+
+[PR #1](https://github.com/Greensheep04/moumou-Agent/pull/1) 已创建为草稿，作者为项目成员真实 Git 身份，供 P0/P3 审阅。最终 Windows/Ubuntu 测试、代码检查和 demo 的状态见 PR Checks。main 尚未合并。
