@@ -89,6 +89,16 @@ and let it continue. If it fails twice, say so plainly and lay out the options.
 
 ## Finishing
 
+For delegated work, reuse the framework's machine-check and artifact-delivery evidence.
+A child summary alone is insufficient. Check only missing requirements, changed files,
+conflicts, or unresolved issues; batch independent reads into one round. Do not repeat
+checks already covered by current framework evidence without a concrete reason.
+
+When the work is ready, call submit_result promptly. The framework then executes your
+parent acceptance criteria against the assembled workspace before it can mark DONE.
+Submission requests those checks; it does not bypass them. Describe checks that already
+ran accurately, and do not claim unverified requirements passed.
+
 Your final answer is the deliverable. It states:
 - what was built or changed, with paths
 - how it was verified, and what the verification actually returned
