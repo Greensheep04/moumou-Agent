@@ -18,7 +18,7 @@ Last updated: 2026-10-22
 | Context assembly | P0 | ✅ done | four layers, admission rules, opening budget, three-layer compaction |
 | Memory and experience evolution | P0 | ✅ done | conclusion board + reflection + scoring / decay / eviction |
 | Execution sandbox | P1 | 🚧 implemented; team integration pending | path checks, file/code tools, process cleanup; Windows/Ubuntu CI passed |
-| Git / GitHub integration | P1 | 🚧 implemented; evaluation wiring pending | worktrees/artifact delivery verified; development branch pushed; live tool push pending |
+| Git / GitHub integration | P1 | 🚧 implemented; evaluation wiring pending | worktrees, artifact delivery and opt-in Git evaluation implemented; live GitHub push through Gate passed; team review pending |
 | Web search | P1 | 🚧 implemented; live validation pending | Tavily protocol/error tests passed; team owns credential-based validation |
 | Message bus | P2 | 🚧 reference impl | in-memory version works, needs persistence |
 | Command line interface | P2 | ⬜ not started | |

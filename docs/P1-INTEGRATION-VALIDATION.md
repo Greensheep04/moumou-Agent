@@ -54,3 +54,7 @@
 ## 修复后最终本地验证
 
 python -m pytest -q：254 passed in 120.52s。python -m ruff check src tests：All checks passed。全分支 git diff --check 通过。共享 contracts 与 orchestrator 相对本轮起点没有变化。全量日志：runs/p1-integration/final-suite.txt。
+
+## GitHub 工具推送验证
+
+最终代码 f9032008934b622d29ea01c85b3cfd66953b021b 经独立克隆与 Gate 验证通过：批准远端分支 p1-verify/approved-eea29443d2c6 指向源 HEAD，拒绝分支 p1-verify/rejected-eea29443d2c6 未创建。审批为 scripted；不是 P2 真人界面验收。原始 JSON/trace 位于 runs/p1-integration/github-live/bb7307fe5e07/。

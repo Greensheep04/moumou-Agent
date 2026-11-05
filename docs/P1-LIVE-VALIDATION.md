@@ -37,5 +37,11 @@ python -m moumou.demo.p1_live --check push --execute-push --source . --remote-ur
 | Gate 批准/拒绝与本地真实远端 | 通过，main 与源分支保持原状 | test_push_wrapper_checks_real_refs_and_gate_decisions |
 | 超时 | 返回失败 JSON | test_cli_reports_git_timeout_without_traceback |
 | Tavily 真实服务 | 暂缓，需团队密钥 | 未计为通过 |
-| 工具经 Gate 的 GitHub 真实推送 | 待本轮最终验证 | 后续在本节追加实际提交与分支 |
+| 工具经 Gate 的 GitHub 真实推送 | 通过（scripted approve/reject） | 见下方真实远端记录 |
 | 真人审批界面 | 待 P2 联调 | 脚本化测试不计为真人验收 |
+
+## GitHub 实际验证记录
+
+2026-11-05，独立验证克隆，源提交 f9032008934b622d29ea01c85b3cfd66953b021b。Gate 脚本化批准后，远端 p1-verify/approved-eea29443d2c6 等于源提交；脚本化拒绝后，p1-verify/rejected-eea29443d2c6 不存在，error=rejected_by_human。两个 ref 均完成远端查询核对，stage=complete。main 保持 e3b9e7a，没有新增测试提交。
+
+原始摘要与 trace：runs/p1-integration/github-live/bb7307fe5e07/summary.json。验证分支保留供团队核对。真人 HumanIO 交互不在该记录范围。
