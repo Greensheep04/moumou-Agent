@@ -17,6 +17,7 @@ from moumou.adapters import DeepSeekClient
 from moumou.config import LLMSettings
 from moumou.eval.loader import load_tasks
 from moumou.eval.runner import render_markdown, run_all
+from moumou.eval.workspace import BACKENDS
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -26,6 +27,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--repeats", type=int, default=None, help="override repeats per task")
     p.add_argument("--model", default=None, help="override DEEPSEEK_MODEL")
     p.add_argument("--only", default=None, help="run a single task id")
+    p.add_argument("--workspace-backend", choices=BACKENDS, default="local",
+                   help="workspace provider; use git to evaluate P1 worktree delivery")
     return p.parse_args(argv)
 
 
@@ -56,7 +59,12 @@ async def main_async(args: argparse.Namespace) -> int:
     print(f"model: {args.model or settings.model}   tasks: {len(fixtures)}")
 
     try:
-        results = await run_all(fixtures, llm, out, repeats=args.repeats)
+        results = await run_all(
+            fixtures, llm, out, repeats=args.repeats, workspace_backend=args.workspace_backend
+        )
+    except (ValueError, FileExistsError, PermissionError) as exc:
+        print(f"evaluation setup failed: {exc}; use a fresh --out directory", file=sys.stderr)
+        return 2
     finally:
         await llm.aclose()
 

@@ -18,6 +18,7 @@ from pathlib import Path
 
 from moumou.adapters import ScriptedHuman
 from moumou.eval.loader import TaskFixture
+from moumou.eval.workspace import BACKENDS, create_run_dir, git_workspace, write_setup
 from moumou.orchestrator import Engine, Settings
 
 
@@ -37,8 +38,13 @@ class FixtureResult:
     errors: list[str] = field(default_factory=list)
 
 
-async def run_once(fixture: TaskFixture, llm, root: Path, repeat: int) -> FixtureResult:
-    run_dir = root / fixture.id / f"r{repeat}"
+async def run_once(
+    fixture: TaskFixture, llm, root: Path, repeat: int, *, workspace_backend: str = "local"
+) -> FixtureResult:
+    if workspace_backend not in BACKENDS:
+        raise ValueError(f"unknown workspace backend: {workspace_backend}")
+    run_dir = create_run_dir(root, fixture.id, repeat)
+    workspace = git_workspace(run_dir, fixture.setup) if workspace_backend == "git" else None
     settings = Settings(
         project_id=fixture.id, conversation_id="c1", root=run_dir, max_slots=4
     )
@@ -49,16 +55,13 @@ async def run_once(fixture: TaskFixture, llm, root: Path, repeat: int) -> Fixtur
         default_answer=fixture.human.default_answer,
     )
 
-    engine = Engine(llm, human=human, settings=settings)
+    engine = Engine(llm, human=human, workspace=workspace, settings=settings)
     try:
         task = engine.submit(fixture.goal, acceptance=fixture.acceptance, budget=fixture.budget)
 
-        if fixture.setup:
-            workspace = engine.workspace.allocate(fixture.id, "c1", f"planner@{task.id}")
-            for rel, content in fixture.setup.items():
-                target = workspace / rel
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(content, encoding="utf-8")
+        if fixture.setup and workspace_backend == "local":
+            parent = engine.workspace.allocate(fixture.id, "c1", f"planner@{task.id}")
+            write_setup(parent, fixture.setup)
 
         report = await engine.run()
         errors = [t["goal"] for t in report.tasks if t["status"] == "DEAD"]
@@ -82,13 +85,16 @@ async def run_once(fixture: TaskFixture, llm, root: Path, repeat: int) -> Fixtur
 
 
 async def run_all(
-    fixtures: list[TaskFixture], llm, root: Path, repeats: int | None = None
+    fixtures: list[TaskFixture], llm, root: Path, repeats: int | None = None,
+    *, workspace_backend: str = "local"
 ) -> list[FixtureResult]:
     results: list[FixtureResult] = []
     for fixture in fixtures:
         n = repeats or fixture.repeats
         for repeat in range(n):
-            results.append(await run_once(fixture, llm, root, repeat))
+            results.append(await run_once(
+                fixture, llm, root, repeat, workspace_backend=workspace_backend
+            ))
     return results
 
 
