@@ -48,11 +48,14 @@ def find_cycle(specs: list[SubtaskSpec]) -> list[str] | None:
 
 
 class Delegation:
-    def __init__(self, repo, roles, trace, tool_names: set[str]):
+    def __init__(
+        self, repo, roles, trace, tool_names: set[str], *, require_subtask_acceptance: bool = False
+    ):
         self.repo = repo
         self.roles = roles
         self.trace = trace
         self.tool_names = tool_names
+        self.require_subtask_acceptance = require_subtask_acceptance
 
     # -- validation ------------------------------------------------------
     def validate(self, parent: TaskNode, plan: Plan) -> None:
@@ -86,6 +89,15 @@ class Delegation:
                 raise DelegationError(
                     f"subtask {s.key!r} may not be assigned the lead role; that role owns "
                     "the whole task and cannot be a delegate"
+                )
+
+        if self.require_subtask_acceptance:
+            missing = [s.key for s in plan.subtasks if not s.acceptance]
+            if missing:
+                raise DelegationError(
+                    f"subtasks {missing} require non-empty acceptance in strict mode; "
+                    "provide executable machine checks for each subtask, with target and "
+                    "expect where required. Empty acceptance would only record self_report."
                 )
 
         existing = {r.name for r in self.roles.list(parent.project_id)}
@@ -149,6 +161,7 @@ class Delegation:
                 reasoning=plan.reasoning,
                 children=[c.id for c in children],
                 roles=[r.name for r in plan.roles],
+                require_subtask_acceptance=self.require_subtask_acceptance,
             )
         return children
 

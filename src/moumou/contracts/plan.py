@@ -46,7 +46,16 @@ class SubtaskSpec(BaseModel):
     goal: str
     role: str                                     # existing role name or one from plan.roles
     deps: list[str] = Field(default_factory=list)
-    acceptance: list[Acceptance] = Field(default_factory=list)
+    acceptance: list[Acceptance] = Field(
+        default_factory=list,
+        description=(
+            "For code or file deliverables, include non-empty machine acceptance checks "
+            "that verify the subtask goal. Prefer execution or content checks over existence "
+            "alone. Checks run in the child's workspace after its dependencies arrive. "
+            "Empty acceptance records self_report and is rejected when strict subtask "
+            "acceptance is enabled."
+        ),
+    )
 
     @field_validator("key")
     @classmethod
@@ -66,4 +75,8 @@ class SubtaskSpec(BaseModel):
 class Plan(BaseModel):
     reasoning: str = ""
     roles: list[RoleDraft] = Field(default_factory=list)
-    subtasks: list[SubtaskSpec]
+    subtasks: list[SubtaskSpec] = Field(description=(
+        "Delegated specialist work only; respect any explicit task count and dependency "
+        "structure in the goal. The parent automatically resumes to review and finalize; "
+        "do not create another lead/finalization subtask."
+    ))

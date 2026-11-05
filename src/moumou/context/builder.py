@@ -45,6 +45,75 @@ NO_DEPS = "(this task has no upstream dependencies)"
 MAX_REPORT_CHARS = MAX_RESULT_CHARS
 MAX_REASON_CHARS = 200
 
+CLOSING_HANDOFF = """
+## Framework closing handoff
+All delegated children passed machine checks and their current artifact handoffs succeeded.
+Reuse the framework acceptance evidence above. Only inspect or execute again for a missing
+requirement, a changed artifact, conflicting evidence, or an unresolved issue. Group any
+necessary reads into one round instead of repeating listing, reading and execution.
+When the goal is covered, call submit_result with a concise summary and the delivered files.
+The framework will run the parent acceptance criteria in this workspace before marking DONE;
+submit_result requests that final validation and does not bypass it. Do not claim an unchecked
+requirement passed. If there is a new issue, fix or report that specific issue first.
+"""
+
+
+def _machine_checked(evidence) -> bool:
+    if not isinstance(evidence, dict) or evidence.get("ok") is not True:
+        return False
+    checks = evidence.get("checks") or []
+    return bool(checks) and all(
+        isinstance(check, dict) and check.get("ok") is True
+        and check.get("kind") in {"command", "pytest", "file_exists", "file_not_exists",
+                                  "file_contains", "json_key"}
+        for check in checks
+    )
+
+
+def _check_summary(evidence) -> str:
+    if not isinstance(evidence, dict):
+        return "framework acceptance: unavailable"
+    if not _machine_checked(evidence):
+        return "framework acceptance: unverified, self-report only, or failed"
+    lines = ["framework acceptance: passed"]
+    for check in evidence["checks"][:6]:
+        line = f"- {check['kind']} {str(check.get('target', ''))[:120]}: passed"
+        if check.get("exit_code") is not None:
+            line += f"; exit_code={check['exit_code']}"
+        if "stdout" in check:
+            line += "; stdout=" + json.dumps(str(check["stdout"])[:160], ensure_ascii=False)
+        if "value" in check:
+            line += "; value=" + str(check["value"])[:160]
+        lines.append(line)
+    return "\n".join(lines)[:1200]
+
+
+def _delivery_summary(delivery) -> str:
+    if not isinstance(delivery, dict):
+        return "artifact delivery: unverified"
+    if delivery.get("ok") is True and not delivery.get("conflicts") and not delivery.get("error"):
+        return "artifact delivery: succeeded"
+    details = str(delivery.get("error") or delivery.get("conflicts") or "unknown issue")
+    return "artifact delivery: failed; " + details[:MAX_REASON_CHARS]
+
+
+def _can_finish_from_handoff(node: TaskNode, role: RoleSpec, deps: list[dict]) -> bool:
+    if (role.name != LEAD_ROLE or not node.acceptance or not deps
+            or len(deps) != len(node.deps) or {d.get("id") for d in deps} != set(node.deps)):
+        return False
+    for dep in deps:
+        result = dep.get("result")
+        blockers = result.get("blockers", []) if isinstance(result, dict) else getattr(
+            result, "blockers", [])
+        delivery = dep.get("delivery") or {}
+        if (dep.get("parent_id") != node.id or dep.get("status") != "DONE"
+                or dep.get("error") or blockers or not dep.get("artifacts")
+                or not _machine_checked(dep.get("acceptance"))
+                or delivery.get("ok") is not True or delivery.get("conflicts")
+                or delivery.get("error")):
+            return False
+    return True
+
 
 def _render_result(result: ToolResult) -> str:
     parts = [f"ok={str(result.ok).lower()}"]
@@ -215,7 +284,12 @@ class ContextBuilder:
             system += BOARD_HEADER + "\n".join(f"- {s}" for s in notes)
 
         acceptance = (
-            "\n".join(f"- [{item.kind}] {item.target}" for item in node.acceptance)
+            "\n".join(
+                f"- [{item.kind}] {item.target}"
+                + (f" expect={json.dumps(item.expect, ensure_ascii=False)}"
+                   if item.expect is not None else "")
+                for item in node.acceptance
+            )
             if node.acceptance
             else "- (none declared — your own summary is the only check)"
         )
@@ -226,6 +300,8 @@ class ContextBuilder:
             acceptance=acceptance,
             deps=self._render_deps(deps[:dep_limit]),
         )
+        if _can_finish_from_handoff(node, role, deps[:dep_limit]):
+            brief += CLOSING_HANDOFF
         return system, brief
 
     @staticmethod
@@ -248,6 +324,8 @@ class ContextBuilder:
                 f"### {dep['id']} — {dep['role']} — {status}\n"
                 f"goal: {dep['goal']}\n"
                 f"files: {files}\n"
+                f"{_check_summary(dep.get('acceptance'))}\n"
+                f"{_delivery_summary(dep.get('delivery'))}\n"
                 f"report: {report}"
             )
         return "\n\n".join(blocks)

@@ -23,6 +23,7 @@ from moumou.contracts import (
     TaskResult,
     ToolResult,
 )
+from moumou.orchestrator.delegation import DelegationError
 
 
 class BudgetExceeded(RuntimeError):
@@ -80,10 +81,10 @@ class TaskRunner:
 
         agent = self._instance(node, role)
         workspace = Path(agent.workspace)
-        self._materialise_dependencies(node, workspace)
+        deliveries = self._materialise_dependencies(node, workspace)
 
         try:
-            await self._loop(node, role, agent, workspace)
+            await self._loop(node, role, agent, workspace, deliveries)
         except asyncio.CancelledError:
             self._park(node.id, "DEAD", "cancelled")
             raise
@@ -94,14 +95,15 @@ class TaskRunner:
 
     # -- the loop --------------------------------------------------------
     async def _loop(
-        self, node: TaskNode, role: RoleSpec, agent: AgentInstance, workspace: Path
+        self, node: TaskNode, role: RoleSpec, agent: AgentInstance, workspace: Path,
+        deliveries: dict | None = None,
     ) -> None:
         hits = (
             self.retriever.fetch(node, role)
             if self.retriever is not None and self.memory_enabled
             else []
         )
-        ctx = self.context.build(node, role, self._dep_reports(node), memory_hits=hits)
+        ctx = self.context.build(node, role, self._dep_reports(node, deliveries), memory_hits=hits)
         if ctx.memory_ids:
             self.citations[node.id] = list(ctx.memory_ids)
         self._subscribe(agent.id)
@@ -159,8 +161,25 @@ class TaskRunner:
 
             for call in response.tool_calls:
                 if call.name == "submit_plan":
-                    # Delegation transitions the parent to PENDING itself.
-                    self.delegation.apply(node, call.args)
+                    # Invalid proposals are tool feedback, not failed task attempts.
+                    try:
+                        self.delegation.apply(node, call.args)
+                    except DelegationError as exc:
+                        result = ToolResult(
+                            ok=False,
+                            error=(
+                                f"invalid_plan: {str(exc)[:2000]}\n"
+                                "No subtasks were created. Correct the plan and "
+                                "call submit_plan again."
+                            ),
+                        )
+                        self.trace.record(
+                            task_id=node.id, kind="delegate", name="plan_rejected",
+                            agent_id=agent.id, error=result.error,
+                        )
+                        ctx.add_tool_result(call.id, result)
+                        continue
+                    # Successful delegation transitions the parent to PENDING itself.
                     return
                 if call.name == "submit_result":
                     await self._finish(node, workspace, _coerce_result(call.args))
@@ -226,15 +245,20 @@ class TaskRunner:
     def _result_from(answer: str) -> TaskResult:
         return TaskResult(summary=answer or "")
 
-    def _dep_reports(self, node: TaskNode) -> list[dict]:
+    def _dep_reports(self, node: TaskNode, deliveries: dict | None = None) -> list[dict]:
         reports = []
         for dep_id in node.deps:
             dep = self.repo.get(dep_id)
             if dep is None:
                 continue
+            verdict = next((event.payload for event in reversed(self.trace.query(dep.id))
+                            if event.kind == "acceptance" and event.name == "verdict"), None)
             reports.append(
                 {
                     "id": dep.id,
+                    "parent_id": dep.parent_id,
+                    "acceptance": verdict,
+                    "delivery": (deliveries or {}).get(dep_id),
                     "role": dep.role,
                     "status": dep.status,
                     "goal": dep.goal,
@@ -268,21 +292,30 @@ class TaskRunner:
         self.repo.transition(node.id, "RUNNING", "human:answered")
         return ToolResult(ok=True, stdout=answer.text or "(the human gave no answer)")
 
-    def _materialise_dependencies(self, node: TaskNode, workspace: Path) -> None:
+    def _materialise_dependencies(self, node: TaskNode, workspace: Path) -> dict:
         """Pull each dependency's declared artifacts into our workspace.
 
         Artifacts are the only thing that crosses a workspace boundary, which is
         why "task B depends on task A" is both an ordering constraint and a data
         handoff. P1's git backend will do this with branches instead of copies.
         """
+        deliveries = {}
         for dep_id in node.deps:
             dep = self.repo.get(dep_id)
-            if dep is None or not dep.artifacts:
+            if dep is None:
+                deliveries[dep_id] = {"ok": False, "error": "missing_dependency"}
+                continue
+            if not dep.artifacts:
+                deliveries[dep_id] = {"ok": True, "files": [], "conflicts": []}
                 continue
             source = self.workspace.allocate(
                 dep.project_id, dep.conversation_id, f"{dep.role}@{dep.id}"
             )
             result = self.workspace.integrate(source, workspace, dep.artifacts)
+            deliveries[dep_id] = {
+                "ok": result.ok, "files": result.copied,
+                "conflicts": result.conflicts, "error": result.error,
+            }
             if result.copied:
                 self.trace.record(
                     task_id=node.id,
@@ -300,6 +333,7 @@ class TaskRunner:
                     conflicts=result.conflicts,
                     error=result.error,
                 )
+        return deliveries
 
     def _integrate_into_parent(self, node: TaskNode, workspace: Path) -> None:
         """Push this task's deliverables up so the parent can verify them."""

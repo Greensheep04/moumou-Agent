@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from moumou.contracts import Plan, RoleDraft, RoleSpec, SubtaskSpec, TaskNode
+from moumou.contracts import Acceptance, Plan, RoleDraft, RoleSpec, SubtaskSpec, TaskNode
 from moumou.orchestrator.delegation import Delegation, DelegationError
 from moumou.orchestrator.state import Database, SqliteRoleRegistry, SqliteTaskRepo
 
@@ -135,3 +135,33 @@ def test_a_woken_parent_re_dispatches_under_a_round_prefix(env):
 
     assert [c.id for c in children] == ["t1.r1.a", "t1.r1.b"]
     assert children[1].deps == ["t1.r1.a"]
+
+
+@pytest.mark.parametrize("empty", [True, False])
+def test_strict_mode_requires_checks_for_every_child_before_any_mutation(env, empty):
+    delegation, repo, roles = env
+    strict = Delegation(
+        repo, roles, delegation.trace, TOOLS, require_subtask_acceptance=True
+    )
+    parent = a_parent()
+    repo.add(parent)
+    repo.transition(parent.id, "READY", "submitted")
+    repo.transition(parent.id, "RUNNING", "dispatched")
+    checked = a_spec("first")
+    checked.acceptance = [Acceptance(kind="file_exists", target="first.txt")]
+    last = a_spec("last", deps=["first"])
+    if not empty:
+        last.acceptance = [Acceptance(kind="file_contains", target="last.txt", expect="done")]
+    payload = a_plan(checked, last, roles=[a_draft()]).model_dump()
+    if empty:
+        with pytest.raises(DelegationError, match="last.*acceptance"):
+            strict.apply(repo.get(parent.id), payload)
+        assert repo.children(parent.id) == []
+        assert roles.list("p") == []
+        assert repo.get(parent.id).status == "RUNNING"
+        assert repo.get(parent.id).deps == []
+    else:
+        children = strict.apply(repo.get(parent.id), payload)
+        assert len(children) == 2
+        assert all(child.acceptance for child in children)
+        assert children[1].deps == [children[0].id]

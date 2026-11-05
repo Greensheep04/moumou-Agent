@@ -43,7 +43,7 @@ from moumou.orchestrator import Engine, Settings
 from moumou.tools import ToolRegistry, default_tools
 
 registry = ToolRegistry()
-registry.register_all(*default_tools(), GitTool(), GitPushTool(), WebSearchTool())
+registry.register_all(*default_tools())  # includes Git/search tools; avoid duplicates
 
 engine = Engine(
     llm,

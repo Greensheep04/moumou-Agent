@@ -12,10 +12,11 @@ automatically — you should not need to edit the test.
 from __future__ import annotations
 
 import asyncio
-import os
+import sys
 import time
 
 import pytest
+from test_process_runner import alive, command
 
 from moumou.contracts import DEFAULT_APPROVAL, ToolContext, ToolResult
 from moumou.tools import default_tools
@@ -64,7 +65,7 @@ async def test_no_tool_raises_on_garbage_arguments(tools, ctx):
         for args in garbage:
             try:
                 result = await tool.run(args, ctx)
-            except Exception as exc:                     # noqa: BLE001 - that's the point
+            except Exception as exc:  # noqa: BLE001 - that's the point
                 pytest.fail(f"{name} raised {type(exc).__name__} on {args}: {exc}")
             assert isinstance(result, ToolResult), f"{name} did not return a ToolResult"
             assert isinstance(result.ok, bool)
@@ -102,7 +103,11 @@ async def test_reading_a_missing_file_is_an_error_not_a_crash(tools, ctx):
 async def test_shell_timeout_actually_kills_the_process(tools, ctx):
     started = time.monotonic()
     result = await tools["shell"].run(
-        {"command": "python3 -c 'import time; time.sleep(30)'", "timeout_s": 0.5}, ctx
+        {
+            "command": command([sys.executable, "-c", "import time; time.sleep(30)"]),
+            "timeout_s": 0.5,
+        },
+        ctx,
     )
     elapsed = time.monotonic() - started
 
@@ -115,15 +120,15 @@ async def test_cancelling_a_tool_kills_its_child(tools, ctx):
     """Ctrl-C during `make eval` must not leave orphaned commands behind."""
     pid_file = ctx.workspace / "child.pid"
     script = (
-        "import os, time; "
-        f"open({str(pid_file)!r}, 'w').write(str(os.getpid())); "
-        "time.sleep(30)"
+        f"import os, time; open({str(pid_file)!r}, 'w').write(str(os.getpid())); time.sleep(30)"
     )
     task = asyncio.create_task(
-        tools["shell"].run({"command": f'python3 -c "{script}"', "timeout_s": 60}, ctx)
+        tools["shell"].run(
+            {"command": command([sys.executable, "-c", script]), "timeout_s": 60}, ctx
+        )
     )
 
-    for _ in range(100):                      # wait for the child to announce itself
+    for _ in range(100):  # wait for the child to announce itself
         if pid_file.exists() and pid_file.read_text().strip():
             break
         await asyncio.sleep(0.05)
@@ -134,8 +139,7 @@ async def test_cancelling_a_tool_kills_its_child(tools, ctx):
         await task
 
     await asyncio.sleep(0.2)
-    with pytest.raises(ProcessLookupError):   # signal 0 only checks existence
-        os.kill(child_pid, 0)
+    assert not alive(child_pid), "child still running after cancellation"
 
 
 async def test_large_output_is_truncated(tools, ctx):
