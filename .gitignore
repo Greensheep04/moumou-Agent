@@ -23,3 +23,6 @@ runs/
 
 # os
 .DS_Store
+
+# Local P3 planning and development notes
+/docs/p3/
