@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import shlex
+import subprocess
+import sys
 from pathlib import Path
 
 from moumou.contracts import RoleRevisionDraft, TaskResult, ToolContext, ToolResult
@@ -19,6 +21,14 @@ from moumou.contracts.plan import Plan
 from moumou.tools.registry import flatten_schema
 
 MAX_OUTPUT = 8 * 1024
+
+
+def python_command(*args: str) -> str:
+    """Use the active interpreter with quoting for the platform's shell."""
+    argv = [sys.executable, *args]
+    if sys.platform == "win32":
+        return subprocess.list2cmdline(argv)
+    return shlex.join(argv)
 
 
 def resolve_in(workspace: Path, rel: str) -> Path:
@@ -209,7 +219,7 @@ class RunPythonTool:
         if not p.is_file():
             return ToolResult(ok=False, error=f"no such file: {rel}")
         extra = str(args.get("args", ""))
-        cmd = f"python3 {shlex.quote(str(p))} {extra}".strip()
+        cmd = f"{python_command(str(p))} {extra}".strip()
         return await run_process(cmd, ctx.workspace, self.timeout_s)
 
 

@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 
 from moumou.contracts import Acceptance, TaskNode
-from moumou.tools.builtin import resolve_in, run_process
+from moumou.tools.builtin import python_command, resolve_in, run_process
 
 
 class AcceptanceChecker:
@@ -81,7 +81,9 @@ class AcceptanceChecker:
     async def _pytest(self, item: Acceptance, workspace: Path, base: dict) -> dict:
         """Run pytest and keep the summary line, which is the useful part."""
         target = item.target.strip() or "."
-        result = await run_process(f"python3 -m pytest -q {target}", workspace, item.timeout_s)
+        result = await run_process(
+            python_command("-m", "pytest", "-q", target), workspace, item.timeout_s
+        )
         want = int(item.expect or "0")
         tail = (result.stdout or "").strip().splitlines()
         return {
