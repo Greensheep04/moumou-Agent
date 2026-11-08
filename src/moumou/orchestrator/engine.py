@@ -87,7 +87,11 @@ class Engine:
         self.db = Database(root / "moumou.db")
         self.repo = SqliteTaskRepo(self.db)
         self.roles = SqliteRoleRegistry(self.db)
-        self.trace = Recorder(root / "trace.jsonl")
+        try:
+            self.trace = Recorder(root / "trace.jsonl", sqlite_path=root / "trace.db")
+        except BaseException:
+            self.db.close()
+            raise
 
         self.bus = bus or InMemoryBus()
         self.human = human or AutoApproveHuman()

@@ -55,8 +55,9 @@ engine = Engine(
 )
 ```
 
-`TraceStore` / `MemoryStore` are currently served by the SQLite reference implementations; P3
-decides when to replace them.
+Trace collection uses the `Recorder` facade. `Engine` writes both `trace.jsonl` and SQLite
+`trace.db` by default. Memory uses a separate `SqliteMemoryStore` in `memory.db`, replaceable
+through `Engine(memory=...)`; it is not provided by `Recorder`.
 
 ### 0.4 How to test it
 
@@ -338,6 +339,8 @@ class MemoryStore(Protocol):
 `project_id` + `role` form the scope, `task_id` provides provenance; `situation` / `action` /
 `outcome` / `lesson` are the content; `score` and `uses` drive evolution.
 
+The current memory scope combines project and role, so instances of the same role share experience. How this maps to the course's independent Agent identity requirement still needs alignment; scope filtering alone does not prove isolation between every Agent instance.
+
 ### Implementation conventions
 
 | Item | Convention |
@@ -346,8 +349,29 @@ class MemoryStore(Protocol):
 | Scoping | `search` is isolated by scope; one agent's memories should not be retrievable by another |
 | Persistence | writes are durable across a restart |
 
-Reference implementations: `src/moumou/trace/recorder.py` (JSONL, trace only) and
-`src/moumou/memory/store.py` (SQLite, memory)
+Current implementations:
+
+- `src/moumou/store/trace.py`: `SqliteTraceStore` preserves complete `TraceEvent` data, filters exact task IDs and orders by UTC start time and `span_id`. Identical imports are idempotent; conflicting records cannot overwrite existing data.
+- `src/moumou/trace/recorder.py`: `Recorder` retains `span`, `record`, `query`, `all_events` and `close`, including its original one-argument JSONL use.
+- `src/moumou/memory/store.py`: separate SQLite memory storage; full contract and identity-isolation integration checks remain unfinished.
+
+### Current trace integration and recovery
+
+The default wiring inside `Engine` requires no change to Agent recording calls:
+
+```python
+self.trace = Recorder(root / "trace.jsonl", sqlite_path=root / "trace.db")
+```
+
+`Recorder(path)` still uses JSONL only. With `sqlite_path`, startup strictly imports the existing JSONL to fill missing projection events without rewriting the source. Each event is written and flushed to JSONL before SQLite is updated; the files do not share an atomic transaction.
+
+While healthy, `query(task_id)` uses SQLite's time ordering. `all_events()` retains JSONL record order for replay and existing metrics. Nested spans can finish in a different order from their start times; compare complete events by `span_id` when checking the two representations.
+
+A runtime SQLite read or write failure is exposed through `projection_error` and a warning. That instance pauses projection updates and queries the complete JSONL in time order. Reopening can fill missing projection events from a valid journal; invalid/conflicting records, external edits and extra database rows are not automatically repaired. SQLite failures do not replace the span's original business exception or cancellation.
+
+JSONL and SQLite must use different files. `Recorder.close()` closes both the file and projection connection; `Engine.close()` closes its default Recorder and memory store. The caller closes any injected external memory instance. A SQLite instance belongs to its creating thread; another thread needs its own connection.
+
+Only supplied `parent_span` values are currently preserved. Automatic parent capture and concurrent call-tree validation remain unfinished; the task dependency tree is not the span call tree.
 
 ---
 

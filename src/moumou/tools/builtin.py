@@ -11,10 +11,14 @@ Two rules every tool here follows, because the contract tests enforce them:
 from __future__ import annotations
 
 import asyncio
+import os
 import shlex
+import signal
 import subprocess
 import sys
+from contextlib import suppress
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from moumou.contracts import RoleRevisionDraft, TaskResult, ToolContext, ToolResult
 from moumou.contracts.plan import Plan
@@ -46,23 +50,94 @@ def _clip(text: str) -> tuple[str, bool]:
     return text, False
 
 
+async def _finish_cleanup(task: asyncio.Task) -> bool:
+    """Wait for owned-process cleanup even if the caller is cancelled again."""
+    cancelled = False
+    while True:
+        try:
+            await asyncio.shield(task)
+            return cancelled
+        except asyncio.CancelledError:
+            if task.cancelled():
+                raise
+            cancelled = True
+
+
+async def _stop_process_tree(proc: asyncio.subprocess.Process, output: asyncio.Task) -> None:
+    """Stop the owned shell tree, then drain its stdout/stderr readers."""
+    if sys.platform == "win32":
+        # Killing cmd.exe first loses its descendant tree. taskkill must see
+        # the original shell PID while it is alive to terminate its children.
+        taskkill = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/taskkill.exe"
+        killer = await asyncio.create_subprocess_exec(
+            str(taskkill), "/PID", str(proc.pid), "/T", "/F",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        await killer.wait()
+        if proc.returncode is None:
+            with suppress(ProcessLookupError):
+                proc.kill()
+    else:
+        # The command starts its own session, so this cannot kill the agent.
+        with suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    await output
+
+
 async def run_process(cmd: str, cwd: Path, timeout: float) -> ToolResult:
-    proc = await asyncio.create_subprocess_shell(
+    """Run shell text, resolving Windows python3 in the active environment."""
+    if sys.platform != "win32":
+        return await _run_process(cmd, cwd, timeout)
+
+    # Resolve the executable name rather than replacing text inside commands
+    # or Python source. The alias and PATH exist only for this invocation.
+    with TemporaryDirectory(prefix="moumou-python3-") as alias_dir:
+        alias = Path(alias_dir) / "python3.cmd"
+        alias.write_bytes(b'@echo off\r\n"%MOUMOU_PYTHON_EXECUTABLE%" %*\r\n')
+        env = dict(os.environ)
+        env["MOUMOU_PYTHON_EXECUTABLE"] = sys.executable
+        env["PATH"] = alias_dir + os.pathsep + env.get("PATH", "")
+        extensions = env.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+        if ".CMD" not in extensions.upper().split(";"):
+            extensions = extensions.rstrip(";") + ";.CMD"
+        env["PATHEXT"] = extensions
+        return await _run_process(cmd, cwd, timeout, env=env)
+
+
+async def _run_process(
+    cmd: str, cwd: Path, timeout: float, *, env: dict[str, str] | None = None,
+) -> ToolResult:
+    spawn = asyncio.create_task(asyncio.create_subprocess_shell(
         cmd,
         cwd=str(cwd),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-    )
+        env=env,
+        **({} if sys.platform == "win32" else {"start_new_session": True}),
+    ))
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        proc = await asyncio.shield(spawn)
+    except asyncio.CancelledError:
+        # A cancellation may arrive after OS creation but before Python hands
+        # us the Process. Retrieve it before cleaning up, rather than orphan it.
+        await _finish_cleanup(spawn)
+        proc = spawn.result()
+        output = asyncio.create_task(proc.communicate())
+        await _finish_cleanup(asyncio.create_task(_stop_process_tree(proc, output)))
+        raise
+
+    output = asyncio.create_task(proc.communicate())
+    try:
+        out, err = await asyncio.wait_for(asyncio.shield(output), timeout=timeout)
     except TimeoutError:
-        proc.kill()
-        await proc.wait()
+        cancelled = await _finish_cleanup(asyncio.create_task(_stop_process_tree(proc, output)))
+        if cancelled:
+            raise asyncio.CancelledError from None
         return ToolResult(ok=False, error=f"timeout after {timeout}s")
     except asyncio.CancelledError:
-        # Ctrl-C during a run, or an abort: the child must not outlive us.
-        proc.kill()
-        await proc.wait()
+        await _finish_cleanup(asyncio.create_task(_stop_process_tree(proc, output)))
         raise
 
     stdout, t1 = _clip(out.decode("utf-8", "replace"))
