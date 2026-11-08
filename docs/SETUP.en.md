@@ -129,7 +129,39 @@ environment is never touched.
 | --- | --- |
 | P1 execution layer | Docker (optional; the local sandbox does not need it) |
 | P2 interaction layer | A terminal with ANSI support (for the TUI) |
-| P3 evaluation layer | None |
+| P3 evaluation layer | No extra runtime dependency; see the native Windows / Conda entry point below |
+
+### P3: native Windows / Conda entry point
+
+P3 currently uses native Windows with the Conda `nlp` environment, verified on Python 3.12.16.
+The `make` / `.venv/bin/python` commands above describe the original Unix-style workflow.
+From PowerShell at the project root, P3 can use:
+
+```powershell
+conda activate nlp
+python -m pip install -e ".[dev]"
+python -m moumou.eval.cli --help
+```
+
+Configure the course-provided DeepSeek or HKGAI service in the local `.env`. The loader still
+uses `DEEPSEEK_*` variable names; set the compatible endpoint and model without committing
+the key. A model-backed P3 run can use a fresh output directory:
+
+```powershell
+$p3Out = "runs/p3-eval-" + [guid]::NewGuid().ToString("N")
+python -m moumou.eval.cli --tasks eval/tasks --only s1_hello --out $p3Out
+```
+
+This run uses the configured model API. Keep each batch's output directory separate; the
+current runner reuses an existing fixture/repeat directory. Each repeat retains `trace.jsonl`
+and its SQLite `trace.db` projection alongside the task database, memory and workspaces.
+
+Within framework-launched Windows shell commands, bare `python3` resolves through a temporary
+alias to the interpreter running the framework. The parent and system PATH are unchanged;
+use the activated environment's `python` or `conda run -n nlp python` in your own terminal.
+This is command-name compatibility, not general POSIX shell-syntax translation.
+Local development-test counts are not a clean-clone result when their test changes have not
+been uploaded; FakeLLM fixture checks are separate from real-model evaluation scores.
 
 ## 7. Directories and artifacts
 

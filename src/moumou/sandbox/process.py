@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from moumou.contracts import ToolResult
 from moumou.sandbox.output import MAX_OUTPUT, clip_bytes
@@ -22,7 +23,41 @@ def timeout_value(value):
     return value
 
 
+async def _finish_cleanup(task: asyncio.Task) -> bool:
+    """Wait for owned-process cleanup even through repeated cancellation."""
+    cancelled = False
+    while True:
+        try:
+            await asyncio.shield(task)
+            return cancelled
+        except asyncio.CancelledError:
+            if task.cancelled():
+                raise
+            cancelled = True
+
+
 async def run_command(command, cwd: Path, timeout=60.0, env=None, *, strip_git_env=False):
+    # Preserve main's shell alias resolution even inside compound commands,
+    # while keeping P1's bounded output and suspended Job Object launch.
+    if os.name != "nt" or not isinstance(command, str):
+        return await _run_command(command, cwd, timeout, env, strip_git_env=strip_git_env)
+    with TemporaryDirectory(prefix="moumou-python3-") as alias_dir:
+        alias = Path(alias_dir) / "python3.cmd"
+        alias.write_bytes(b'@echo off\r\n"%MOUMOU_PYTHON_EXECUTABLE%" %*\r\n')
+        child_env = dict(os.environ)
+        child_env.update(env or {})
+        child_env["MOUMOU_PYTHON_EXECUTABLE"] = sys.executable
+        child_env["PATH"] = alias_dir + os.pathsep + child_env.get("PATH", "")
+        extensions = child_env.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+        if ".CMD" not in extensions.upper().split(";"):
+            extensions = extensions.rstrip(";") + ";.CMD"
+        child_env["PATHEXT"] = extensions
+        return await _run_command(
+            command, cwd, timeout, child_env, strip_git_env=strip_git_env
+        )
+
+
+async def _run_command(command, cwd: Path, timeout=60.0, env=None, *, strip_git_env=False):
     timeout = timeout_value(timeout)
     child_env = dict(os.environ)
     child_env.update(env or {})
@@ -82,16 +117,29 @@ async def run_command(command, cwd: Path, timeout=60.0, env=None, *, strip_git_e
             await asyncio.gather(*readers, return_exceptions=True)
 
     try:
-        if isinstance(command, str):
-            proc = await asyncio.create_subprocess_shell(command, **kwargs)
-        else:
-            proc = await asyncio.create_subprocess_exec(*command, **kwargs)
+        create = (
+            asyncio.create_subprocess_shell(command, **kwargs)
+            if isinstance(command, str)
+            else asyncio.create_subprocess_exec(*command, **kwargs)
+        )
+        spawn = asyncio.create_task(create)
+        cancelled = False
+        try:
+            proc = await asyncio.shield(spawn)
+        except asyncio.CancelledError:
+            # Retrieve the process before handling cancellation so its group
+            # or suspended Windows process cannot escape our cleanup.
+            await _finish_cleanup(spawn)
+            proc = spawn.result()
+            cancelled = True
         if os.name == "nt" and proc.returncode is None:
             from moumou.sandbox.winjob import Job
 
             job = Job(proc.pid)
         readers = [asyncio.create_task(drain(proc.stdout)), asyncio.create_task(drain(proc.stderr))]
 
+        if cancelled:
+            raise asyncio.CancelledError from None
         if job:
             job.resume(proc.pid)
 
@@ -118,13 +166,17 @@ async def run_command(command, cwd: Path, timeout=60.0, env=None, *, strip_git_e
             truncated=t1 or t2,
         )
     except TimeoutError:
-        await cleanup()
+        cancelled = await _finish_cleanup(asyncio.create_task(cleanup()))
+        if cancelled:
+            raise asyncio.CancelledError from None
         return ToolResult(ok=False, error=f"timeout after {timeout}s")
     except asyncio.CancelledError:
-        await asyncio.shield(cleanup())
+        await _finish_cleanup(asyncio.create_task(cleanup()))
         raise
     except (OSError, ValueError) as exc:
-        await cleanup()
+        cancelled = await _finish_cleanup(asyncio.create_task(cleanup()))
+        if cancelled:
+            raise asyncio.CancelledError from None
         return ToolResult(ok=False, error=str(exc)[:1024])
     finally:
         if job:

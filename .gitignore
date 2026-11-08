@@ -10,6 +10,7 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+.idea/
 
 # runtime artifacts — never commit a run
 runs/
@@ -23,3 +24,9 @@ runs/
 
 # os
 .DS_Store
+
+# Local P3 planning and development notes
+/docs/p3/
+
+# Local development tests
+/tests/

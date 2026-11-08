@@ -10,6 +10,9 @@ Two rules every tool here follows, because the contract tests enforce them:
 
 from __future__ import annotations
 
+import shlex
+import subprocess
+import sys
 from pathlib import Path
 
 from moumou.contracts import RoleRevisionDraft, TaskResult, ToolContext, ToolResult
@@ -30,6 +33,14 @@ from moumou.tools.registry import flatten_schema
 from moumou.tools.search import WebSearchTool
 
 MAX_OUTPUT = 8 * 1024
+
+
+def python_command(*args: str) -> str:
+    """Use the active interpreter with quoting for the platform's shell."""
+    argv = [sys.executable, *args]
+    if sys.platform == "win32":
+        return subprocess.list2cmdline(argv)
+    return shlex.join(argv)
 
 
 def resolve_in(workspace: Path, rel: str) -> Path:
