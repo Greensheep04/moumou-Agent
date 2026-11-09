@@ -10,6 +10,7 @@ from moumou.adapters import FakeLLM, ScriptedHuman
 from moumou.adapters.llm import LLMResponse, ToolCall
 from moumou.contracts import Acceptance, Message
 from moumou.orchestrator import Engine, Settings
+from moumou.tools.builtin import python_command
 
 
 def settings(tmp_path, **kw) -> Settings:
@@ -307,7 +308,9 @@ PLAN_SEQ = {
             "goal": "verify that hello.py runs cleanly",
             "role": "python_dev",
             "deps": ["code"],
-            "acceptance": [{"kind": "command", "target": "python3 hello.py", "expect": "0"}],
+            "acceptance": [
+                {"kind": "command", "target": python_command("hello.py"), "expect": "0"}
+            ],
         },
     ],
 }

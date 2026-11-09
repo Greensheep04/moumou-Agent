@@ -145,16 +145,30 @@ python -m moumou.eval.cli --help
 
 Configure the course-provided DeepSeek or HKGAI service in the local `.env`. The loader still
 uses `DEEPSEEK_*` variable names; set the compatible endpoint and model without committing
-the key. A model-backed P3 run can use a fresh output directory:
+the key. A model-backed P3 run creates a fresh batch directory by default:
 
 ```powershell
-$p3Out = "runs/p3-eval-" + [guid]::NewGuid().ToString("N")
-python -m moumou.eval.cli --tasks eval/tasks --only s1_hello --out $p3Out
+python -m moumou.eval.cli --tasks eval/tasks --only s1_hello
 ```
 
-This run uses the configured model API. Keep each batch's output directory separate; the
-current runner reuses an existing fixture/repeat directory. Each repeat retains `trace.jsonl`
-and its SQLite `trace.db` projection alongside the task database, memory and workspaces.
+This command uses the configured model API. The default output is a unique directory under
+`runs/eval/`. An explicit `--out` selects the exact batch directory; an existing nonempty batch
+or repeat directory is rejected rather than reused. Use `--workspace-backend git` to exercise
+P1 worktree delivery, or keep the default `local` backend. `--eval-id` optionally supplies the
+identifier recorded in the batch manifest.
+
+Each batch saves `manifest.json`, `results.jsonl` and `report.md`. The manifest identifies the
+current source snapshot, Git version, fixture hashes and public run configuration; credentials
+are excluded. Each `<fixture_id>/r<repeat>/` retains its `result.json`, `trace.jsonl`, SQLite
+`trace.db`, task and memory databases, and private workspaces. Results are persisted after each
+attempt, including failures, so an interrupted batch retains earlier completed results.
+
+For inspection after interruption, `moumou.eval.artifacts.load_results(batch_path)` reads the
+per-run result files; it can recover records whose JSONL append was interrupted. This is an
+inspection path, not automatic continuation of an old batch. Per-run writes and the batch
+journal do not form a shared atomic transaction. Hard process termination and complete time /
+token accounting remain separate evaluation work; recorded Engine metrics retain their
+documented scope.
 
 Within framework-launched Windows shell commands, bare `python3` resolves through a temporary
 alias to the interpreter running the framework. The parent and system PATH are unchanged;

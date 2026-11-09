@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from moumou.eval.loader import TaskFixture, load_task, load_tasks
 
@@ -41,7 +42,7 @@ def test_executable_acceptance_needs_expect(tmp_path):
         "acceptance:\n  - kind: command\n    target: 'true'\n",
         encoding="utf-8",
     )
-    with pytest.raises(Exception, match="expect"):
+    with pytest.raises(ValidationError, match="expect"):
         load_task(bad)
 
 
@@ -50,7 +51,7 @@ def test_unknown_scenario_is_rejected(tmp_path):
     bad.write_text(
         "id: x\ntitle: t\nscenario: make_coffee\ngoal: g\n", encoding="utf-8"
     )
-    with pytest.raises(Exception, match="unknown scenario"):
+    with pytest.raises(ValidationError, match="unknown scenario"):
         load_task(bad)
 
 

@@ -11,7 +11,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from moumou.adapters import DeepSeekClient
 from moumou.config import LLMSettings
@@ -20,11 +22,20 @@ from moumou.eval.runner import render_markdown, run_all
 from moumou.eval.workspace import BACKENDS, check_batch_dir
 
 
+def _positive_int(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return number
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Run the Moumou evaluation set")
     p.add_argument("--tasks", default="eval/tasks", help="directory of task YAML files")
-    p.add_argument("--out", default="runs/eval", help="where run artifacts and the report go")
-    p.add_argument("--repeats", type=int, default=None, help="override repeats per task")
+    p.add_argument("--out", default=None,
+                   help="exact batch directory; defaults to a fresh directory under runs/eval")
+    p.add_argument("--eval-id", default=None, help="batch identifier saved in the manifest")
+    p.add_argument("--repeats", type=_positive_int, default=None, help="override repeats per task")
     p.add_argument("--model", default=None, help="override DEEPSEEK_MODEL")
     p.add_argument("--only", default=None, help="run a single task id")
     p.add_argument("--workspace-backend", choices=BACKENDS, default="local",
@@ -33,27 +44,37 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 async def main_async(args: argparse.Namespace) -> int:
-    fixtures = load_tasks(Path(args.tasks))
+    if args.repeats is not None and args.repeats < 1:
+        print("repeats must be a positive integer", file=sys.stderr)
+        return 2
+    try:
+        fixtures = load_tasks(Path(args.tasks))
+    except (OSError, ValueError) as exc:
+        print(f"cannot load evaluation tasks: {exc}", file=sys.stderr)
+        return 2
     if args.only:
         fixtures = [f for f in fixtures if f.id == args.only]
         if not fixtures:
             print(f"no task with id {args.only!r}", file=sys.stderr)
             return 2
-
-    settings = LLMSettings.from_env()
-    try:
-        settings.require_key()
-    except RuntimeError as exc:
-        print(str(exc), file=sys.stderr)
+    if not fixtures:
+        print("the evaluation set is empty", file=sys.stderr)
         return 2
 
-    out = Path(args.out)
+    batch_name = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex
+    out = Path(args.out) if args.out else Path("runs/eval") / batch_name
     try:
         check_batch_dir(out)
     except OSError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    out.mkdir(parents=True, exist_ok=True)
+
+    try:
+        settings = LLMSettings.from_env()
+        settings.require_key()
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     llm = DeepSeekClient(
         api_key=settings.api_key,
@@ -65,7 +86,8 @@ async def main_async(args: argparse.Namespace) -> int:
 
     try:
         results = await run_all(
-            fixtures, llm, out, repeats=args.repeats, workspace_backend=args.workspace_backend
+            fixtures, llm, out, repeats=args.repeats, workspace_backend=args.workspace_backend,
+            eval_id=args.eval_id,
         )
     except (ValueError, FileExistsError, PermissionError) as exc:
         print(f"evaluation setup failed: {exc}; use a fresh --out directory", file=sys.stderr)
@@ -74,14 +96,16 @@ async def main_async(args: argparse.Namespace) -> int:
         await llm.aclose()
 
     report = render_markdown(results)
-    (out / "report.md").write_text(report, encoding="utf-8")
     print(report)
     print(f"report written to {(out / 'report.md').resolve()}")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    return asyncio.run(main_async(parse_args(argv)))
+    try:
+        return asyncio.run(main_async(parse_args(argv)))
+    except KeyboardInterrupt:
+        return 130
 
 
 if __name__ == "__main__":

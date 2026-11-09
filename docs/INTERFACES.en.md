@@ -373,6 +373,26 @@ JSONL and SQLite must use different files. `Recorder.close()` closes both the fi
 
 Only supplied `parent_span` values are currently preserved. Automatic parent capture and concurrent call-tree validation remain unfinished; the task dependency tree is not the span call tree.
 
+### Evaluation artifacts for integration and replay
+
+`run_all(fixtures, llm, root, ..., workspace_backend="local", eval_id=None)` treats `root` as
+one fresh batch directory. The `git` workspace backend remains available for P1 delivery
+checks. Direct `run_once` keeps the existing `<root>/<fixture_id>/r<repeat>/` layout; reused
+run directories are rejected. Each run retains its own databases, trace and workspace tree.
+
+The batch `manifest.json` records the evaluation identity, code and fixture hashes, public
+model/configuration metadata, and planned runs. Per-run `result.json` contains status, task
+and acceptance observations, metrics and evidence paths; unavailable measurements are null.
+`results.jsonl` is appended after each attempt, while `report.md` provides a readable view.
+P2 consumers should use these saved paths instead of assuming a shared trace/database.
+
+`moumou.eval.artifacts.load_results(root)` reads authoritative per-run result files using the
+manifest plan, including a result saved before its batch-journal append was interrupted.
+It does not resume execution. Results and the journal are separate durable writes; there is
+no atomic transaction spanning both files. Machine acceptance is distinguished from empty
+acceptance/self-report, and Engine-reported metrics are not a claim of complete token or
+hard-timeout coverage.
+
 ---
 
 ## 6. `TaskRepo` (used by the orchestration layer; reference only)
