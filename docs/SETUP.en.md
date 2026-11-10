@@ -166,12 +166,31 @@ attempt, including failures, so an interrupted batch retains earlier completed r
 For inspection after interruption, `moumou.eval.artifacts.load_results(batch_path)` reads the
 per-run result files; it can recover records whose JSONL append was interrupted. This is an
 inspection path, not automatic continuation of an old batch. Per-run writes and the batch
-journal do not form a shared atomic transaction. Hard process termination and complete time /
-token accounting remain separate evaluation work; recorded Engine metrics retain their
-documented scope.
+journal do not form a shared atomic transaction. Recorded Engine metrics retain their
+documented scope; complete time/token accounting is separate evaluation work.
 
-Within framework-launched Windows shell commands, bare `python3` resolves through a temporary
-alias to the interpreter running the framework. The parent and system PATH are unchanged;
+For a supervised whole-attempt deadline on native Windows, opt in explicitly:
+
+```powershell
+python -m moumou.eval.cli --tasks eval/tasks --only s1_hello --hard-timeout 900
+```
+
+With `--hard-timeout`, each attempt runs in a fresh Python process. The parent starts the
+worker suspended, assigns its Windows Job Object, then resumes it. The deadline includes
+startup, execution and client shutdown; process-tree cleanup has a separate bounded grace
+period. A candidate result becomes authoritative only after a normal worker exit, identity
+validation and verified cleanup. Timeout, startup/worker failure and malformed results are
+saved as failed attempts rather than accepted as success. Previously written traces remain.
+
+Without this option, the original in-process integration API is retained. Hard worker mode
+currently requires native Windows; it does not claim POSIX containment across detached
+sessions. The OS process-creation call itself cannot be preempted by the Python supervisor.
+The worker rebuilds its own model client; credentials are passed through a private child
+environment field, excluded from the JSON request, command line and artifact metadata.
+
+Within framework-launched shell commands on Windows and POSIX, bare `python3` resolves through
+a temporary alias to the interpreter running the framework, including compound and nested
+commands. The parent and system PATH are unchanged;
 use the activated environment's `python` or `conda run -n nlp python` in your own terminal.
 This is command-name compatibility, not general POSIX shell-syntax translation.
 Local development-test counts are not a clean-clone result when their test changes have not

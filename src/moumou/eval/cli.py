@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import math
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -29,6 +30,13 @@ def _positive_int(value: str) -> int:
     return number
 
 
+def _positive_float(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise argparse.ArgumentTypeError("must be a finite positive number")
+    return number
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Run the Moumou evaluation set")
     p.add_argument("--tasks", default="eval/tasks", help="directory of task YAML files")
@@ -40,6 +48,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--only", default=None, help="run a single task id")
     p.add_argument("--workspace-backend", choices=BACKENDS, default="local",
                    help="workspace provider; use git to evaluate P1 worktree delivery")
+    p.add_argument("--hard-timeout", type=_positive_float, default=None, metavar="SECONDS",
+                   help="run each attempt in a supervised Windows process with this deadline")
     return p.parse_args(argv)
 
 
@@ -47,6 +57,14 @@ async def main_async(args: argparse.Namespace) -> int:
     if args.repeats is not None and args.repeats < 1:
         print("repeats must be a positive integer", file=sys.stderr)
         return 2
+    hard_timeout = getattr(args, "hard_timeout", None)
+    if hard_timeout is not None:
+        if not math.isfinite(hard_timeout) or hard_timeout <= 0:
+            print("hard timeout must be a finite positive number", file=sys.stderr)
+            return 2
+        if sys.platform != "win32":
+            print("hard process isolation currently requires native Windows", file=sys.stderr)
+            return 2
     try:
         fixtures = load_tasks(Path(args.tasks))
     except (OSError, ValueError) as exc:
@@ -88,6 +106,7 @@ async def main_async(args: argparse.Namespace) -> int:
         results = await run_all(
             fixtures, llm, out, repeats=args.repeats, workspace_backend=args.workspace_backend,
             eval_id=args.eval_id,
+            hard_timeout_s=hard_timeout,
         )
     except (ValueError, FileExistsError, PermissionError) as exc:
         print(f"evaluation setup failed: {exc}; use a fresh --out directory", file=sys.stderr)

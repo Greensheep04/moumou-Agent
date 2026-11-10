@@ -37,21 +37,27 @@ async def _finish_cleanup(task: asyncio.Task) -> bool:
 
 
 async def run_command(command, cwd: Path, timeout=60.0, env=None, *, strip_git_env=False):
-    # Preserve main's shell alias resolution even inside compound commands,
-    # while keeping P1's bounded output and suspended Job Object launch.
-    if os.name != "nt" or not isinstance(command, str):
+    # A child-only PATH alias also covers compound commands and nested shells.
+    # Argument-list execution already receives the exact requested executable.
+    if not isinstance(command, str):
         return await _run_command(command, cwd, timeout, env, strip_git_env=strip_git_env)
     with TemporaryDirectory(prefix="moumou-python3-") as alias_dir:
-        alias = Path(alias_dir) / "python3.cmd"
-        alias.write_bytes(b'@echo off\r\n"%MOUMOU_PYTHON_EXECUTABLE%" %*\r\n')
+        if os.name == "nt":
+            alias = Path(alias_dir) / "python3.cmd"
+            alias.write_bytes(b'@echo off\r\n"%MOUMOU_PYTHON_EXECUTABLE%" %*\r\n')
+        else:
+            alias = Path(alias_dir) / "python3"
+            alias.write_bytes(b'#!/bin/sh\nexec "$MOUMOU_PYTHON_EXECUTABLE" "$@"\n')
+            alias.chmod(0o700)
         child_env = dict(os.environ)
         child_env.update(env or {})
         child_env["MOUMOU_PYTHON_EXECUTABLE"] = sys.executable
         child_env["PATH"] = alias_dir + os.pathsep + child_env.get("PATH", "")
-        extensions = child_env.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
-        if ".CMD" not in extensions.upper().split(";"):
-            extensions = extensions.rstrip(";") + ";.CMD"
-        child_env["PATHEXT"] = extensions
+        if os.name == "nt":
+            extensions = child_env.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+            if ".CMD" not in extensions.upper().split(";"):
+                extensions = extensions.rstrip(";") + ";.CMD"
+            child_env["PATHEXT"] = extensions
         return await _run_command(
             command, cwd, timeout, child_env, strip_git_env=strip_git_env
         )

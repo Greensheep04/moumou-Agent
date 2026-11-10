@@ -68,6 +68,12 @@ class FixtureResult:
     usage_missing_calls: int | None = None
     total_tokens_in: int | None = None
     total_tokens_out: int | None = None
+    execution_mode: str = "in_process"
+    hard_timeout_s: float | None = None
+    worker_pid: int | None = None
+    worker_exit_code: int | None = None
+    cleanup_s: float | None = None
+    cleanup_complete: bool | None = None
 
 
 def _empty_result(fixture, run_dir, repeat, eval_id) -> FixtureResult:
@@ -153,11 +159,12 @@ def _observe(result: FixtureResult, engine, fixture, llm) -> None:
 
 async def run_once(
     fixture: TaskFixture, llm, root: Path, repeat: int, *, workspace_backend: str = "local",
-    eval_id: str | None = None,
+    eval_id: str | None = None, _result_path: Path | None = None,
 ) -> FixtureResult:
     if workspace_backend not in BACKENDS:
         raise ValueError(f"unknown workspace backend: {workspace_backend}")
     run_dir = create_run_dir(root, fixture.id, repeat)
+    result_path = Path(_result_path) if _result_path is not None else run_dir / "result.json"
     started = monotonic()
     result = _empty_result(fixture, run_dir, repeat, eval_id)
     phase = "setup"
@@ -197,10 +204,10 @@ async def run_once(
         result.error_message = f"{type(exc).__name__}: {redact(str(exc), llm)}"
         result.errors.append(result.error_message)
         result.finished_at, result.elapsed_s = utc_now(), round(monotonic() - started, 6)
-        atomic_json(run_dir / "result.json", asdict(result))
+        atomic_json(result_path, asdict(result))
         raise
     result.finished_at, result.elapsed_s = utc_now(), round(monotonic() - started, 6)
-    atomic_json(run_dir / "result.json", asdict(result))
+    atomic_json(result_path, asdict(result))
     return result
 
 
@@ -223,6 +230,8 @@ def _validate_batch(fixtures, repeats, workspace_backend, eval_id):
             raise ValueError("fixture id must be one safe directory name")
         if name.casefold() in seen:
             raise ValueError("duplicate or case-colliding fixture ids")
+        if name.casefold() in {".workers", ".batch", "manifest.json", "results.jsonl", "report.md"}:
+            raise ValueError("fixture id conflicts with reserved batch metadata")
         seen.add(name.casefold())
     if eval_id is not None and (
         not isinstance(eval_id, str)
@@ -263,10 +272,39 @@ def _attempt_record(fixture, llm, root, repeat, eval_id, exc, started, started_a
 async def run_all(
     fixtures: list[TaskFixture], llm, root: Path, repeats: int | None = None,
     *, workspace_backend: str = "local", eval_id: str | None = None,
+    hard_timeout_s: float | None = None, worker_factory: str | None = None,
 ) -> list[FixtureResult]:
     _validate_batch(fixtures, repeats, workspace_backend, eval_id)
+    client_spec, client_env = None, None
+    if hard_timeout_s is not None:
+        from moumou.eval.isolation import prepare_client, validate_timeout
+
+        hard_timeout_s = validate_timeout(hard_timeout_s)
+        client_spec, client_env = prepare_client(llm, worker_factory)
+    elif worker_factory is not None:
+        raise ValueError("worker_factory requires hard_timeout_s; no silent in-process fallback")
     root = reserve_batch_dir(root)
     manifest = create_manifest(root, fixtures, llm, repeats, workspace_backend, eval_id=eval_id)
+    manifest["settings"]["worker"] = {
+        "execution_mode": "process" if hard_timeout_s is not None else "in_process",
+        "hard_timeout_s": hard_timeout_s,
+        "cleanup_timeout_s": 5.0 if hard_timeout_s is not None else None,
+        "worker_factory": worker_factory,
+        "fresh_client_per_attempt": hard_timeout_s is not None,
+    }
+    if hard_timeout_s is not None:
+        manifest["measurement_limits"] = [
+            item for item in manifest["measurement_limits"]
+            if not item.startswith("Hard process kill recovery")
+        ] + [
+            "Worker containment is native Windows only, with a separate bounded cleanup grace.",
+            "Synchronous OS launch/Job calls and host filesystem/kernel stalls "
+            "are not preemptible.",
+        ]
+        if worker_factory is not None:
+            manifest["purpose"] = "custom_worker_validation"
+            manifest["model"] = {"client_factory": worker_factory, "provider": None, "model": None}
+    atomic_json(root / "manifest.json", manifest)
     results: list[FixtureResult] = []
     try:
         for fixture in fixtures:
@@ -275,10 +313,19 @@ async def run_all(
                 started = monotonic()
                 started_at = utc_now()
                 try:
-                    result = await run_once(
-                        fixture, llm, root, repeat, workspace_backend=workspace_backend,
-                        eval_id=manifest["eval_id"],
-                    )
+                    if hard_timeout_s is None:
+                        result = await run_once(
+                            fixture, llm, root, repeat, workspace_backend=workspace_backend,
+                            eval_id=manifest["eval_id"],
+                        )
+                    else:
+                        from moumou.eval.isolation import run_isolated
+
+                        result = await run_isolated(
+                            fixture, llm, root, repeat, workspace_backend=workspace_backend,
+                            eval_id=manifest["eval_id"], hard_timeout_s=hard_timeout_s,
+                            client_spec=client_spec, client_env=client_env,
+                        )
                 except BaseException as exc:
                     result = _attempt_record(
                         fixture, llm, root, repeat, manifest["eval_id"], exc, started, started_at
@@ -292,6 +339,8 @@ async def run_all(
                     append_result(root, asdict(result))
                 manifest["completed_runs"] = len(results)
                 atomic_json(root / "manifest.json", manifest)
+                if result.error_type == "cleanup_failed":
+                    raise RuntimeError("Worker cleanup could not be verified; batch stopped")
         manifest["status"] = "completed"
     except BaseException as exc:
         manifest["status"] = "interrupted" if isinstance(

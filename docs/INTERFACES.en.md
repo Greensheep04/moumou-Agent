@@ -390,8 +390,31 @@ P2 consumers should use these saved paths instead of assuming a shared trace/dat
 manifest plan, including a result saved before its batch-journal append was interrupted.
 It does not resume execution. Results and the journal are separate durable writes; there is
 no atomic transaction spanning both files. Machine acceptance is distinguished from empty
-acceptance/self-report, and Engine-reported metrics are not a claim of complete token or
-hard-timeout coverage.
+acceptance/self-report, and Engine-reported metrics are not a claim of complete token coverage.
+
+### Supervised evaluation attempts
+
+`run_all(..., hard_timeout_s=None, worker_factory=None)` retains the in-process object API
+when the deadline is absent. A positive deadline selects a separate supervised Python
+worker per attempt. This mode currently requires native Windows and uses suspended launch,
+a parent-owned Job Object and bounded cleanup, including descendants launched by P1 tools.
+The deadline covers startup, execution and client shutdown; OS process creation itself is
+not preemptible by the Python supervisor.
+
+Worker requests and diagnostic/candidate files live below the batch's private worker
+artifact directory. The parent validates the candidate's schema, nonce, batch/fixture/repeat
+identity, path and field types after process exit and cleanup, then publishes the normal
+per-run `result.json`. A success candidate written by a worker that later hangs or crashes
+is not success. Timeouts, startup failures, crashes and invalid results remain inspectable;
+an unverified cleanup cannot be presented as successful containment.
+
+Model clients are rebuilt and closed inside the worker, not pickled or shared. DeepSeek /
+HKGAI configuration is public metadata; its key travels only in the private child environment.
+Queued `FakeLLM` responses are portable. Callable/closure clients require an explicit trusted
+`module:function` factory, supplied through the Python API rather than task-fixture content.
+Factories receive the `TaskFixture` and synchronously return a client; this is intended for
+deterministic offline integration checks. The public CLI exposes `--hard-timeout SECONDS`
+and does not expose arbitrary factory imports.
 
 ---
 
