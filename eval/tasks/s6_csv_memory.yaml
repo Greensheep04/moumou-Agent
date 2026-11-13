@@ -1,0 +1,50 @@
+id: s6_csv_memory
+title: Transfer a CSV parsing lesson to a held-out customer import
+scenario: use_memory
+goal: Apply relevant historical CSV parsing experience to a new customer import. Create customers.py parse_customers(text),
+  handling UTF-8 BOM, quoted commas,Unicode names and empty email strings. Return dictionaries with name/email strings.
+  Read customers.csv and write customers.json. Use correct CSV parsing rather than splitting commas.
+acceptance:
+- kind: command
+  target: "python3 -c \"import customers; assert customers.parse_customers('\uFEFFname,email\\n\\\"Lee, Kim\\\"\
+    ,lee@example.test\\nZoë,\\n')==[{'name':'Lee, Kim','email':'lee@example.test'},{'name':'Zoë','email':''}]; assert\
+    \ customers.parse_customers('name,email\\nA,a@example.test\\n')==[{'name':'A','email':'a@example.test'}]; assert\
+    \ customers.parse_customers('name,email\\n')==[]\""
+  expect: '0'
+  timeout_s: 30
+- kind: command
+  target: python3 -c "import json,pathlib; assert json.loads(pathlib.Path('customers.json').read_text(encoding='utf-8'))==[{'name':'Lee,
+    Kim','email':'lee@example.test'},{'name':'Zoë','email':''}]"
+  expect: '0'
+  timeout_s: 30
+budget:
+  max_steps: 35
+  max_wall_s: 600
+  max_retries: 1
+human:
+  default: approve
+repeats: 3
+tags:
+- use_memory
+notes: Self-built task. Offline acceptance probes are not model performance scores.
+setup:
+  customers.csv: "\uFEFFname,email\n\"Lee, Kim\",lee@example.test\nZoë,\n"
+requirements:
+  memory_injection: true
+warmup:
+  goal: Fix inventory.py parse_inventory(text) to parse inventory CSV rows with quoted commas in label fields and
+    return dictionaries preserving header names. Verify general parsing and extract reusable structured-delimiter
+    lessons. This historical dataset has different columns/data from later held-out imports.
+  setup:
+    inventory.py: "def parse_inventory(text):\n    rows = [line.split(',') for line in text.splitlines()]\n    return\
+      \ [dict(zip(rows[0], row)) for row in rows[1:]]\n"
+  acceptance:
+  - kind: command
+    target: python3 -c "import inventory; assert inventory.parse_inventory('sku,label\nx1,\"blue, large\"\n')==[{'sku':'x1','label':'blue,
+      large'}]; assert inventory.parse_inventory('sku,label\n')==[]"
+    expect: '0'
+    timeout_s: 30
+  budget:
+    max_steps: 25
+    max_wall_s: 420
+    max_retries: 1

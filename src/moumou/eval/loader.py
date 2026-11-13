@@ -7,9 +7,10 @@ One YAML file = one task. The format is deliberately boring so that writing the
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from moumou.contracts import Acceptance, Budget
 
@@ -30,6 +31,45 @@ class HumanScript(BaseModel):
         return v
 
 
+class ApprovalRequirement(BaseModel):
+    """A decision and the corresponding tool effect must both be observable."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tool: str = Field(min_length=1)
+    decision: Literal["approve", "reject"]
+
+
+class BehaviorRequirements(BaseModel):
+    """Evaluation-only evidence checks; the shared acceptance protocol is unchanged."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    approvals: list[ApprovalRequirement] = Field(default_factory=list)
+    required_tools: list[str] = Field(default_factory=list)
+    min_children: int = Field(default=0, ge=0)
+    memory_injection: bool = False
+    parallel_children: bool = False
+
+    @field_validator("required_tools")
+    @classmethod
+    def _nonblank_unique_tools(cls, values: list[str]) -> list[str]:
+        if any(not value.strip() for value in values) or len(set(values)) != len(values):
+            raise ValueError("required_tools must contain unique, nonblank names")
+        return values
+
+
+class WarmupSpec(BaseModel):
+    """A separate experience, never a copy of the held-out task's answers."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    goal: str = Field(min_length=1)
+    setup: dict[str, str] = Field(default_factory=dict)
+    acceptance: list[Acceptance] = Field(default_factory=list)
+    budget: Budget = Field(default_factory=Budget)
+
+
 class TaskFixture(BaseModel):
     id: str
     title: str
@@ -42,6 +82,8 @@ class TaskFixture(BaseModel):
     repeats: int = Field(default=1, ge=1, le=10)
     tags: list[str] = Field(default_factory=list)
     notes: str = ""
+    requirements: BehaviorRequirements = Field(default_factory=BehaviorRequirements)
+    warmup: WarmupSpec | None = None
 
     @field_validator("scenario")
     @classmethod

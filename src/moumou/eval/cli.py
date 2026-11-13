@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import math
 import sys
 from datetime import UTC, datetime
@@ -50,7 +51,36 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="workspace provider; use git to evaluate P1 worktree delivery")
     p.add_argument("--hard-timeout", type=_positive_float, default=None, metavar="SECONDS",
                    help="run each attempt in a supervised Windows process with this deadline")
+    p.add_argument("--ablation", action="store_true",
+                   help="run four fixed long-term-memory / scheduling groups")
+    p.add_argument("--plan", action="store_true",
+                   help="print the ablation plan without model calls or output creation")
+    p.add_argument("--memory", action=argparse.BooleanOptionalAction, default=None,
+                   help="enable/disable long-term experience memory; the conclusion board remains")
+    p.add_argument("--max-slots", type=_positive_int, default=None,
+                   help="maximum concurrent task slots for a single evaluation group")
+    p.add_argument("--role-review", action=argparse.BooleanOptionalAction, default=None,
+                   help="enable/disable post-run role revision")
     return p.parse_args(argv)
+
+
+def _print_plan(args, fixtures=None) -> int:
+    if not getattr(args, "ablation", False):
+        print("--plan requires --ablation", file=sys.stderr)
+        return 2
+    from moumou.eval.ablation import plan_ablation
+
+    try:
+        if fixtures is None:
+            fixtures = load_tasks(Path(args.tasks))
+            if args.only:
+                fixtures = [fixture for fixture in fixtures if fixture.id == args.only]
+        plan = plan_ablation(fixtures, repeats=args.repeats or 3)
+    except (OSError, ValueError) as exc:
+        print(f"cannot plan evaluation: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(plan, indent=2))
+    return 0
 
 
 async def main_async(args: argparse.Namespace) -> int:
@@ -78,6 +108,28 @@ async def main_async(args: argparse.Namespace) -> int:
     if not fixtures:
         print("the evaluation set is empty", file=sys.stderr)
         return 2
+    ablation = getattr(args, "ablation", False)
+    if getattr(args, "plan", False):
+        return _print_plan(args, fixtures)
+    explicit_controls = any(getattr(args, key, None) is not None
+                            for key in ("memory", "max_slots", "role_review"))
+    if ablation and (explicit_controls or args.eval_id):
+        print("ablation groups fix memory, scheduling, role review and nested eval ids",
+              file=sys.stderr)
+        return 2
+    options = None
+    if explicit_controls:
+        from moumou.eval.options import EvaluationOptions
+
+        try:
+            options = EvaluationOptions(
+                memory_enabled=args.memory if args.memory is not None else True,
+                max_slots=args.max_slots if args.max_slots is not None else 4,
+                role_review_enabled=args.role_review if args.role_review is not None else False,
+            )
+        except ValueError as exc:
+            print(f"invalid evaluation controls: {exc}", file=sys.stderr)
+            return 2
 
     batch_name = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex
     out = Path(args.out) if args.out else Path("runs/eval") / batch_name
@@ -94,12 +146,22 @@ async def main_async(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    llm = DeepSeekClient(
-        api_key=settings.api_key,
-        base_url=settings.base_url,
-        model=args.model or settings.model,
-        timeout_s=settings.timeout_s,
-    )
+    def make_client():
+        return DeepSeekClient(
+            api_key=settings.api_key, base_url=settings.base_url,
+            model=args.model or settings.model, timeout_s=settings.timeout_s,
+        )
+
+    if ablation:
+        from moumou.eval.ablation import run_ablation
+
+        manifest = await run_ablation(
+            fixtures, make_client, out, repeats=args.repeats or 3,
+            workspace_backend=args.workspace_backend, hard_timeout_s=hard_timeout,
+        )
+        print(f"ablation {manifest['status']}: {(out / 'report.md').resolve()}")
+        return 0 if manifest["status"] == "completed" else 1
+    llm = make_client()
     print(f"model: {args.model or settings.model}   tasks: {len(fixtures)}")
 
     try:
@@ -107,6 +169,7 @@ async def main_async(args: argparse.Namespace) -> int:
             fixtures, llm, out, repeats=args.repeats, workspace_backend=args.workspace_backend,
             eval_id=args.eval_id,
             hard_timeout_s=hard_timeout,
+            **({"options": options} if options is not None else {}),
         )
     except (ValueError, FileExistsError, PermissionError) as exc:
         print(f"evaluation setup failed: {exc}; use a fresh --out directory", file=sys.stderr)
@@ -114,7 +177,9 @@ async def main_async(args: argparse.Namespace) -> int:
     finally:
         await llm.aclose()
 
-    report = render_markdown(results)
+    report_path = out / "report.md"
+    report = report_path.read_text(encoding="utf-8") if report_path.is_file() \
+        else render_markdown(results)
     print(report)
     print(f"report written to {(out / 'report.md').resolve()}")
     return 0
@@ -122,7 +187,10 @@ async def main_async(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     try:
-        return asyncio.run(main_async(parse_args(argv)))
+        args = parse_args(argv)
+        if args.plan:
+            return _print_plan(args)
+        return asyncio.run(main_async(args))
     except KeyboardInterrupt:
         return 130
 

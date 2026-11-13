@@ -24,6 +24,8 @@ from moumou.eval.artifacts import (
     utc_now,
 )
 from moumou.eval.loader import TaskFixture
+from moumou.eval.options import EvaluationOptions
+from moumou.eval.telemetry import EvalLLM
 from moumou.eval.workspace import (
     BACKENDS,
     create_run_dir,
@@ -74,6 +76,14 @@ class FixtureResult:
     worker_exit_code: int | None = None
     cleanup_s: float | None = None
     cleanup_complete: bool | None = None
+    submitted_at: str | None = None
+    terminal_at: str | None = None
+    task_elapsed_s: float | None = None
+    maintenance_s: float | None = None
+    evaluation: dict = field(default_factory=dict)
+    metrics: dict = field(default_factory=dict)
+    behavior_checks: list[dict] = field(default_factory=list)
+    memory_observations: list[dict] = field(default_factory=list)
 
 
 def _empty_result(fixture, run_dir, repeat, eval_id) -> FixtureResult:
@@ -89,17 +99,19 @@ def _empty_result(fixture, run_dir, repeat, eval_id) -> FixtureResult:
             "trace_jsonl": str(run_dir / "trace.jsonl"),
             "trace_database": str(run_dir / "trace.db"),
             "workspaces": str(run_dir / "workspaces"),
+            "llm_telemetry": str(run_dir / "llm-telemetry.json"),
         },
     )
 
 
-def _observe(result: FixtureResult, engine, fixture, llm) -> None:
+def _observe(result: FixtureResult, engine, fixture, llm, *, options=None) -> None:
     """Snapshot before close; a missing observation must not replace the run error."""
     try:
         nodes = engine.repo.all_tasks()
         result.nodes = [
             {
                 "id": node.id, "parent_id": node.parent_id, "role": node.role,
+                "deps": list(node.deps),
                 "status": node.status, "retries": node.retries,
                 "acceptance_count": len(node.acceptance),
                 "error": redact(node.error, llm) if node.error else None,
@@ -108,6 +120,14 @@ def _observe(result: FixtureResult, engine, fixture, llm) -> None:
             for node in nodes
         ]
         result.total = len(nodes)
+        for observed in result.nodes:
+            verdicts = [event for event in engine.trace.query(observed["id"])
+                        if event.kind == "acceptance" and event.name == "verdict"]
+            checks = verdicts[-1].payload.get("checks", []) if verdicts else []
+            observed["machine_accepted"] = (
+                bool(checks) and all(check.get("kind") != "self_report"
+                                     and check.get("ok") is True for check in checks)
+            ) if observed["acceptance_count"] and verdicts else None
         result.done = sum(node.status == "DONE" for node in nodes)
         result.dead = sum(node.status == "DEAD" for node in nodes)
         result.unfinished = result.total - result.done - result.dead
@@ -135,12 +155,21 @@ def _observe(result: FixtureResult, engine, fixture, llm) -> None:
                     and len(checks) == len(fixture.acceptance)
                     and all(c.get("kind") != "self_report" and c.get("ok") is True for c in checks)
                 )
+        from moumou.eval.behavior import evaluate_behavior
+
+        result.behavior_checks = evaluate_behavior(
+            fixture, engine.trace.all_events(), nodes=nodes, options=options,
+            memory_observations=result.memory_observations,
+        )
+        behavior_ok = all(check["ok"] for check in result.behavior_checks)
         if root.status == "DONE":
-            result.root_success = result.root_machine_accepted
+            result.root_success = result.root_machine_accepted if behavior_ok else False
         else:
             result.root_success = False
         if root.status == "DONE":
             result.status = "succeeded" if result.root_success else "unverified"
+            if not behavior_ok:
+                result.status, result.error_type = "failed", "behavior_failed"
         elif root.status == "DEAD":
             result.status = "failed"
             if result.root_machine_accepted is False:
@@ -160,30 +189,68 @@ def _observe(result: FixtureResult, engine, fixture, llm) -> None:
 async def run_once(
     fixture: TaskFixture, llm, root: Path, repeat: int, *, workspace_backend: str = "local",
     eval_id: str | None = None, _result_path: Path | None = None,
+    options: EvaluationOptions | None = None,
 ) -> FixtureResult:
     if workspace_backend not in BACKENDS:
         raise ValueError(f"unknown workspace backend: {workspace_backend}")
+    if options is not None:
+        options = EvaluationOptions.model_validate(options)
     run_dir = create_run_dir(root, fixture.id, repeat)
     result_path = Path(_result_path) if _result_path is not None else run_dir / "result.json"
     started = monotonic()
     result = _empty_result(fixture, run_dir, repeat, eval_id)
     phase = "setup"
     engine = None
+    observed_llm = EvalLLM(
+        llm, run_dir / "llm-telemetry.json",
+        memory_records=options.memory_records if options is not None else (),
+    )
+    submitted = terminal = None
     try:
         workspace = git_workspace(run_dir, fixture.setup) if workspace_backend == "git" else None
-        settings = Settings(
-            project_id=fixture.id, conversation_id="c1", root=run_dir, max_slots=4
-        )
+        overrides = options.engine_overrides() if options is not None else {}
+        settings = Settings(**{
+            "project_id": fixture.id, "conversation_id": "c1", "root": run_dir,
+            "max_slots": 4, **overrides,
+        })
+        result.evaluation = {
+            "memory_enabled": settings.memory_enabled, "max_slots": settings.max_slots,
+            "role_review_enabled": settings.role_review_enabled,
+            "project_id": settings.project_id, "conversation_id": settings.conversation_id,
+            "memory_scope": "long_term_experience_only; ConclusionBoard remains active",
+            "initial_memory_sha256": options.memory_sha256 if options is not None else None,
+            "initial_memory_count": len(options.memory_records) if options is not None else 0,
+            "warmup_id": options.warmup_id if options is not None else None,
+        }
         human = ScriptedHuman(
             decisions=fixture.human.decisions, default=fixture.human.default,
             answers=fixture.human.answers, default_answer=fixture.human.default_answer,
         )
         try:
-            engine = Engine(llm, human=human, workspace=workspace, settings=settings)
+            engine = Engine(observed_llm, human=human, workspace=workspace, settings=settings)
+            if options is not None:
+                for record in options.records_for_project(settings.project_id):
+                    engine.memory.write(record)
+            original_terminal = engine.scheduler.on_terminal
+
+            async def on_terminal(node):
+                nonlocal terminal
+                if node.id == result.root_task_id and node.is_terminal and terminal is None:
+                    terminal = monotonic()
+                    result.terminal_at = utc_now()
+                    result.task_elapsed_s = round(terminal - submitted, 6)
+                    observed_llm.set_phase("post_terminal")
+                if original_terminal is not None:
+                    await original_terminal(node)
+
+            engine.scheduler.on_terminal = on_terminal
+            submitted, result.submitted_at = monotonic(), utc_now()
             task = engine.submit(fixture.goal, acceptance=fixture.acceptance, budget=fixture.budget)
             result.root_task_id = task.id
             if fixture.setup and workspace_backend == "local":
-                parent = engine.workspace.allocate(fixture.id, "c1", f"planner@{task.id}")
+                parent = engine.workspace.allocate(
+                    settings.project_id, settings.conversation_id, f"planner@{task.id}"
+                )
                 write_setup(parent, fixture.setup)
             phase = "execution"
             report = await engine.run()
@@ -192,8 +259,29 @@ async def run_once(
             result.tokens_in, result.tokens_out = report.tokens_in, report.tokens_out
         finally:
             if engine is not None:
-                _observe(result, engine, fixture, llm)
-                engine.close()
+                from moumou.eval.metrics import span_totals
+
+                result.memory_observations = [{
+                    "task_id": result.root_task_id, "attribution": "attempt_not_individual_agent",
+                    "memory_ids": [item["id"] for item in call["memory"]["known_memories"]],
+                    "injected": call["memory"]["lessons_header_present"],
+                } for call in observed_llm.calls]
+                _observe(result, engine, fixture, llm, options=options)
+                result.metrics = {
+                    "spans": span_totals(engine.trace.all_events()),
+                    "llm": observed_llm.summary(),
+                    "timing_boundary": "submit to root terminal callback before root reflection; "
+                    "includes setup seeded after submit, acceptance and prior child reflection",
+                }
+                try:
+                    engine.close()
+                finally:
+                    if terminal is not None:
+                        result.maintenance_s = round(monotonic() - terminal, 6)
+                    summary = observed_llm.summary()
+                    result.total_tokens_in = summary["total_tokens_in"]
+                    result.total_tokens_out = summary["total_tokens_out"]
+                    result.usage_missing_calls = summary["usage_missing_calls"]
     except BaseException as exc:
         result.status = (
             "cancelled" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "error"
@@ -273,8 +361,13 @@ async def run_all(
     fixtures: list[TaskFixture], llm, root: Path, repeats: int | None = None,
     *, workspace_backend: str = "local", eval_id: str | None = None,
     hard_timeout_s: float | None = None, worker_factory: str | None = None,
+    options: EvaluationOptions | None = None,
 ) -> list[FixtureResult]:
     _validate_batch(fixtures, repeats, workspace_backend, eval_id)
+    if options is not None:
+        options = EvaluationOptions.model_validate(options)
+        for fixture in fixtures:
+            options.records_for_project(options.project_id or fixture.id)
     client_spec, client_env = None, None
     if hard_timeout_s is not None:
         from moumou.eval.isolation import prepare_client, validate_timeout
@@ -285,6 +378,19 @@ async def run_all(
         raise ValueError("worker_factory requires hard_timeout_s; no silent in-process fallback")
     root = reserve_batch_dir(root)
     manifest = create_manifest(root, fixtures, llm, repeats, workspace_backend, eval_id=eval_id)
+    if options is not None:
+        manifest["settings"]["engine"].update({
+            key: value for key, value in options.engine_overrides().items()
+            if key not in {"project_id", "conversation_id"}
+        })
+        manifest["settings"].update({
+            "project_id": options.project_id or "fixture_id",
+            "conversation_id": options.conversation_id,
+            "memory_warmup": bool(options.memory_records),
+            "evaluation": options.model_dump(mode="json", exclude={"memory_records"}),
+            "initial_memory_count": len(options.memory_records),
+            "initial_memory_sha256": options.memory_sha256,
+        })
     manifest["settings"]["worker"] = {
         "execution_mode": "process" if hard_timeout_s is not None else "in_process",
         "hard_timeout_s": hard_timeout_s,
@@ -317,6 +423,7 @@ async def run_all(
                         result = await run_once(
                             fixture, llm, root, repeat, workspace_backend=workspace_backend,
                             eval_id=manifest["eval_id"],
+                            **({"options": options} if options is not None else {}),
                         )
                     else:
                         from moumou.eval.isolation import run_isolated
@@ -325,6 +432,7 @@ async def run_all(
                             fixture, llm, root, repeat, workspace_backend=workspace_backend,
                             eval_id=manifest["eval_id"], hard_timeout_s=hard_timeout_s,
                             client_spec=client_spec, client_env=client_env,
+                            **({"options": options} if options is not None else {}),
                         )
                 except BaseException as exc:
                     result = _attempt_record(
@@ -352,7 +460,10 @@ async def run_all(
         manifest["finished_at"] = utc_now()
         manifest["completed_runs"] = len(results)
         atomic_json(root / "manifest.json", manifest)
-        atomic_text(root / "report.md", render_markdown(results))
+        from moumou.eval.metrics import summarize
+
+        atomic_json(root / "metrics.json", summarize(manifest, results))
+        atomic_text(root / "report.md", render_markdown(results, manifest=manifest))
     return results
 
 
@@ -386,7 +497,7 @@ def aggregate(results: list[FixtureResult]) -> list[dict]:
     return rows
 
 
-def render_markdown(results: list[FixtureResult]) -> str:
+def render_markdown(results: list[FixtureResult], *, manifest: dict | None = None) -> str:
     rows = aggregate(results)
     total_runs = sum(r["runs"] for r in rows)
     measured = sum(r["measured_runs"] for r in rows)
@@ -428,4 +539,36 @@ def render_markdown(results: list[FixtureResult]) -> str:
             f"{result.root_status or 'N/A'} | {result.root_machine_accepted} | "
             f"{result.error_type or '-'} | `{Path(result.run_dir) / 'result.json'}` |"
         )
+    if manifest is not None:
+        from moumou.eval.metrics import summarize
+
+        metrics = summarize(manifest, results)
+        batch = metrics["batch"]
+        verified_lines = [
+            "## Verified goal metrics", "",
+            "Planned attempts, including missing results, remain in the denominator.",
+            "Root goals and non-root nodes are reported separately.", "",
+            f"Root goals: {batch['verified_root_successes']}/{batch['planned_runs']} "
+            f"({number(batch['root_completion_rate'], 3)}). "
+            f"Missing results: {batch['missing_results']}.",
+            f"Observed subtasks DONE: {batch['observed_subtasks_done']}/"
+            f"{batch['observed_subtasks']}; machine-verified DONE: "
+            f"{batch['machine_verified_subtasks_done']}.",
+            "", "Full structured statistics and measurement coverage: `metrics.json`.",
+            "Delivery time, runner time and cumulative overlapping spans are distinct.",
+            "",
+            "| fixture | planned | verified goals | goal rate | terminal mean (s) | "
+            "terminal sample std (s) | attempt mean (s) |",
+            "|---|---:|---:|---:|---:|---:|---:|",
+        ]
+        for fixture_id, row in metrics["by_fixture"].items():
+            terminal = row["timing"]["task_terminal_s"]
+            attempt = row["timing"]["runner_elapsed_s"]
+            verified_lines.append(
+                f"| {fixture_id} | {row['planned_runs']} | {row['verified_root_successes']} | "
+                f"{number(row['root_completion_rate'], 3)} | {number(terminal['mean'])} | "
+                f"{number(terminal['sample_std'])} | {number(attempt['mean'])} |"
+            )
+        lines = ["# Evaluation report", "", *verified_lines, "",
+                 "## Legacy Engine diagnostics", "", *lines[2:]]
     return "\n".join(lines) + "\n"

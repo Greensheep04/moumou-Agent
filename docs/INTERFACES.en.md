@@ -416,6 +416,31 @@ Factories receive the `TaskFixture` and synchronously return a client; this is i
 deterministic offline integration checks. The public CLI exposes `--hard-timeout SECONDS`
 and does not expose arbitrary factory imports.
 
+### Evaluation controls, metrics and behavior
+
+`run_once` and `run_all` accept optional `options=EvaluationOptions(...)`. Omitting options
+preserves Engine defaults. Explicit controls include long-term `memory_enabled`, `max_slots`,
+`role_review_enabled`, project/conversation identities and a portable MemoryRecord snapshot.
+The same validated controls pass through supervised requests; actual settings and the
+initial memory hash are recorded in the manifest and attempt `evaluation` metadata.
+
+Fixtures may declare evaluation-only `requirements` and a disjoint `warmup`. Artifact checks
+still use the shared Acceptance interface. `behavior_checks` independently record approval,
+successful search, actual lesson injection, delegation and scheduling evidence. `root_success`
+requires artifact and behavioral acceptance; a root TaskNode can remain DONE while the
+evaluation outcome is failed for missing behavior. P2 should display both verdicts.
+
+Attempt results add nullable `submitted_at`, `terminal_at`, `task_elapsed_s`, `maintenance_s`,
+complete/unknown wrapper usage, `metrics`, `memory_observations`, and node dependencies and
+machine verdicts. Each batch saves `metrics.json`; call `eval.metrics.summarize` with the
+manifest and authoritative results to keep interrupted planned attempts in the denominator.
+The [metric contract](metrics.md) defines coverage, timing and repeated-trial statistics.
+
+`eval.ablation.plan_ablation` creates a call-free plan; `run_ablation` records four fixed groups
+in `ablation.json` and gives each held-out attempt its own normal batch. Only MemoryRecord
+values cross the warmup boundary. Warmup is cooperative in-process execution, separately
+accounted; a held-out `hard_timeout_s` is not a claim of hard containment for warmup.
+
 ---
 
 ## 6. `TaskRepo` (used by the orchestration layer; reference only)

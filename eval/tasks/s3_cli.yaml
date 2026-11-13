@@ -1,0 +1,28 @@
+id: s3_cli
+title: Extend a CLI without changing default behavior
+scenario: extend
+goal: Extend greet.py. Preserve python3 greet.py Ada => hello, Ada plus newline. Add --uppercase (uppercase entire
+  greeting) and --times N (positive integer, default 1). Invalid zero or negative counts must exit nonzero. Options
+  may precede/follow the name. Importing the module must have no output.
+acceptance:
+- kind: command
+  target: python3 -c "import subprocess,sys; run=lambda *a:subprocess.run([sys.executable,'greet.py',*a],capture_output=True,text=True);
+    a=run('Ada'); assert (a.returncode,a.stdout,a.stderr)==(0,'hello, Ada\n',''); b=run('--uppercase','Ada','--times','2');
+    assert b.returncode==0 and b.stdout=='HELLO, ADA\nHELLO, ADA\n' and not b.stderr; assert run('Ada','--times','0').returncode!=0;
+    assert run('Ada','--times','-1').returncode!=0; c=subprocess.run([sys.executable,'-c','import greet'],capture_output=True,text=True);
+    assert c.returncode==0 and not c.stdout and not c.stderr"
+  expect: '0'
+  timeout_s: 30
+budget:
+  max_steps: 35
+  max_wall_s: 600
+  max_retries: 1
+human:
+  default: approve
+repeats: 3
+tags:
+- extend
+notes: Self-built task. Offline acceptance probes are not model performance scores.
+setup:
+  greet.py: "import argparse\n\ndef main():\n    parser = argparse.ArgumentParser()\n    parser.add_argument('name')\n\
+    \    args = parser.parse_args()\n    print('hello, ' + args.name)\n\nif __name__ == '__main__':\n    main()\n"

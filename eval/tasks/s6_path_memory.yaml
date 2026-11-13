@@ -1,0 +1,47 @@
+id: s6_path_memory
+title: Transfer nested-path and UTF-8 writing experience
+scenario: use_memory
+goal: 'Apply relevant historical nested-path and UTF-8 writing experience. Create report_writer.py write_report(path,text):
+  create missing parent directories,write UTF-8 text,replacing existing content. Produce output/weekly/summary.txt
+  with exactly résumé ready followed by a newline. Support bare filenames and nested paths without pre-existing
+  directories.'
+acceptance:
+- kind: command
+  target: python3 -c "import report_writer,pathlib,tempfile; root=pathlib.Path(tempfile.mkdtemp(dir='.')); p=root/'a'/'b'/'report.txt';
+    report_writer.write_report(p,'café\n'); assert p.read_text(encoding='utf-8')=='café\n'; report_writer.write_report(p,'changed');
+    assert p.read_text(encoding='utf-8')=='changed'; report_writer.write_report(root/'plain.txt','ok'); assert (root/'plain.txt').read_text(encoding='utf-8')=='ok'"
+  expect: '0'
+  timeout_s: 30
+- kind: command
+  target: python3 -c "from pathlib import Path; assert Path('output/weekly/summary.txt').read_text(encoding='utf-8')=='résumé
+    ready\n'"
+  expect: '0'
+  timeout_s: 30
+budget:
+  max_steps: 35
+  max_wall_s: 600
+  max_retries: 1
+human:
+  default: approve
+repeats: 3
+tags:
+- use_memory
+notes: Self-built task. Offline acceptance probes are not model performance scores.
+requirements:
+  memory_injection: true
+warmup:
+  goal: Fix export_note.py export_note(path,text) to write a historical note to a nested archive path without pre-created
+    directories using explicit UTF-8. Preserve supplied text and extract only reusable directory/encoding lessons,
+    not future report data.
+  setup:
+    export_note.py: "from pathlib import Path\n\ndef export_note(path, text):\n    Path(path).write_text(text)\n"
+  acceptance:
+  - kind: command
+    target: python3 -c "import export_note; from pathlib import Path; p=Path('archive/old/note.md'); export_note.export_note(p,'naïve
+      note\n'); assert p.read_text(encoding='utf-8')=='naïve note\n'"
+    expect: '0'
+    timeout_s: 30
+  budget:
+    max_steps: 25
+    max_wall_s: 420
+    max_retries: 1

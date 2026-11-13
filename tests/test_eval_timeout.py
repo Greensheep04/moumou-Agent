@@ -196,6 +196,10 @@ async def test_timeout_preserves_trace_and_artifacts_written_before_the_hang(tmp
     assert any(event.kind == "tool" for event in events)
     marker = run / "workspaces" / result.fixture_id / "c1/planner@t1/trace-marker.txt"
     assert marker.read_text(encoding="utf-8") == "preserve before timeout"
+    assert (run / "llm-telemetry.json").is_file()
+    assert result.metrics["llm"]["calls_total"] >= 1
+    assert result.total_tokens_in is None and result.total_tokens_out is None
+    assert result.usage_missing_calls >= 1
     assert read_json(run / "result.json")["error_type"] == "timeout"
     stopped({result.worker_pid, *pids_in(run)})
 

@@ -138,7 +138,9 @@ async def test_result_distinguishes_machine_verdicts_from_self_report(
     assert saved["nodes"] and saved["nodes"][0]["id"] == "t1"
     assert result.elapsed_s >= result.wall_s >= 0
     assert result.started_at and result.finished_at
-    assert saved["usage_missing_calls"] is None
+    # Calls are now observed, including the failed task's later reflection.
+    # FakeLLM usage remains unknown provider cost despite its scripted counts.
+    assert saved["usage_missing_calls"] == (2 if status == "failed" else 1)
     assert saved["total_tokens_in"] is None and saved["total_tokens_out"] is None
     if status == "failed":
         assert result.error_type == "acceptance_failed"

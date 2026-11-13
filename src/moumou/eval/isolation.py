@@ -90,7 +90,7 @@ def _number(value, *, nullable=True):
     )
 
 
-def validate_candidate(path, *, nonce, fixture, repeat, eval_id, run_dir):
+def validate_candidate(path, *, nonce, fixture, repeat, eval_id, run_dir, options=None):
     """Strict protocol checks, including numeric types which dataclasses do not validate."""
     from moumou.eval.runner import FixtureResult
 
@@ -119,7 +119,8 @@ def validate_candidate(path, *, nonce, fixture, repeat, eval_id, run_dir):
         data["worker_exit_code"], nonnegative=False
     ):
         raise ValueError("worker counts must be nullable non-negative integers")
-    for key in ("wall_s", "elapsed_s", "completion_rate", "cleanup_s", "hard_timeout_s"):
+    for key in ("wall_s", "elapsed_s", "completion_rate", "cleanup_s", "hard_timeout_s",
+                "task_elapsed_s", "maintenance_s"):
         if not _number(data[key]):
             raise ValueError("worker measurements must be nullable finite non-negative numbers")
     if data["completion_rate"] is not None and data["completion_rate"] > 1:
@@ -129,10 +130,11 @@ def validate_candidate(path, *, nonce, fixture, repeat, eval_id, run_dir):
             raise ValueError("worker verdicts must be nullable booleans")
     for key in (
         "error_type", "error_message", "root_task_id", "root_status", "started_at", "finished_at",
+        "submitted_at", "terminal_at",
     ):
         if data[key] is not None and not isinstance(data[key], str):
             raise ValueError("worker textual observations have invalid types")
-    for key in ("started_at", "finished_at"):
+    for key in ("started_at", "finished_at", "submitted_at", "terminal_at"):
         if data[key] is not None and datetime.fromisoformat(data[key]).tzinfo is None:
             raise ValueError("worker timestamps must identify their time zone")
     if data["root_status"] is not None and data["root_status"] not in _NODE_STATUSES:
@@ -158,7 +160,17 @@ def validate_candidate(path, *, nonce, fixture, repeat, eval_id, run_dir):
                 or (node.get("error") is not None and not isinstance(node["error"], str))):
             raise ValueError("invalid or duplicate worker node identity")
         node_ids.add(node["id"])
+        if node.get("machine_accepted") is not None and type(node["machine_accepted"]) is not bool:
+            raise ValueError("invalid worker node machine verdict")
     nodes = {node["id"]: node for node in data["nodes"]}
+    for node in nodes.values():
+        if "deps" in node and (
+            not isinstance(node["deps"], list)
+            or any(not isinstance(dep, str) or dep not in nodes or dep == node["id"]
+                   for dep in node["deps"])
+            or len(set(node["deps"])) != len(node["deps"])
+        ):
+            raise ValueError("invalid worker dependency identities")
     root = nodes.get(data["root_task_id"])
     if nodes:
         roots = [node for node in nodes.values() if node.get("parent_id") is None]
@@ -203,8 +215,98 @@ def validate_candidate(path, *, nonce, fixture, repeat, eval_id, run_dir):
             raise ValueError("worker machine verdict disagrees with its checks")
     elif data["root_machine_accepted"] is not None:
         raise ValueError("worker machine verdict has no matching machine checks")
+    from moumou.eval.behavior import expected_behavior_targets
+
+    behavior = data["behavior_checks"]
+    if not isinstance(behavior, list) or any(
+        not isinstance(check, dict) or check.get("kind") != "behavior"
+        or type(check.get("ok")) is not bool or not isinstance(check.get("evidence"), dict)
+        for check in behavior
+    ):
+        raise ValueError("invalid worker behavior observations")
+    if behavior or data["root_success"] is True:
+        if [check.get("target") for check in behavior] != expected_behavior_targets(fixture):
+            raise ValueError("worker behavior checks do not match the fixture")
+    if not isinstance(data["evaluation"], dict) or not isinstance(data["metrics"], dict):
+        raise ValueError("invalid worker evaluation or metrics metadata")
+    if not isinstance(data["memory_observations"], list):
+        raise ValueError("invalid worker memory observations")
+    for observation in data["memory_observations"]:
+        if (not isinstance(observation, dict) or type(observation.get("injected")) is not bool
+                or not isinstance(observation.get("memory_ids"), list)
+                or not all(isinstance(value, str) for value in observation["memory_ids"])):
+            raise ValueError("invalid worker injection metadata")
+    # Reject non-finite nested measurements before publishing authoritative JSON.
+    json.dumps({key: data[key] for key in (
+        "evaluation", "metrics", "behavior_checks", "memory_observations",
+    )}, allow_nan=False)
+    if data["root_success"] is True and not data["evaluation"]:
+        raise ValueError("a successful worker must report its actual evaluation settings")
+    if data["status"] == "succeeded" and not isinstance(data["metrics"].get("llm"), dict):
+        raise ValueError("a successful worker must report its client observations")
+    if "llm" in data["metrics"]:
+        from moumou.eval.telemetry import read_telemetry
+
+        telemetry_path = run_dir / "llm-telemetry.json"
+        if telemetry_path.stat().st_size > 8 * 1024**2:
+            raise ValueError("worker client observations exceed the bounded protocol")
+        summary = read_telemetry(telemetry_path)["summary"]
+        if data["metrics"]["llm"] != summary or any(
+            data[key] != summary[key]
+            for key in ("total_tokens_in", "total_tokens_out", "usage_missing_calls")
+        ):
+            raise ValueError("worker usage disagrees with persisted client observations")
+    if data["evaluation"]:
+        from moumou.eval.options import EvaluationOptions
+        from moumou.orchestrator import Settings
+
+        controlled = EvaluationOptions.model_validate(options) if options is not None else None
+        defaults = Settings()
+        expected = {
+            "memory_enabled": controlled.memory_enabled if controlled else defaults.memory_enabled,
+            "max_slots": controlled.max_slots if controlled else defaults.max_slots,
+            "role_review_enabled": controlled.role_review_enabled if controlled
+            else defaults.role_review_enabled,
+            "project_id": (controlled.project_id or fixture.id) if controlled else fixture.id,
+            "conversation_id": controlled.conversation_id if controlled else "c1",
+            "initial_memory_sha256": controlled.memory_sha256 if controlled else None,
+            "initial_memory_count": len(controlled.memory_records) if controlled else 0,
+            "warmup_id": controlled.warmup_id if controlled else None,
+        }
+        if any(type(data["evaluation"].get(key)) is not type(value)
+               or data["evaluation"].get(key) != value for key, value in expected.items()):
+            raise ValueError("worker settings disagree with the requested experiment")
+    if behavior:
+        # Recompute behavioral gates from independently persisted attempt evidence,
+        # rather than trusting a worker's boolean. This is not a hostile-code jail.
+        from moumou.contracts import TraceEvent
+        from moumou.eval.behavior import evaluate_behavior
+        from moumou.eval.telemetry import read_telemetry
+
+        trace = run_dir / "trace.jsonl"
+        telemetry_path = run_dir / "llm-telemetry.json"
+        if trace.stat().st_size > 32 * 1024 * 1024 or telemetry_path.stat().st_size > 8 * 1024**2:
+            raise ValueError("worker behavioral evidence exceeds its bounded protocol")
+        events = [TraceEvent.model_validate_json(line)
+                  for line in trace.read_text(encoding="utf-8").splitlines() if line.strip()]
+        calls = read_telemetry(telemetry_path)["calls"]
+        observations = [{
+            "task_id": data["root_task_id"], "attribution": "attempt_not_individual_agent",
+            "memory_ids": [item["id"] for item in call["memory"]["known_memories"]],
+            "injected": call["memory"]["lessons_header_present"],
+        } for call in calls]
+        if observations != data["memory_observations"]:
+            raise ValueError("worker injection claims disagree with saved client observations")
+        verified = evaluate_behavior(
+            fixture, events, nodes=data["nodes"], options=options,
+            memory_observations=observations,
+        )
+        if verified != behavior:
+            raise ValueError("worker behavior verdict disagrees with persisted evidence")
     if root is not None:
-        expected_success = data["root_machine_accepted"] if root["status"] == "DONE" else False
+        expected_success = (
+            data["root_machine_accepted"] if all(check["ok"] for check in behavior) else False
+        ) if root["status"] == "DONE" else False
         if data["root_success"] is not expected_success:
             raise ValueError("worker root success disagrees with its observations")
     if data["status"] == "succeeded" and not (
@@ -227,6 +329,7 @@ def validate_candidate(path, *, nonce, fixture, repeat, eval_id, run_dir):
 async def run_isolated(
     fixture, llm, root: Path, repeat: int, *, workspace_backend: str, eval_id: str,
     hard_timeout_s: float, client_spec: dict, client_env: dict[str, str],
+    options=None,
 ):
     from moumou.eval.runner import _empty_result
 
@@ -244,6 +347,7 @@ async def run_isolated(
         "schema_version": 1, "nonce": nonce, "fixture": fixture.model_dump(mode="json"),
         "root": str(root), "repeat": repeat, "eval_id": eval_id,
         "workspace_backend": workspace_backend, "client": client_spec,
+        "evaluation_options": options.model_dump(mode="json") if options is not None else None,
     })
     child_env = dict(os.environ)
     child_env.pop("DEEPSEEK_API_KEY", None)
@@ -291,6 +395,7 @@ async def run_isolated(
             result = validate_candidate(
                 candidate_path, nonce=nonce, fixture=fixture, repeat=repeat,
                 eval_id=eval_id, run_dir=run_dir,
+                options=options,
             )
         except Exception as exc:
             # This boundary consumes an untrusted protocol file, including
@@ -305,6 +410,26 @@ async def run_isolated(
             f"Worker {error_type}; exit code {outcome.exit_code}"
         )
         result.errors.append(result.error_message)
+        # A killed worker can still have successfully completed earlier calls.
+        # Preserve observed coverage without turning an in-flight call into zero usage.
+        try:
+            from moumou.eval.telemetry import read_telemetry
+
+            telemetry_path = run_dir / "llm-telemetry.json"
+            if telemetry_path.stat().st_size > 8 * 1024**2:
+                raise ValueError("worker telemetry is too large")
+            summary = read_telemetry(telemetry_path)["summary"]
+            json.dumps(summary, allow_nan=False)
+            for key in ("total_tokens_in", "total_tokens_out", "usage_missing_calls"):
+                if not _integer(summary.get(key)):
+                    raise ValueError("invalid interrupted usage counts")
+            result.metrics["llm"] = summary
+            result.metrics["recovery"] = "partial client observations from interrupted worker"
+            result.total_tokens_in = summary["total_tokens_in"]
+            result.total_tokens_out = summary["total_tokens_out"]
+            result.usage_missing_calls = summary["usage_missing_calls"]
+        except (OSError, ValueError, KeyError, TypeError, RecursionError):
+            pass  # Supervision failure remains authoritative when diagnostics are unavailable.
     result.execution_mode = "process"
     result.hard_timeout_s = hard_timeout_s
     result.worker_pid, result.worker_exit_code = outcome.pid, outcome.exit_code

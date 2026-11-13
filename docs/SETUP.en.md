@@ -196,6 +196,36 @@ This is command-name compatibility, not general POSIX shell-syntax translation.
 Local development-test counts are not a clean-clone result when their test changes have not
 been uploaded; FakeLLM fixture checks are separate from real-model evaluation scores.
 
+### P3 fixture set, metrics and ablation preflight
+
+The self-built set contains fifteen fixtures: two per course scenario and one additional
+composite task. Each YAML defaults to three repeats. Use `--repeats 1` for an explicit smoke
+run. Strong artifact checks and recorded behavior are separate; research additionally needs
+the P1 search tool's local `TAVILY_API_KEY`. Without that configuration, real research
+validation is pending even when its offline acceptance examples pass.
+
+```powershell
+# No API call and no output directory creation; lists 180 planned held-out attempts.
+python -m moumou.eval.cli --ablation --plan
+
+# A single controlled group; explicit controls disable role review by default.
+python -m moumou.eval.cli --only s1_hello --repeats 1 --no-memory --max-slots 1 --hard-timeout 180
+
+# Four groups for one representative task, one repeat each; this uses the model API.
+python -m moumou.eval.cli --ablation --only s6_csv_memory --repeats 1 --hard-timeout 180
+```
+
+Memory fixtures in the ablation entry point run a separate warmup, export only actual
+long-term records, and seed fresh databases for all four groups. An empty warmup does not
+invent a lesson. Role review is fixed off and the conclusion board remains active, so this
+is long-term experience memory ablation. `--ablation` rejects independent memory/slot/review
+overrides; these would invalidate the declared four groups. Warmup has a cooperative
+in-process budget, distinct from the native Windows hard deadline for held-out workers.
+
+`metrics.json`, per-attempt `llm-telemetry.json`, task-terminal timing, unknown-usage coverage
+and behavioral checks are described in the English [metric contract](metrics.md). Tokens
+from scripted clients and incomplete provider usage are not presented as measured cost.
+
 ## 7. Directories and artifacts
 
 | Path | Contents | Committed |

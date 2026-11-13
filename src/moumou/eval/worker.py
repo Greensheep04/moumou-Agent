@@ -153,9 +153,12 @@ async def execute(request_path: Path) -> int:
         stage = "client"
         from moumou.eval.artifacts import _model_metadata
         from moumou.eval.loader import TaskFixture
+        from moumou.eval.options import EvaluationOptions
         from moumou.eval.runner import run_once
 
         fixture = TaskFixture.model_validate(request["fixture"])
+        raw_options = request.get("evaluation_options")
+        options = EvaluationOptions.model_validate(raw_options) if raw_options is not None else None
         try:
             client = _build_client(request["client"], fixture, key)
         finally:
@@ -179,6 +182,7 @@ async def execute(request_path: Path) -> int:
                 fixture, client, Path(request["root"]), request["repeat"],
                 workspace_backend=request["workspace_backend"], eval_id=request["eval_id"],
                 _result_path=raw_path,
+                options=options,
             )
             result_data = asdict(result)
         except Exception:

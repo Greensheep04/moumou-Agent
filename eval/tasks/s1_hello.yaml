@@ -1,22 +1,23 @@
 id: s1_hello
-title: 从零写一个可运行的脚本
+title: Create an exact-output hello script
 scenario: from_scratch
-goal: |
-  在当前项目里创建 hello.py。运行 `python3 hello.py` 时，必须输出：
-  hello, moumou
-  （全小写，逗号后面有一个空格，结尾换行）
-  写完之后你自己运行一次，确认输出正确。
+goal: Create hello.py. Running python3 hello.py must print exactly hello, moumou followed by one newline, exit 0
+  and write nothing to stderr. Run it yourself before finishing.
 acceptance:
-  - kind: file_exists
-    target: hello.py
-  - kind: command
-    target: python3 hello.py
-    expect: "0"
+- kind: file_exists
+  target: hello.py
+- kind: command
+  target: python3 -c "import subprocess,sys; r=subprocess.run([sys.executable,'hello.py'],capture_output=True,text=True);
+    assert (r.returncode,r.stdout,r.stderr)==(0,'hello, moumou\n','')"
+  expect: '0'
+  timeout_s: 30
 budget:
-  max_steps: 15
-  max_wall_s: 300
+  max_steps: 35
+  max_wall_s: 600
+  max_retries: 1
 human:
   default: approve
-repeats: 1
-tags: [scenario-1, easy]
-notes: 最基础的路径：写文件 → 跑命令 → 机器验收。
+repeats: 3
+tags:
+- from_scratch
+notes: Self-built task. Offline acceptance probes are not model performance scores.
