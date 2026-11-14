@@ -441,6 +441,41 @@ in `ablation.json` and gives each held-out attempt its own normal batch. Only Me
 values cross the warmup boundary. Warmup is cooperative in-process execution, separately
 accounted; a held-out `hard_timeout_s` is not a claim of hard containment for warmup.
 
+### Offline reports and experiment snapshots
+
+`eval.report.build_report(root)` reads a normal batch or an ablation's saved plan and
+authoritative nested attempt files. It recomputes statistics, including planned missing
+attempts, rather than trusting `metrics.json`, JSONL tails or the ablation job-result cache.
+The model has `kind`, `purpose`, `model`, `manifest`, `groups`, `warmups` and evidence paths.
+Each group exposes the normal `metrics.summarize` output plus observed records and missing
+plan rows. P2/report consumers must retain group identities and measured sample counts.
+Mixed source versions, models, purposes, fixture definitions or fixed controls are rejected.
+
+`generate_report(root, output=None)` writes only a derived `.md`/`.txt` report, defaulting to
+`root/report.md`. It does not load credentials, call a model, create an event loop or re-run
+tasks. Output cannot overwrite attempt or warmup evidence. Old unlabeled datasets stay
+unclassified; regenerating a report does not turn a self-built pilot into a closed-set score.
+
+`eval.freeze.prepare_experiment` saves full effective fixtures, explicit held-out/warmup
+budget overrides, public model settings, runtime/lock-file copies, environment versions and
+the complete four-group schedule. Its `freeze.json`, sidecar hash and `snapshot/` are local
+evidence. Credentials, `.env`, Git internals and personal notes are not copied. Dirty runtime
+snapshots are explicitly recorded; creating one never creates a Git commit.
+
+`verify_experiment(root)` checks saved contents and the current runtime/environment;
+`check_current=False` validates a historical archive only. `check_start(..., scope="full")`
+returns readiness without executing anything. Missing declared search capability keeps its
+rows `blocked_not_started` in the full plan. The explicit `non-network` scope returns a
+selection with deferred counts; it neither executes that shard nor implements resume.
+
+`run_ablation(..., before_attempt=guard)` optionally invokes a synchronous/async guard before
+each warmup or held-out client is created. Its context contains `phase`, the actual canonical
+`fixture`, original `planned` row, backend and deadline. `freeze.check_attempt` verifies those
+against the snapshot; public model settings are checked only if supplied, not inferred from
+an opaque factory. Guard rejection stops the batch and preserves earlier results. Checks
+occur at attempt boundaries; the runtime must remain unchanged during execution. An archived
+copy is not automatically the executed Python runtime.
+
 ---
 
 ## 6. `TaskRepo` (used by the orchestration layer; reference only)

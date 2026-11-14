@@ -226,6 +226,58 @@ in-process budget, distinct from the native Windows hard deadline for held-out w
 and behavioral checks are described in the English [metric contract](metrics.md). Tokens
 from scripted clients and incomplete provider usage are not presented as measured cost.
 
+### Offline reports and a frozen experiment plan
+
+The three P3 entry points work directly in an activated native Windows Conda environment:
+
+```powershell
+python -m moumou.eval.cli --help
+python -m moumou.eval.report --run runs/EXISTING_BATCH --out runs/rebuilt-report.md
+python -m moumou.eval.ablation --plan
+```
+
+Report input may be a normal batch or a four-group ablation root. No key or network is
+needed to regenerate it. Existing raw results remain unchanged. Normal eval/ablation CLI
+runs also rebuild the detailed report when execution finishes. Known research fixtures are
+rejected before model-client creation if `TAVILY_API_KEY` is missing; dry plans still work.
+
+With GNU Make installed, equivalent wrappers are available. `EVAL_PY` defaults to `python`
+from the active environment; it may be an explicit interpreter path. The original non-P3
+Make targets retain their existing interpreter setting.
+
+```powershell
+make report REPORT_RUN=runs/EXISTING_BATCH
+make ablation-plan
+make ablation
+```
+
+`make ablation` defaults to a dry plan. Executing model-backed runs requires explicitly
+overriding `ABLATION_ARGS`; this is separate from generating or verifying a freeze. Windows
+users without GNU Make can use the Python commands above without installing another tool.
+
+To prepare a snapshot, provide a public model JSON (provider, model, base_url, timeout_s,
+max_retries, temperature=0.2) and a boolean capability JSON, for example
+`{"web_search": false}`. Never put API keys in either file. Keep them under local `runs/`.
+
+```powershell
+python -m moumou.eval.freeze prepare --out runs/frozen-exp --model-config runs/model-public.json --capabilities runs/capabilities.json --repeats 3 --hard-timeout 180 --max-steps 20 --max-tokens 150000 --max-wall-s 150 --max-retries 0 --warmup-max-steps 25 --warmup-max-tokens 150000 --warmup-max-wall-s 150 --warmup-max-retries 0
+python -m moumou.eval.freeze verify runs/frozen-exp
+python -m moumou.eval.freeze check-start runs/frozen-exp --scope full
+```
+
+These example budgets are explicit per-node limits, not an experiment-wide cost ceiling.
+Warmup overrides are separate from held-out overrides. The freeze captures actual settings
+and runtime file copies and makes no model requests. A failed full start check returns exit
+code 2 and zero model calls. With all fifteen bundled tasks and no search capability, the
+plan remains 180 attempts: 144 eligible and 36 blocked/not started. `check-start --scope
+non-network` only inspects that selection; it does not start 144 runs or provide resume.
+
+Keep runtime files unchanged after freezing. Checksums detect changed files; the snapshot
+does not automatically execute its copies or prevent edits during a running call. A later
+commit/checkout or dependency update may require a fresh freeze, with the old archive kept.
+Existing Windows/Ubuntu CI already runs all offline tests, Ruff and the P1 demo; these P3
+changes do not alter workflow triggers or require keys in CI.
+
 ## 7. Directories and artifacts
 
 | Path | Contents | Committed |

@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import json
 import math
+import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -83,6 +84,17 @@ def _print_plan(args, fixtures=None) -> int:
     return 0
 
 
+def _regenerate_report(out: Path) -> bool:
+    from moumou.eval.report import generate_report
+
+    try:
+        generate_report(out)
+    except (OSError, ValueError) as exc:
+        print(f"cannot rebuild report: {exc}; raw result files were retained", file=sys.stderr)
+        return False
+    return True
+
+
 async def main_async(args: argparse.Namespace) -> int:
     if args.repeats is not None and args.repeats < 1:
         print("repeats must be a positive integer", file=sys.stderr)
@@ -145,6 +157,16 @@ async def main_async(args: argparse.Namespace) -> int:
     except (OSError, RuntimeError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    needs_search = [fixture.id for fixture in fixtures
+                    if "web_search" in fixture.requirements.required_tools]
+    if needs_search and not os.environ.get("TAVILY_API_KEY", "").strip():
+        print(
+            "TAVILY_API_KEY is required before model execution for: "
+            + ", ".join(needs_search)
+            + ". No model client was created; use --plan or select a ready fixture.",
+            file=sys.stderr,
+        )
+        return 2
 
     def make_client():
         return DeepSeekClient(
@@ -159,6 +181,8 @@ async def main_async(args: argparse.Namespace) -> int:
             fixtures, make_client, out, repeats=args.repeats or 3,
             workspace_backend=args.workspace_backend, hard_timeout_s=hard_timeout,
         )
+        if not _regenerate_report(out):
+            return 2
         print(f"ablation {manifest['status']}: {(out / 'report.md').resolve()}")
         return 0 if manifest["status"] == "completed" else 1
     llm = make_client()
@@ -178,6 +202,9 @@ async def main_async(args: argparse.Namespace) -> int:
         await llm.aclose()
 
     report_path = out / "report.md"
+    if (out / "manifest.json").is_file():
+        if not _regenerate_report(out):
+            return 2
     report = report_path.read_text(encoding="utf-8") if report_path.is_file() \
         else render_markdown(results)
     print(report)

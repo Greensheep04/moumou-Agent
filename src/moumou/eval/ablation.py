@@ -314,6 +314,7 @@ def _report(manifest):
 async def run_ablation(
     fixtures, llm_factory, root: Path, repeats: int = 3,
     *, workspace_backend: str = "local", hard_timeout_s: float | None = None,
+    before_attempt=None,
 ) -> dict:
     """Execute a predeclared four-group plan and preserve every nested batch.
 
@@ -326,6 +327,8 @@ async def run_ablation(
     _validate_batch(fixtures, repeats, workspace_backend, None)
     if not callable(llm_factory):
         raise TypeError("llm_factory must create a new chat client for every attempt")
+    if before_attempt is not None and not callable(before_attempt):
+        raise TypeError("before_attempt must be a callable integrity guard")
     if hard_timeout_s is not None:
         from moumou.eval.isolation import validate_timeout
 
@@ -344,6 +347,7 @@ async def run_ablation(
         "path_preflight": path_preflight,
         "status": "running", "completed_runs": 0, "jobs": [], "warmups": [],
         "workspace_backend": workspace_backend, "hard_timeout_s": hard_timeout_s,
+        "integrity_guard_enabled": before_attempt is not None,
         "memory_ablation_scope": (
             "long-term retrieval, reflection and maintenance; board remains on"
         ),
@@ -367,6 +371,20 @@ async def run_ablation(
 
     fixtures_by_id = {fixture.id: fixture for fixture in fixtures}
     seeds = {}
+
+    async def check_attempt(stage, planned):
+        if before_attempt is not None:
+            actual = fixtures_by_id[planned["fixture_id"]]
+            verdict = before_attempt({
+                "phase": stage, "planned": dict(planned),
+                "fixture": actual.model_dump(mode="json"),
+                "workspace_backend": workspace_backend, "hard_timeout_s": hard_timeout_s,
+            })
+            if inspect.isawaitable(verdict):
+                verdict = await verdict
+            if verdict is False:
+                raise ValueError("experiment integrity guard rejected this attempt")
+
     try:
         for planned in plan["schedule"]:
             fixture = fixtures_by_id[planned["fixture_id"]]
@@ -377,6 +395,7 @@ async def run_ablation(
                     directory = (
                         root / "warmups" / f"r{planned['repeat']}" / f"f{planned['fixture_index']}"
                     )
+                    await check_attempt("warmup", planned)
                     client = await make_client()
                     warmup_entry = {
                         "fixture_id": fixture.id, "repeat": planned["repeat"],
@@ -407,6 +426,7 @@ async def run_ablation(
                 conversation_id=f"h{planned['repeat']}-g{planned['group_index']}",
                 memory_records=records, warmup_id=warmup_id,
             )
+            await check_attempt("heldout", planned)
             client = await make_client()
             job = {
                 **planned, "status": "running", "started_at": utc_now(),
@@ -454,3 +474,14 @@ async def run_ablation(
         atomic_json(root / "ablation.json", manifest)
         atomic_text(root / "report.md", _report(manifest))
     return manifest
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Dedicated ablation entry point; the normal CLI still supports --ablation."""
+    from moumou.eval.cli import main as evaluation_main
+
+    return evaluation_main(["--ablation", *(sys.argv[1:] if argv is None else argv)])
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

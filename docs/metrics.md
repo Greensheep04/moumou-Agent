@@ -84,3 +84,19 @@ Warmup time/usage is separate. Its in-process cooperative deadline is distinct f
 Windows held-out worker deadline. Independent repeats rebuild the same starting state per
 group and never share a mutable memory database. Run a dry plan before the default formal
 15-fixture, three-repeat, four-group experiment (180 held-out attempts).
+
+## Offline report reconstruction
+
+`python -m moumou.eval.report --run DIRECTORY` recomputes the saved batch or ablation from
+its original plan and authoritative per-attempt files. Cached report text, `metrics.json`,
+JSONL indexes and serialized ablation job results do not establish success. Reports retain
+missing planned outcomes in their denominators, list failures and evidence paths, and show
+per-fixture/per-scenario statistics separately for each ablation group. Independent warmup
+time and usage are shown separately. A single fixed fixture/group observation has no sample
+standard deviation. Mixed versions, purposes or experimental controls are rejected.
+
+Snapshot readiness is not performance: a frozen 180-row plan with 36 capability-blocked
+rows has zero started attempts until actually executed. `check-start` is a call-free guard,
+not a task attempt or automatic recovery. Its 144-ready selection must not be reported as
+180 completed runs. Historical missing dataset-source or usage fields remain unknown when
+reports are rebuilt; no label, token estimate, price or cached hit rate is invented.
