@@ -100,3 +100,40 @@ rows has zero started attempts until actually executed. `check-start` is a call-
 not a task attempt or automatic recovery. Its 144-ready selection must not be reported as
 180 completed runs. Historical missing dataset-source or usage fields remain unknown when
 reports are rebuilt; no label, token estimate, price or cached hit rate is invented.
+
+## Partial execution and failure analysis
+
+An explicit selection retains the entire original schedule. `deferred_jobs` records rows
+that were intentionally not started, separately from actual `jobs`; `selected_runs` and
+`deferred_runs` describe the planned partition. A completed non-network selection may have
+144 persisted attempts and 36 deferred rows in a 180-row plan. Its status is `partial`.
+Deferred rows stay in full-plan goal coverage and missing counts, and are not observed
+model failures. A selected-scope completion rate must name its 144-row denominator and
+cannot replace the full-plan result. Warmup remains separately measured.
+
+`eval.analysis` derives evidence-backed failure categories and saved successful-attempt
+checks without running a model or acceptance commands. Missing evidence yields unknown or
+unverified attribution. File inventory is an existence check, not a fresh correctness verdict.
+Paired memory-on/off results retain fixture, repeat and scheduling identities; higher/lower
+success and elapsed time are separate observations. Equal success is not an improvement,
+and a recorded lesson alone does not prove actual retrieval or injection. Benefit, no change,
+regression and incomplete comparisons must all remain visible. These are descriptive
+observations, not causal or significance claims.
+
+## Instructor continuous sessions
+
+The default application evaluates the instructor's six original goals in three teams.
+Task 2 retains its team's state and handoff, so it must not use the independent YAML
+runner's fresh-state semantics. Each task record filters its own root subtree and phase
+calls; scenario summaries are cumulative. Delivery wall time, real human review waiting
+and total time through review are separate. Concurrent human/LLM spans may overlap.
+
+Agent `DONE` is not itself instructor quality success. Empty machine criteria remain
+unknown machine acceptance; default real-human review supplies a separate, explicitly
+attributed quality decision. Rejection preserves the agent status and the rejected result,
+and stops Task 2 from being posted. Deferred quality review remains unknown.
+
+Search-tool calls, fresh Tavily provider attempts, cache hits, deduplicated callers and
+budget denials are independently counted. The initial six-request allowance covers both
+tasks and all four roles of one scenario. The school model allowance is not this search
+budget. Cached retrieval timestamps remain the original timestamps.

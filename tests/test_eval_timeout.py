@@ -169,7 +169,11 @@ async def test_timeout_reaps_raw_and_nested_tool_descendants(tmp_path, mode, mar
 async def test_abrupt_worker_exit_is_recorded_and_background_children_are_reaped(
     tmp_path, mode, exit_code
 ):
-    crashed, following = await run_probes([fixture("crashed", mode), fixture("next")], tmp_path)
+    # This tests crash recovery, not a three-second deadline. Leave the tight
+    # deadlines to the hang probes; cold CI worker startup needs scheduling room.
+    crashed, following = await run_probes(
+        [fixture("crashed", mode), fixture("next")], tmp_path, timeout=10,
+    )
     pids = {crashed.worker_pid, *pids_in(crashed.run_dir)}
     try:
         assert crashed.error_type == "worker_crash" and crashed.worker_exit_code == exit_code
@@ -179,7 +183,7 @@ async def test_abrupt_worker_exit_is_recorded_and_background_children_are_reaped
             assert (Path(crashed.run_dir) / "descendants.json").is_file()
             assert len(pids) == 3
         stopped(pids)
-        assert following.status == "succeeded"
+        assert following.status == "succeeded", following
     finally:
         kill_failed_probe(pids)
 

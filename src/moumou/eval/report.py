@@ -361,6 +361,45 @@ def _ablation(root):
             raise ValueError("ablation groups did not receive the same memory starting state")
         seed_hashes[seed_key] = seed
         observed_jobs[key] = job
+    deferred = {}
+    if "selection" in manifest or "deferred_jobs" in manifest:
+        selection = _object(manifest.get("selection"), "ablation selection")
+        selected_ids = selection.get("selected_fixture_ids")
+        deferred_ids = selection.get("deferred_fixture_ids")
+        if (not isinstance(selected_ids, list) or not isinstance(deferred_ids, list)
+                or any(not isinstance(value, str) for value in selected_ids + deferred_ids)
+                or len(selected_ids + deferred_ids) != len(by_id)
+                or len(set(selected_ids + deferred_ids)) != len(by_id)
+                or set(selected_ids + deferred_ids) != set(by_id)
+                or selection.get("mode") not in {"all", "fixture_ids"}
+                or (selection["mode"] == "all" and deferred_ids)):
+            raise ValueError("ablation selection must partition its fixture identities")
+        expected_deferred = {key for key in plans if key[1] in deferred_ids}
+        entries = manifest.get("deferred_jobs")
+        if not isinstance(entries, list):
+            raise ValueError("ablation deferred jobs must be a list")
+        for item in entries:
+            key = _schedule_key(item)
+            if key not in expected_deferred or key in deferred or key in observed_jobs:
+                raise ValueError("duplicate, started or unplanned deferred ablation attempt")
+            planned = {field: value for field, value in plans[key].items()
+                       if field != "directory"}
+            if (set(item) != set(planned) | {"status", "reason"}
+                    or any(type(item.get(field)) is not type(value) or item[field] != value
+                           for field, value in planned.items())
+                    or item.get("status") != "deferred"
+                    or not isinstance(item.get("reason"), str) or not item["reason"].strip()
+                    or item["reason"] != selection.get("deferred_reason")):
+                raise ValueError("deferred ablation attempt disagrees with its saved selection")
+            if plans[key]["directory"].exists():
+                raise ValueError("deferred ablation attempt contains execution evidence")
+            deferred[key] = item
+        if (set(deferred) != expected_deferred
+                or type(manifest.get("deferred_runs")) is not int
+                or manifest["deferred_runs"] != len(deferred)
+                or type(manifest.get("selected_runs")) is not int
+                or manifest["selected_runs"] != len(plans) - len(deferred)):
+            raise ValueError("ablation selection counts disagree with its original full plan")
     rows_by_group = {name: [] for name in _GROUPS}
     sources, missing_by_group = [], {name: [] for name in _GROUPS}
     common_model = common_purpose = common_configuration = common_environment = None
@@ -368,8 +407,11 @@ def _ablation(root):
         group, fixture_id, repeat = key
         directory = planned["directory"]
         if not (directory / "manifest.json").exists():
-            missing_by_group[group].append({"fixture_id": fixture_id, "repeat": repeat,
-                                            "result": str(directory / "manifest.json")})
+            missing = {"fixture_id": fixture_id, "repeat": repeat,
+                       "result": str(directory / "manifest.json")}
+            if key in deferred:
+                missing.update(status="deferred", deferred_reason=deferred[key]["reason"])
+            missing_by_group[group].append(missing)
             continue
         job = observed_jobs.get(key)
         if job is None:
@@ -533,6 +575,10 @@ def render_report(model: dict) -> str:
                   "MemoryRecord values seed fresh held-out state.",
                   "One observation per fixture/group is a pilot, not evidence of repeated-trial "
                   "variance or a memory/parallel performance benefit.", ""]
+        if "selection" in manifest:
+            lines += [f"Selected attempts: {manifest['selected_runs']}/{manifest['planned_runs']}; "
+                      f"explicitly deferred, not started: {manifest['deferred_runs']}. "
+                      "The full declared plan remains the goal denominator.", ""]
     for group in model["groups"]:
         metrics, name = group["metrics"], group["name"]
         row = metrics["batch"]
@@ -573,6 +619,11 @@ def render_report(model: dict) -> str:
                          f"{_cell(str(record.get('error_message') or '-')[:1200])} | "
                          f"{_link(model, record['evidence_result'], 'result.json')} |")
         for missing in group["missing"]:
+            if missing.get("status") == "deferred":
+                lines.append(f"| {_cell(missing['fixture_id'])} | {missing['repeat']} | "
+                             f"deferred / not started | required scope unavailable | "
+                             f"{_cell(missing['deferred_reason'])} | No execution evidence |")
+                continue
             lines.append(f"| {_cell(missing['fixture_id'])} | {missing['repeat']} | "
                          "not persisted | unknown/not started | No authoritative result saved | "
                          f"{_link(model, missing['result'], 'planned evidence')} |")

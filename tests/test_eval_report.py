@@ -122,6 +122,88 @@ def first_nested(root):
     return outer, path, read(path)
 
 
+def selected_ablation(root):
+    tasks = [fixture("ready"), fixture("pending")]
+    missing = [(group["name"], "pending", 0)
+               for group in plan_ablation(tasks, 1)["groups"]]
+    root = write_ablation(root, tasks=tasks, missing=missing)
+    manifest = read(root / "ablation.json")
+    reason = "web_search is unavailable"
+    manifest.update(
+        status="partial", selected_runs=4, deferred_runs=4,
+        selection={"mode": "fixture_ids", "selected_fixture_ids": ["ready"],
+                   "deferred_fixture_ids": ["pending"], "deferred_reason": reason},
+        deferred_jobs=[{**row, "status": "deferred", "reason": reason}
+                       for row in manifest["schedule"] if row["fixture_id"] == "pending"],
+    )
+    write(root / "ablation.json", manifest)
+    return root, manifest
+
+
+def test_selected_ablation_keeps_full_denominator_and_explicit_not_started(tmp_path):
+    root, _ = selected_ablation(tmp_path / "selected")
+    model = report.build_report(root)
+    for group in model["groups"]:
+        assert group["metrics"]["batch"]["planned_runs"] == 2
+        assert group["metrics"]["batch"]["verified_root_successes"] == 1
+        assert group["metrics"]["batch"]["root_completion_rate"] == 0.5
+        assert group["missing"][0]["status"] == "deferred"
+        assert group["missing"][0]["deferred_reason"] == "web_search is unavailable"
+    text = report.render_report(model)
+    assert "Selected attempts: 4/8" in text
+    assert "explicitly deferred, not started: 4" in text
+    assert "deferred / not started" in text
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda value: value.update(selected_runs=8),
+    lambda value: value.update(deferred_runs=True),
+    lambda value: value["selection"].update(selected_fixture_ids=["ready", "pending"]),
+    lambda value: value["selection"].update(mode="all"),
+    lambda value: value["deferred_jobs"].pop(),
+    lambda value: value["deferred_jobs"].append(value["deferred_jobs"][0]),
+    lambda value: value["deferred_jobs"][0].update(reason=""),
+    lambda value: value["deferred_jobs"][0].update(relative_dir="foreign"),
+    lambda value: value["deferred_jobs"][0].update(memory_enabled=False),
+    lambda value: value["deferred_jobs"][0].update(memory_enabled=1),
+    lambda value: value["deferred_jobs"][0].update(max_slots=True),
+    lambda value: value["deferred_jobs"][0].update(results=[]),
+])
+def test_inconsistent_deferred_evidence_is_rejected(tmp_path, mutation):
+    root, manifest = selected_ablation(tmp_path / "selected")
+    mutation(manifest)
+    write(root / "ablation.json", manifest)
+    with pytest.raises(ValueError, match="selection|deferred"):
+        report.build_report(root)
+
+
+def test_deferred_attempt_cannot_hide_an_existing_result(tmp_path):
+    root, manifest = selected_ablation(tmp_path / "selected")
+    directory = root / manifest["deferred_jobs"][0]["relative_dir"]
+    write(directory / "pending" / "r0" / "result.json", {"status": "failed"})
+    with pytest.raises(ValueError, match="execution evidence"):
+        report.build_report(root)
+
+
+def test_explicit_all_deferred_archive_has_no_performance_observations(tmp_path):
+    task = fixture("pending")
+    plan = plan_ablation([task], 1)
+    root = write_ablation(tmp_path / "deferred", tasks=[task],
+                          missing=[(row["group"], "pending", 0) for row in plan["schedule"]])
+    manifest = read(root / "ablation.json")
+    manifest.update(status="partial", selected_runs=0, deferred_runs=4,
+                    selection={"mode": "fixture_ids", "selected_fixture_ids": [],
+                               "deferred_fixture_ids": ["pending"],
+                               "deferred_reason": "search unavailable"},
+                    deferred_jobs=[{**row, "status": "deferred", "reason": "search unavailable"}
+                                   for row in plan["schedule"]])
+    write(root / "ablation.json", manifest)
+    model = report.build_report(root)
+    assert model["purpose"] == "not_started"
+    assert not any(group["records"] for group in model["groups"])
+    assert sum(len(group["missing"]) for group in model["groups"]) == 4
+
+
 def test_missing_results_stay_in_goal_denominator_and_bad_indexes_are_ignored(tmp_path):
     root = write_batch(tmp_path / "run")
     (root / "results.jsonl").write_text('{"broken":', encoding="utf-8")

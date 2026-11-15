@@ -76,11 +76,22 @@ async def test_invalid_guard_fails_before_output_allocation(tmp_path):
     assert not output.exists()
 
 
-async def test_frozen_guard_rejects_changed_fixture_before_client(tmp_path):
+async def test_frozen_guard_rejects_changed_fixture_before_client(tmp_path, monkeypatch):
     from functools import partial
 
     from moumou.eval.freeze import check_attempt, prepare_experiment
 
+    # This probe must stop at the integrity guard, before any native worker is
+    # created. Keep the frozen deadline identical on platforms without the
+    # Windows-only worker implementation; containment has separate OS tests.
+    deadlines = []
+
+    def guard_only_deadline(value):
+        deadlines.append(value)
+        assert value == 180
+        return float(value)
+
+    monkeypatch.setattr("moumou.eval.isolation.validate_timeout", guard_only_deadline)
     source = fixture()
     frozen = tmp_path / "f"
     prepare_experiment([source], frozen, repeats=1, capabilities={"web_search": False},
@@ -94,6 +105,7 @@ async def test_frozen_guard_rejects_changed_fixture_before_client(tmp_path):
     with pytest.raises(ValueError, match="fixture"):
         await run_ablation([changed], forbidden, tmp_path / "r", repeats=1,
                            hard_timeout_s=180, before_attempt=partial(check_attempt, frozen))
+    assert deadlines == [180]
 
 
 async def test_missing_search_never_creates_a_model(monkeypatch, capsys, tmp_path):

@@ -78,6 +78,51 @@ def plan_ablation(fixtures: list[TaskFixture], repeats: int = 3) -> dict:
     }
 
 
+def plan_selected_ablation(
+    fixtures: list[TaskFixture], repeats: int = 3, *,
+    selected_fixture_ids=None, deferred_reason: str | None = None,
+) -> dict:
+    """Select execution rows without changing the complete experiment schedule."""
+    plan = plan_ablation(fixtures, repeats)
+    all_ids = [fixture.id for fixture in fixtures]
+    if selected_fixture_ids is None:
+        selected = set(all_ids)
+    else:
+        if not isinstance(selected_fixture_ids, (set, frozenset, list, tuple)):
+            raise TypeError("selected_fixture_ids must be a collection of fixture ids")
+        if any(not isinstance(value, str) for value in selected_fixture_ids):
+            raise TypeError("selected_fixture_ids must contain only fixture ids")
+        selected = set(selected_fixture_ids)
+        if len(selected) != len(selected_fixture_ids):
+            raise ValueError("selected_fixture_ids contains duplicate fixture ids")
+        if selected - set(all_ids):
+            raise ValueError("selected_fixture_ids contains unknown fixture ids")
+    deferred = [fixture_id for fixture_id in all_ids if fixture_id not in selected]
+    if deferred_reason is not None and (
+        not isinstance(deferred_reason, str) or not deferred_reason.strip()
+    ):
+        raise ValueError("deferred_reason must be a nonempty explanation")
+    if deferred and deferred_reason is None:
+        raise ValueError("deferred_reason is required when fixtures are not selected")
+    reason = redact(deferred_reason.strip(), None) if deferred else None
+    deferred_jobs = [
+        {**row, "status": "deferred", "reason": reason}
+        for row in plan["schedule"] if row["fixture_id"] not in selected
+    ]
+    return {
+        **plan,
+        "selection": {
+            "mode": "all" if selected_fixture_ids is None else "fixture_ids",
+            "selected_fixture_ids": [
+                fixture_id for fixture_id in all_ids if fixture_id in selected
+            ],
+            "deferred_fixture_ids": deferred, "deferred_reason": reason,
+        },
+        "selected_runs": plan["planned_runs"] - len(deferred_jobs),
+        "deferred_runs": len(deferred_jobs), "deferred_jobs": deferred_jobs,
+    }
+
+
 def _check_path_budget(root, fixtures, plan, workspace_backend):
     """Reject already-known MAX_PATH failures before allocating a paid client.
 
@@ -297,10 +342,14 @@ def _report(manifest):
         "This records attempts and mechanism evidence, not a claim of statistical improvement.",
         "Long-term memory is ablated; the conclusion board remains enabled in every group.",
         "Warmup is separate in-process execution; held-out hard deadlines do not protect it.",
+        f"Planned: {manifest['planned_runs']}; "
+        f"selected: {manifest.get('selected_runs', manifest['planned_runs'])}; "
+        f"started: {manifest.get('started_runs', len(manifest['jobs']))}; "
+        f"completed: {manifest['completed_runs']}; deferred: {manifest.get('deferred_runs', 0)}.",
         "", "| repeat | task | group | status | root success | result |",
         "|---:|---|---|---|---|---|",
     ]
-    for job in manifest["jobs"]:
+    for job in [*manifest["jobs"], *manifest.get("deferred_jobs", [])]:
         results = job.get("results", [])
         outcome = results[0].get("root_success") if results else None
         lines.append(
@@ -314,13 +363,15 @@ def _report(manifest):
 async def run_ablation(
     fixtures, llm_factory, root: Path, repeats: int = 3,
     *, workspace_backend: str = "local", hard_timeout_s: float | None = None,
-    before_attempt=None,
+    before_attempt=None, selected_fixture_ids=None, deferred_reason: str | None = None,
 ) -> dict:
     """Execute a predeclared four-group plan and preserve every nested batch.
 
     ``llm_factory()`` must return a fresh chat client, directly or awaitably.
     FakeLLM runs are offline mechanism validation, never model-performance data.
     Each repeat/fixture has one disjoint warmup and four independent seed copies.
+    An explicit selection keeps all original schedule rows; unselected fixtures
+    are deferred without warmup or client construction, never counted as runs.
     """
     from moumou.eval.runner import _validate_batch, run_all
 
@@ -337,7 +388,10 @@ async def run_ablation(
         if (fixture.scenario == "use_memory" or fixture.requirements.memory_injection
                 ) and fixture.warmup is None:
             raise ValueError(f"{fixture.id}: memory fixture requires independent warmup")
-    plan = plan_ablation(fixtures, repeats)
+    plan = plan_selected_ablation(
+        fixtures, repeats, selected_fixture_ids=selected_fixture_ids,
+        deferred_reason=deferred_reason,
+    )
     path_preflight = _check_path_budget(root, fixtures, plan, workspace_backend)
     root = reserve_batch_dir(root)
     manifest = {
@@ -345,7 +399,9 @@ async def run_ablation(
         "code": _code_version(),
         "fixtures": [fixture.model_dump(mode="json") for fixture in fixtures],
         "path_preflight": path_preflight,
-        "status": "running", "completed_runs": 0, "jobs": [], "warmups": [],
+        "status": "running", "started_runs": 0, "completed_runs": 0,
+        "succeeded_runs": 0, "failed_runs": 0, "errored_runs": 0,
+        "interrupted_runs": 0, "jobs": [], "warmups": [],
         "workspace_backend": workspace_backend, "hard_timeout_s": hard_timeout_s,
         "integrity_guard_enabled": before_attempt is not None,
         "memory_ablation_scope": (
@@ -387,6 +443,8 @@ async def run_ablation(
 
     try:
         for planned in plan["schedule"]:
+            if planned["fixture_id"] not in plan["selection"]["selected_fixture_ids"]:
+                continue
             fixture = fixtures_by_id[planned["fixture_id"]]
             key = (planned["repeat"], fixture.id)
             warmup_id = None
@@ -438,6 +496,7 @@ async def run_ablation(
                 ),
             }
             manifest["jobs"].append(job)
+            manifest["started_runs"] += 1
             atomic_json(root / "ablation.json", manifest)
             try:
                 results = await run_all(
@@ -448,12 +507,18 @@ async def run_ablation(
                 job["results"] = [asdict(result) for result in results]
                 job["status"] = "completed"
                 manifest["completed_runs"] += len(results)
+                manifest["succeeded_runs"] += sum(result.root_success is True for result in results)
+                manifest["failed_runs"] += sum(
+                    result.root_success is not True for result in results
+                )
             except BaseException as exc:
                 job["status"] = "interrupted" if isinstance(
                     exc, (asyncio.CancelledError, KeyboardInterrupt)
                 ) else "error"
                 job["error_type"] = type(exc).__name__
                 job["error_message"] = redact(str(exc), client)
+                manifest["interrupted_runs" if job["status"] == "interrupted"
+                         else "errored_runs"] += 1
                 raise
             finally:
                 try:
@@ -462,7 +527,7 @@ async def run_ablation(
                     job["finished_at"] = utc_now()
                     atomic_json(root / "ablation.json", manifest)
                     atomic_text(root / "report.md", _report(manifest))
-        manifest["status"] = "completed"
+        manifest["status"] = "partial" if manifest["deferred_runs"] else "completed"
     except BaseException as exc:
         manifest["status"] = "interrupted" if isinstance(
             exc, (asyncio.CancelledError, KeyboardInterrupt)

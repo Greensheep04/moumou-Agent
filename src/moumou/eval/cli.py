@@ -54,6 +54,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="run each attempt in a supervised Windows process with this deadline")
     p.add_argument("--ablation", action="store_true",
                    help="run four fixed long-term-memory / scheduling groups")
+    p.add_argument("--non-network", action="store_true",
+                   help="ablation only: defer web-search fixtures while retaining the full plan")
     p.add_argument("--plan", action="store_true",
                    help="print the ablation plan without model calls or output creation")
     p.add_argument("--memory", action=argparse.BooleanOptionalAction, default=None,
@@ -69,14 +71,22 @@ def _print_plan(args, fixtures=None) -> int:
     if not getattr(args, "ablation", False):
         print("--plan requires --ablation", file=sys.stderr)
         return 2
-    from moumou.eval.ablation import plan_ablation
+    from moumou.eval.ablation import plan_ablation, plan_selected_ablation
 
     try:
         if fixtures is None:
             fixtures = load_tasks(Path(args.tasks))
             if args.only:
                 fixtures = [fixture for fixture in fixtures if fixture.id == args.only]
-        plan = plan_ablation(fixtures, repeats=args.repeats or 3)
+        if getattr(args, "non_network", False):
+            plan = plan_selected_ablation(
+                fixtures, repeats=args.repeats or 3,
+                selected_fixture_ids={fixture.id for fixture in fixtures
+                                      if "web_search" not in fixture.requirements.required_tools},
+                deferred_reason="explicit non-network scope; web_search fixtures were not started",
+            )
+        else:
+            plan = plan_ablation(fixtures, repeats=args.repeats or 3)
     except (OSError, ValueError) as exc:
         print(f"cannot plan evaluation: {exc}", file=sys.stderr)
         return 2
@@ -121,6 +131,10 @@ async def main_async(args: argparse.Namespace) -> int:
         print("the evaluation set is empty", file=sys.stderr)
         return 2
     ablation = getattr(args, "ablation", False)
+    non_network = getattr(args, "non_network", False)
+    if non_network and not ablation:
+        print("--non-network requires --ablation", file=sys.stderr)
+        return 2
     if getattr(args, "plan", False):
         return _print_plan(args, fixtures)
     explicit_controls = any(getattr(args, key, None) is not None
@@ -129,6 +143,14 @@ async def main_async(args: argparse.Namespace) -> int:
         print("ablation groups fix memory, scheduling, role review and nested eval ids",
               file=sys.stderr)
         return 2
+    selected_ids = None
+    if non_network:
+        selected_ids = {fixture.id for fixture in fixtures
+                        if "web_search" not in fixture.requirements.required_tools}
+        if not selected_ids:
+            print("no non-network fixtures are available; use --plan to inspect the full schedule",
+                  file=sys.stderr)
+            return 2
     options = None
     if explicit_controls:
         from moumou.eval.options import EvaluationOptions
@@ -158,7 +180,8 @@ async def main_async(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     needs_search = [fixture.id for fixture in fixtures
-                    if "web_search" in fixture.requirements.required_tools]
+                    if "web_search" in fixture.requirements.required_tools
+                    and (selected_ids is None or fixture.id in selected_ids)]
     if needs_search and not os.environ.get("TAVILY_API_KEY", "").strip():
         print(
             "TAVILY_API_KEY is required before model execution for: "
@@ -180,6 +203,10 @@ async def main_async(args: argparse.Namespace) -> int:
         manifest = await run_ablation(
             fixtures, make_client, out, repeats=args.repeats or 3,
             workspace_backend=args.workspace_backend, hard_timeout_s=hard_timeout,
+            **({"selected_fixture_ids": selected_ids,
+                "deferred_reason": (
+                    "explicit non-network scope; web_search fixtures were not started"
+                )} if non_network else {}),
         )
         if not _regenerate_report(out):
             return 2

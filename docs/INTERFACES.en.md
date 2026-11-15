@@ -476,9 +476,46 @@ an opaque factory. Guard rejection stops the batch and preserves earlier results
 occur at attempt boundaries; the runtime must remain unchanged during execution. An archived
 copy is not automatically the executed Python runtime.
 
+`run_ablation(..., selected_fixture_ids=ids, deferred_reason=reason)` explicitly executes
+only those fixtures while retaining the complete original schedule, group rotation and
+paths. The manifest records `selection`, `selected_runs`, `deferred_runs` and a separate
+`deferred_jobs` list. Deferred entries contain their original schedule identity and reason;
+they have no client, warmup, nested batch or outcome. `jobs` contains actual attempts only.
+Exhausting a selection with deferred rows yields `partial`, never full-plan completion.
+The report validates this partition and keeps deferred rows in the original denominator.
+
+`eval.analysis.build_analysis(root)` derives failure evidence, saved successful-attempt
+checks and paired memory observations from one validated report root. `generate_analysis`
+writes an offline Markdown analysis or an explicitly requested JSON view. Analysis does not
+re-run acceptance, infer causes from missing evidence, mix revisions, or treat a faster
+single pair as causal or statistically significant improvement. Result paths and evidence
+coverage remain available to report consumers; archive access is required to inspect them.
+
 ---
 
 ## 6. `TaskRepo` (used by the orchestration layer; reference only)
+
+### Instructor session consumer contract
+
+The default application calls `eval.midtest`; the independent YAML runner remains separate.
+`midtest_cases.load_midtest_cases(path)` retains source hashes and the instructor's four
+role prompts plus the two ordered task texts. The P3 team adapter uses the existing Engine
+ports to keep a fixed roster, private continuing workspaces and Task 1 handoff/history for
+Task 2. Scenario identifiers, task phases and root IDs must remain distinct in P2 displays.
+
+`midtest_io.RecordingLLM` retains complete redacted requests/responses;
+`ConsoleHuman`/`FileHuman` implement real `HumanIO` with persisted requests and replies.
+`set_phase` identifies task-level accounting; raw Engine reports after Task 2 contain
+cumulative state and must not be mislabeled Task 2-only metrics. P3 records each root's own
+subtree separately. Consumers must distinguish agent completion, machine acceptance and
+pending human/independent content review.
+
+`search_budget.SearchBudgetTool` replaces only the registered `web_search` instance in this
+session, preserving the P1 tool contract. Its six-request initial allowance is per scenario,
+not per role or task. Stats and search events distinguish tool calls, actual provider
+requests, cache hits, in-flight deduplication and budget denial. Cache evidence includes
+original retrieval time. Additional quota requires an explicit real-human grant; a denied
+tool result is not proof that a human was asked or approved it.
 
 When writing evaluation or analysis tooling, reading this interface is enough:
 

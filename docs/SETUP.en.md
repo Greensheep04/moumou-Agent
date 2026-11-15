@@ -278,7 +278,75 @@ commit/checkout or dependency update may require a fresh freeze, with the old ar
 Existing Windows/Ubuntu CI already runs all offline tests, Ruff and the P1 demo; these P3
 changes do not alter workflow triggers or require keys in CI.
 
+### Explicit non-network execution and offline analysis
+
+When search credentials are unavailable, explicitly select the non-network fixtures:
+
+```powershell
+python -m moumou.eval.ablation --non-network --plan
+python -m moumou.eval.ablation --non-network --repeats 3 --hard-timeout 180 --out runs/NEW_NON_NETWORK_BATCH
+python -m moumou.eval.analysis --run runs/EXISTING_BATCH
+python -m moumou.eval.analysis --run runs/EXISTING_BATCH --out runs/analysis.json
+```
+
+The execution command uses the model API and the task YAML budgets; it does not automatically
+apply budget overrides from a separately prepared freeze. For guarded programmatic execution,
+load the frozen effective fixtures and pass `freeze.check_attempt` as `before_attempt`, with
+the actual public model configuration supplied in its context. Keep runtime files unchanged.
+
+The bundled full schedule stays at 180 rows. Explicit non-network execution selects 144;
+36 are saved as deferred/not started with a reason, preserving their original group order
+and paths. Finishing that selection leaves status `partial` and CLI exit code 1; exit code 0
+means the entire declared plan completed. Read actual result counts to assess task outcomes.
+Use a fresh output directory for a new experiment. Neither selection nor report generation
+resumes an earlier batch or silently retries only failed outcomes.
+
+Analysis is entirely offline and can also read historical ordinary batches. It distinguishes
+observed failures from deferred or unexplained missing results, links evidence, inventories
+saved successful-attempt checks and compares paired memory-on/off observations. It does not
+re-execute machine acceptance or claim a causal memory benefit from one pair. Keep generated
+reports and original evidence under local `runs/`; they remain outside Git.
+
 ## 7. Directories and artifacts
+
+### Default instructor conversation entry
+
+`python -m moumou` defaults to `Mid_Test/`, all three instructor scenarios, real console
+input, and six new Tavily requests per scenario shared by its two tasks. Source Markdown
+is preserved verbatim. It is not converted into the independent fifteen-task YAML dataset.
+
+```powershell
+python -m moumou --plan
+python -m moumou --human console
+python -m moumou --scenario scenario_1 --human files --out runs/midtest/NEW_SESSION
+```
+
+Each scenario has one Engine, four fixed teacher roles, private persistent role workspaces
+and two consecutive tasks. Task 2 receives Task 1's real outputs and history references.
+No default automated human answers are used. File mode writes actual requests under
+`SCENARIO_ROOT/human/pending/`; an external human writes the matching response JSON to
+`SCENARIO_ROOT/human/responses/REQUEST_ID.json`. A response contains `request_id` and actual
+`text`, or an explicit `decision` of `approve`/`reject` for an approval. Never fabricate a
+response, reuse an old response or put API credentials into a reply.
+
+When explicitly authorizing extra search quota in response to a question, the human can
+enter `/grant-search N`. Ordinary replies never grant quota automatically. Cache entries
+retain their original retrieval time; fresh requests, cache hits and denied requests have
+separate audit records. Runtime output includes complete redacted model messages and real
+human exchanges in `dialogue.jsonl`, per-task records and a session report. These are local
+artifacts, not committed source files.
+
+Per-node limits prevent runaway loops; they are not a restriction on the school's model
+allowance. Real human waiting is included in the cooperative task deadline and separately
+measured. This interactive path is not the earlier native hard-worker benchmark. `DONE`
+with no machine criteria remains agent-reported completion. The default human quality
+review waits after saving the deliverables, before Task 2 is posted. An explicit rejection
+is a quality outcome with exit code 1, not an infrastructure error. `--quality-review deferred`
+leaves quality unknown and never marks instructor goals verified automatically.
+
+The older `moumou.eval.cli`, report and ablation modules remain available for independent
+regression work. Consolidating those old entry points into the instructor entry is deferred
+to the following development day; they are not silently redirected in this change.
 
 | Path | Contents | Committed |
 | --- | --- | --- |

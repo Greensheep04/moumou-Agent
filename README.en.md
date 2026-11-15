@@ -35,8 +35,8 @@ Per-member tasks, acceptance commands and milestones live in
 
 - **Autonomous decomposition** — not a fixed pipeline; the model decides whether to split,
   how many subtasks to create, and who owns each one
-- **No preconfigured role templates** — the model determines and constructs the agent roles
-  it needs, then puts them to work
+- **Instructor teams by default** — use the four supplied identities per scenario; the
+  independent regression harness still supports dynamically constructed roles
 - **Parallel agents** — independent subtasks run concurrently to cut wall-clock time
 - **Sandbox isolation** — one private workspace per agent, mutually invisible, so a project
   cannot be corrupted by a neighbouring agent
@@ -47,6 +47,23 @@ Per-member tasks, acceptance commands and milestones live in
 - **Mid-run steering** — a human can steer or redirect a running task through conversation
 
 ## Quick start
+
+The primary application entry now follows the instructor's [Mid_Test](Mid_Test/README.md):
+three four-member groups, each receiving Task 1 and then Task 2 with continuing state.
+In an activated Python/Conda environment:
+
+```powershell
+python -m moumou --plan
+python -m moumou
+```
+
+The default uses actual terminal answers, not scripted approvals. It shares an initial
+six-request Tavily allowance across each group's two tasks and records cache hits separately.
+The school's DeepSeek/HKGAI model API is used for task quality; the explicit search allowance
+controls new Tavily requests. Full dialogue and evidence stay under local `runs/midtest/`.
+See [English setup](docs/SETUP.en.md) for file-based human input and artifact locations.
+The older YAML entry below remains an independent regression tool; its entry-point migration
+is a separate next-day task.
 
 ```bash
 git clone https://github.com/Greensheep04/moumou-Agent.git
