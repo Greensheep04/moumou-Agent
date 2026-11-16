@@ -172,7 +172,9 @@ class FileHuman:
         async with self._begin_lock:
             request_file = self.root / "requests" / f"{req.id}.json"
             response_file = self.root / "responses" / f"{req.id}.json"
-            if request_file.exists() or response_file.exists():
+            if (request_file.exists() or response_file.exists()
+                    or (self.root / "consumed" / f"{req.id}.json").exists()
+                    or (self.root / "pending" / f"{req.id}.json").exists()):
                 raise ValueError("human request ids and preexisting responses cannot be reused")
             phase = self.phase
             record = self.recorder.clean(
@@ -185,14 +187,14 @@ class FileHuman:
             self._event("human_request", phase, request=record["request"])
         return phase, monotonic()
 
-    async def _finish(self, req, payload, phase, started):
+    def _validated_response(self, req, payload):
         response = HumanResponse.model_validate(payload)
         if response.request_id != req.id:
             raise ValueError("human response id does not match the pending request")
         if req.kind in {"approval", "review"} and response.decision not in {"approve", "reject"}:
             raise ValueError("human approval or review requires an explicit decision")
-        if req.kind == "question" and response.text is None:
-            raise ValueError("a real answer is required for a human question")
+        if req.kind == "question" and (response.text is None or not response.text.strip()):
+            raise ValueError("a real non-empty answer is required for a human question")
         if req.kind == "question" and req.options and response.text not in req.options:
             raise ValueError("human response is outside the offered options")
         if (
@@ -201,9 +203,12 @@ class FileHuman:
             and response.decision not in req.options
         ):
             raise ValueError("human decision is outside the offered options")
-        response = HumanResponse.model_validate(
+        return HumanResponse.model_validate(
             self.recorder.clean(response.model_dump(mode="json"))
         )
+
+    async def _finish(self, req, payload, phase, started):
+        response = self._validated_response(req, payload)
         wait_s = monotonic() - started
         if self.on_response is not None:
             value = self.on_response(req, response)
@@ -223,15 +228,79 @@ class FileHuman:
         )
         return response
 
-    async def ask(self, req):
-        phase, started = await self._begin(req)
+    def _read_transport_json(self, path):
+        if (path.is_symlink() or not path.resolve().is_relative_to(self.root)
+                or path.stat().st_size > 1024 * 1024):
+            raise ValueError("invalid human transport file")
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        if not isinstance(payload, dict):
+            raise ValueError("human transport record must be an object")
+        return payload
+
+    async def _wait_response(self, req, phase, started):
         path = self.root / "responses" / f"{req.id}.json"
         while not path.exists():
             await asyncio.sleep(self.poll_interval_s)
-        if path.is_symlink() or path.stat().st_size > 1024 * 1024:
-            raise ValueError("invalid human response file")
-        payload = json.loads(path.read_text(encoding="utf-8-sig"))
-        return await self._finish(req, payload, phase, started)
+        return await self._finish(req, self._read_transport_json(path), phase, started)
+
+    async def ask(self, req):
+        phase, started = await self._begin(req)
+        return await self._wait_response(req, phase, started)
+
+    async def _prepare_resume(self, req):
+        if (req.kind != "question" or not req.project_id or not req.conversation_id
+                or not req.role):
+            raise ValueError("resume requires an original scoped clarification question")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", req.id):
+            raise ValueError("unsafe human request id")
+        source = self.root / "requests" / f"{req.id}.json"
+        pending = self.root / "pending" / f"{req.id}.json"
+        response_file = self.root / "responses" / f"{req.id}.json"
+        consumed = self.root / "consumed" / f"{req.id}.json"
+        if not source.exists():
+            if any(path.exists() for path in (pending, response_file, consumed)):
+                raise ValueError("original human request record is missing")
+            # The ledger may have committed immediately before the first port call.
+            # Present that exact original ID; do not invent another clarification.
+            phase, started = await self._begin(req)
+            return phase, started, None
+        record = self._read_transport_json(source)
+        expected = self.recorder.clean(req.model_dump(mode="json"))
+        original = record.get("request")
+        if original != expected or not isinstance(record.get("phase"), str):
+            raise ValueError("original human request content or scope does not match")
+        phase, started = record["phase"], monotonic()
+        if pending.exists() and self._read_transport_json(pending) != record:
+            raise ValueError("pending human request differs from its original record")
+        if consumed.exists():
+            response = self._validated_response(req, self._read_transport_json(consumed))
+            if response_file.exists():
+                duplicate = self._validated_response(req, self._read_transport_json(response_file))
+                if duplicate != response:
+                    raise ValueError("consumed and pending human responses conflict")
+            pending.unlink(missing_ok=True)
+            response_file.unlink(missing_ok=True)
+            self._event(
+                "human_response_recovered", phase, request_id=req.id,
+                source="consumed", new_response=False,
+            )
+            return phase, started, response
+        if not pending.exists():
+            with pending.open("x", encoding="utf-8") as stream:
+                stream.write(json.dumps(record, ensure_ascii=False, indent=2) + "\n")
+        self._event("human_request_resumed", phase, request_id=req.id, new_request=False)
+        return phase, started, None
+
+    async def resume(self, req):
+        """Recover one original question; consumed replies never rerun callbacks.
+
+        Callbacks for an unconsumed response must be idempotent by request ID if
+        they perform external side effects. Tool approvals cannot be resumed here.
+        """
+        phase, started, response = await self._prepare_resume(req)
+        if response is not None:
+            return response
+        return await self._wait_response(req, phase, started)
 
     async def notify(self, message):
         self._event("human_notification", self.phase, message=message.model_dump(mode="json"))
@@ -261,28 +330,40 @@ class ConsoleHuman(FileHuman):
     async def ask(self, req):
         async with self._console_lock:
             phase, started = await self._begin(req)
-            safe = self.recorder.clean(req.model_dump(mode="json"))
-            print(json.dumps(safe, ensure_ascii=False, indent=2), flush=True)
-            while True:
-                text = await asyncio.to_thread(input, "Your answer: ")
-                if req.kind in {"approval", "review"}:
-                    decision, _, note = text.strip().partition(" ")
-                    if decision.lower() not in {"approve", "reject"}:
-                        print(
-                            "Enter approve or reject explicitly, with an optional note.", flush=True
-                        )
-                        continue
-                    payload = {
-                        "request_id": req.id,
-                        "decision": decision.lower(),
-                        "text": note or None,
-                    }
-                else:
-                    if req.options and text not in req.options:
-                        print("Choose one of the displayed options.", flush=True)
-                        continue
-                    payload = {"request_id": req.id, "text": text}
-                return await self._finish(req, payload, phase, started)
+            return await self._console_answer(req, phase, started)
+
+    async def resume(self, req):
+        async with self._console_lock:
+            phase, started, response = await self._prepare_resume(req)
+            if response is not None:
+                return response
+            if (self.root / "responses" / f"{req.id}.json").exists():
+                return await self._wait_response(req, phase, started)
+            print(f"Resuming original clarification {req.id}.", flush=True)
+            return await self._console_answer(req, phase, started)
+
+    async def _console_answer(self, req, phase, started):
+        safe = self.recorder.clean(req.model_dump(mode="json"))
+        print(json.dumps(safe, ensure_ascii=False, indent=2), flush=True)
+        while True:
+            text = await asyncio.to_thread(input, "Your answer: ")
+            if req.kind in {"approval", "review"}:
+                decision, _, note = text.strip().partition(" ")
+                if decision.lower() not in {"approve", "reject"}:
+                    print("Enter approve or reject explicitly, with an optional note.", flush=True)
+                    continue
+                payload = {
+                    "request_id": req.id, "decision": decision.lower(), "text": note or None,
+                }
+            else:
+                if not text.strip():
+                    print("Enter a non-empty answer to the original question.", flush=True)
+                    continue
+                if req.options and text not in req.options:
+                    print("Choose one of the displayed options.", flush=True)
+                    continue
+                payload = {"request_id": req.id, "text": text}
+            return await self._finish(req, payload, phase, started)
 
     async def notify(self, message):
         await super().notify(message)

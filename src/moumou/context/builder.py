@@ -1,7 +1,9 @@
 """Context assembly, four layers deep.
 
     role        who I am and how I must behave          (never trimmed)
-    task        goal, acceptance, upstream reports      (trimmed under pressure)
+    task        full goal and acceptance               (never trimmed)
+    questions   recorded same-task clarification       (never trimmed)
+    upstream    dependency reports and board notes     (trimmed under pressure)
     experience  lessons retrieved from long-term memory (trimmed next)
     dialogue    this task's tool history                (compacted at runtime)
 
@@ -22,6 +24,7 @@ from moumou.contracts import (
     TaskResult,
     ToolResult,
 )
+from moumou.human_history import render_human_exchanges
 from moumou.prompts import FRAMEWORK_RULES, LEAD_ROLE, PLANNER_PROMPT, SPECIALIST_TEMPLATE
 
 from .compactor import CompactionResult, Compactor
@@ -56,6 +59,10 @@ The framework will run the parent acceptance criteria in this workspace before m
 submit_result requests that final validation and does not bypass it. Do not claim an unchecked
 requirement passed. If there is a new issue, fix or report that specific issue first.
 """
+
+
+class ContextAdmissionError(ValueError):
+    """Mandatory instructions cannot fit without changing their meaning."""
 
 
 def _machine_checked(evidence) -> bool:
@@ -172,6 +179,17 @@ class AgentContext:
         for text in texts:
             self._messages.append({"role": "user", "content": f"[Human steering] {text}"})
 
+    def replace_opening(self, opening: AgentContext) -> None:
+        """Pin newly recorded clarification facts while retaining valid dialogue turns."""
+        initial = opening.messages()
+        if len(initial) != 2 or [item.get("role") for item in initial] != ["system", "user"]:
+            raise ContextAdmissionError(
+                "replacement opening must contain system and user messages"
+            )
+        self._messages = [*initial, *self._messages[self.pinned:]]
+        self.pinned = 2
+        self.memory_ids = list(opening.memory_ids)
+
     def maybe_compact(self, compactor: Compactor) -> CompactionResult:
         """One big cut when over the trigger, never a per-step nibble."""
         result = compactor.compact(self._messages, self.pinned)
@@ -205,6 +223,7 @@ class ContextBuilder:
         dep_reports: list[dict] | None = None,
         memory_hits: list[MemoryRecord] | None = None,
         board_notes: list[str] | None = None,
+        human_exchanges: list[dict] | None = None,
     ) -> AgentContext:
         deps = dep_reports or []
         lessons = [record.lesson for record in (memory_hits or [])]
@@ -212,6 +231,14 @@ class ContextBuilder:
             scope = self.board.scope(node.project_id, node.conversation_id, role.name)
             board_notes = self.board.recent(scope, self.policy.board_entries)
         notes = list(board_notes or [])
+        recorded_answers = render_human_exchanges(node, role, human_exchanges or [])
+
+        mandatory = self._render(node, role, deps, lessons, [], 0, 0, None)
+        if not self._fits(mandatory[0], mandatory[1] + recorded_answers):
+            raise ContextAdmissionError(
+                "mandatory original role, full current goal, acceptance and recorded "
+                "human answers exceed the opening budget; no truncated instructions were admitted"
+            )
 
         dep_limit = len(deps)
         lesson_limit = len(lessons)
@@ -221,14 +248,14 @@ class ContextBuilder:
         )
 
         for kind, value in self._ladder():
-            if self._fits(system, brief):
+            if self._fits(system, brief + recorded_answers):
                 break
             if kind == "deps":
                 dep_limit = min(dep_limit, value)
             elif kind == "lessons":
                 lesson_limit = min(lesson_limit, value)
-            else:
-                goal_limit = value
+            elif kind == "notes":
+                notes = notes[:value]
             system, brief = self._render(
                 node, role, deps, lessons, notes, dep_limit, lesson_limit, goal_limit
             )
@@ -236,16 +263,16 @@ class ContextBuilder:
         return AgentContext(
             [
                 {"role": "system", "content": system},
-                {"role": "user", "content": brief},
+                {"role": "user", "content": brief + recorded_answers},
             ],
             pinned=2,
-            memory_ids=[record.id for record in (memory_hits or [])],
+            memory_ids=[record.id for record in (memory_hits or [])[:lesson_limit]],
         )
 
     # -- internals -------------------------------------------------------
     @staticmethod
     def _ladder():
-        """Reduction order: upstream reports first, then lessons, then the goal."""
+        """Reduce optional upstream reports, lessons and notes; never the current goal."""
         return [
             ("deps", 3),
             ("lessons", 3),
@@ -253,12 +280,14 @@ class ContextBuilder:
             ("lessons", 1),
             ("deps", 0),
             ("lessons", 0),
-            ("goal", 200),
+            ("notes", 0),
         ]
 
     def _fits(self, system: str, brief: str) -> bool:
         messages = [{"role": "system", "content": system}, {"role": "user", "content": brief}]
-        return self.budget.estimate(messages) <= self.policy.opening_budget_tokens
+        return self.budget.estimate(messages) <= min(
+            self.policy.opening_budget_tokens, self.policy.prompt_ceiling,
+        )
 
     def _render(
         self,
@@ -273,6 +302,8 @@ class ContextBuilder:
     ) -> tuple[str, str]:
         if role.name == LEAD_ROLE:
             system = PLANNER_PROMPT
+            if role.description and role.description not in system:
+                system += "\n## Assigned role instructions\n" + role.description
         else:
             system = SPECIALIST_TEMPLATE.format(
                 title=role.title, name=role.name, description=role.description
@@ -285,9 +316,7 @@ class ContextBuilder:
 
         acceptance = (
             "\n".join(
-                f"- [{item.kind}] {item.target}"
-                + (f" expect={json.dumps(item.expect, ensure_ascii=False)}"
-                   if item.expect is not None else "")
+                "- " + json.dumps(item.model_dump(mode="json"), ensure_ascii=False)
                 for item in node.acceptance
             )
             if node.acceptance

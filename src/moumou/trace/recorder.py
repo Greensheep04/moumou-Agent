@@ -10,6 +10,7 @@ import asyncio
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -35,6 +36,11 @@ class Recorder:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._fh = self.path.open("a", encoding="utf-8")
         self._by_task: dict[str, list[TraceEvent]] = {}
+        # A separate context variable per recorder prevents both concurrent task
+        # stacks and independently recorded conversations from sharing parents.
+        self._active_span: ContextVar[TraceEvent | None] = ContextVar(
+            "moumou_active_trace_span", default=None,
+        )
         self._store: SqliteTraceStore | None = None
         self._projection_error: Exception | None = None
         try:
@@ -76,18 +82,26 @@ class Recorder:
         name: str,
         agent_id: str | None = None,
         payload: dict | None = None,
+        parent_span: str | None = None,
     ) -> Iterator[TraceEvent]:
         """Time a block. The yielded event is mutable so callers can enrich it."""
+        parent = self._active_span.get()
+        inherited_agent = parent.agent_id if parent is not None and parent.task_id == task_id else None
         ev = TraceEvent(
             task_id=task_id,
+            parent_span=parent_span if parent_span is not None else (
+                parent.span_id if parent is not None else None
+            ),
             kind=kind,
             name=name,
-            agent_id=agent_id,
+            agent_id=agent_id if agent_id is not None else inherited_agent,
             payload=payload or {},
         )
+        token = self._active_span.set(ev)
         try:
             yield ev
-            ev.status = "ok"
+            if ev.status is None:
+                ev.status = "ok"
         except asyncio.CancelledError:
             ev.status = "cancelled"
             raise
@@ -97,12 +111,32 @@ class Recorder:
             raise
         finally:
             ev.t1 = datetime.now(UTC)
+            # Reset even if writing the journal fails. A later operation must
+            # not inherit a span whose context manager already exited.
+            self._active_span.reset(token)
             self.append(ev)
 
-    def record(self, *, task_id: str, kind: SpanKind, name: str, **payload) -> TraceEvent:
+    def record(
+        self, *, task_id: str, kind: SpanKind, name: str,
+        agent_id: str | None = None, parent_span: str | None = None, **payload,
+    ) -> TraceEvent:
         """A zero-duration marker span (steering received, role created, ...)."""
         now = datetime.now(UTC)
-        ev = TraceEvent(task_id=task_id, kind=kind, name=name, t0=now, t1=now, status="ok")
+        parent = self._active_span.get()
+        inherited_agent = parent.agent_id if parent is not None and parent.task_id == task_id else None
+        ev = TraceEvent(
+            task_id=task_id, kind=kind, name=name, t0=now, t1=now, status="ok",
+            agent_id=agent_id if agent_id is not None else inherited_agent,
+            parent_span=parent_span if parent_span is not None else (
+                parent.span_id if parent is not None else None
+            ),
+        )
+        # Older consumers obtained explicit marker identities from payload.
+        # Keep those aliases while making the declared TraceEvent fields usable.
+        if agent_id is not None:
+            payload.setdefault("agent_id", agent_id)
+        if parent_span is not None:
+            payload.setdefault("parent_span", parent_span)
         ev.payload.update(payload)
         self.append(ev)
         return ev

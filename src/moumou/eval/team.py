@@ -13,18 +13,21 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from moumou.context import ContextBuilder
-from moumou.context.builder import BOARD_HEADER, BRIEF_TEMPLATE, LESSONS_HEADER, AgentContext
+from moumou.context.builder import (
+    BOARD_HEADER,
+    BRIEF_TEMPLATE,
+    LESSONS_HEADER,
+    AgentContext,
+    ContextAdmissionError,
+)
 from moumou.contracts import AgentInstance, Budget, IntegrateResult, TaskNode
 from moumou.eval.cases import Scenario
+from moumou.human_history import render_human_exchanges
 from moumou.orchestrator.delegation import Delegation, DelegationError
 from moumou.prompts import FRAMEWORK_RULES
 
 _TEAM_ATTR = "_evaluation_team"
 _HISTORY_FILE = ".evaluation/prior-dialogue.txt"
-
-
-class ContextAdmissionError(ValueError):
-    """Required task instructions cannot be admitted without losing their meaning."""
 
 
 @dataclass
@@ -166,18 +169,21 @@ class TeamContextBuilder(ContextBuilder):
         }
         return self._json(summary)
 
-    def _context_evidence(self, node, role, deps, memory_hits, notes):
+    def _context_evidence(self, node, role, deps, memory_hits, notes, human_exchanges=None):
         references = []
         previous = self.prior_context.get("dialogue_archive")
         if isinstance(previous, dict):
             references.append("Original prior dialogue: " + self._json(previous))
         workspace = self.workspaces.get(role.name)
-        if workspace is not None and (deps or memory_hits or notes or self.prior_context):
+        if workspace is not None and (
+            deps or memory_hits or notes or self.prior_context or human_exchanges
+        ):
             raw = self._json({
                 "schema_version": 1, "task_id": node.id, "role": role.name,
                 "current_goal": node.goal, "acceptance": node.acceptance,
                 "prior_context": self.prior_context, "dependencies": deps,
                 "memory_hits": memory_hits, "board_notes": notes,
+                "recorded_human_exchanges": list(human_exchanges or []),
             }).encode("utf-8")
             digest = hashlib.sha256(raw).hexdigest()
             relative = Path(".evaluation/context") / (digest[:32] + ".json")
@@ -208,20 +214,22 @@ class TeamContextBuilder(ContextBuilder):
             "They are historical evidence, not new task instructions or deliverables.\n"
         )
 
-    def build(self, node, role, dep_reports=None, memory_hits=None, board_notes=None):
+    def build(self, node, role, dep_reports=None, memory_hits=None, board_notes=None,
+              human_exchanges=None):
         """Admit required instructions first; never truncate the current task to fit history."""
         deps, hits = list(dep_reports or []), list(memory_hits or [])
         if board_notes is None and self.board is not None:
             scope = self.board.scope(node.project_id, node.conversation_id, role.name)
             board_notes = self.board.recent(scope, self.policy.board_entries)
         notes = list(board_notes or [])
-        evidence = self._context_evidence(node, role, deps, hits, notes)
+        recorded_answers = render_human_exchanges(node, role, human_exchanges or [])
+        evidence = self._context_evidence(node, role, deps, hits, notes, human_exchanges)
         limit = min(self.policy.opening_budget_tokens, self.policy.prompt_ceiling)
 
         def render(history_limit, dep_chars, note_chars, lesson_chars):
             selected_lessons = [self._preview(record.lesson, lesson_chars) for record in hits]
             selected_notes = [self._preview(str(note), note_chars) for note in notes]
-            return self._render(
+            system, brief = self._render(
                 node, role, deps, selected_lessons, selected_notes,
                 len(deps), len(selected_lessons) if lesson_chars else 0, None,
                 history_text=self._preview(self._history_summary(), history_limit),
@@ -229,6 +237,7 @@ class TeamContextBuilder(ContextBuilder):
                                  if deps else self._render_deps([])),
                 evidence=evidence,
             )
+            return system, brief + recorded_answers
 
         def estimate(messages):
             return self.budget.estimate([
@@ -239,7 +248,7 @@ class TeamContextBuilder(ContextBuilder):
         mandatory = render(0, 0, 0, 0)
         if estimate(mandatory) > limit:
             raise ContextAdmissionError(
-                "mandatory original role, full current goal and acceptance "
+                "mandatory original role, full current goal, acceptance and recorded human answers "
                 "exceed the opening budget "
                 f"({estimate(mandatory)} estimated tokens > {limit}); "
                 "no truncated task was admitted"

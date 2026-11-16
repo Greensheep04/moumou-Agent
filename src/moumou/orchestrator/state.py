@@ -15,12 +15,15 @@ from pathlib import Path
 from moumou.contracts import (
     MAX_WAKEUPS,
     Budget,
+    HumanRequest,
+    HumanResponse,
     RoleSpec,
     TaskNode,
     TaskResult,
     TaskStatus,
     can_transition,
 )
+from moumou.human_history import HumanExchangeError, exchange_scope, validate_exchange
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -55,6 +58,22 @@ CREATE TABLE IF NOT EXISTS events (
     reason      TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id);
+
+CREATE TABLE IF NOT EXISTS human_exchanges (
+    seq             INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id      TEXT NOT NULL UNIQUE,
+    project_id      TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    task_id         TEXT NOT NULL,
+    role            TEXT NOT NULL,
+    agent_id        TEXT NOT NULL,
+    request_json    TEXT NOT NULL,
+    response_json   TEXT,
+    asked_at        TEXT NOT NULL,
+    answered_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_human_exchanges_scope
+    ON human_exchanges(project_id, conversation_id, task_id, role, seq);
 
 CREATE TABLE IF NOT EXISTS conclusions (
     seq         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -213,6 +232,116 @@ class SqliteTaskRepo:
 
     def count_root_tasks(self) -> int:
         return int(self._rows("SELECT COUNT(*) AS n FROM tasks WHERE parent_id IS NULL")[0]["n"])
+
+    @staticmethod
+    def _human_record(row) -> dict:
+        try:
+            request = json.loads(row["request_json"])
+            if request.get("id") != row["request_id"]:
+                raise ValueError("human-exchange request key mismatch")
+            return {
+                "schema_version": 1,
+                **{key: row[key] for key in
+                   ("project_id", "conversation_id", "task_id", "role", "agent_id")},
+                "request": request,
+                "response": (json.loads(row["response_json"])
+                             if row["response_json"] is not None else None),
+                "asked_at": row["asked_at"], "answered_at": row["answered_at"],
+            }
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise HumanExchangeError(f"invalid_human_exchange_storage:{exc}") from exc
+
+    @staticmethod
+    def _human_scope(executor, node: TaskNode) -> None:
+        row = executor.execute(
+            "SELECT project_id, conversation_id, role FROM tasks WHERE id = ?", (node.id,),
+        ).fetchone()
+        if row is None or any(row[key] != value for key, value in
+                              exchange_scope(node).items() if key != "task_id"):
+            raise HumanExchangeError("human_exchange_task_scope_mismatch")
+
+    def human_exchanges(self, node: TaskNode, *, require_answered: bool = True) -> list[dict]:
+        self._human_scope(self.db.conn, node)
+        rows = self._rows("SELECT * FROM human_exchanges WHERE task_id = ? ORDER BY seq",
+                          (node.id,))
+        # Older databases may have question audit events but no recoverable answer.
+        # Do not silently treat that missing evidence as "no clarification needed".
+        previous_questions = self._rows(
+            "SELECT COUNT(*) AS n FROM events WHERE task_id = ? AND reason = 'question'",
+            (node.id,),
+        )[0]["n"]
+        if previous_questions > len(rows):
+            raise HumanExchangeError(
+                "human_exchange_history_missing: recorded question has no ledger"
+            )
+        return [validate_exchange(self._human_record(row), node,
+                                  require_answered=require_answered) for row in rows]
+
+    def record_human_request(self, node: TaskNode, request: HumanRequest) -> None:
+        try:
+            request = HumanRequest.model_validate(request)
+        except (ValueError, TypeError) as exc:
+            raise HumanExchangeError(f"invalid_human_request:{exc}") from exc
+        record = validate_exchange({
+            "schema_version": 1, **exchange_scope(node), "agent_id": request.agent_id,
+            "request": request.model_dump(mode="json"), "response": None,
+            "asked_at": _now(), "answered_at": None,
+        }, node, require_answered=False)
+        cur = self.db.conn.cursor()
+        cur.execute("BEGIN IMMEDIATE")
+        try:
+            self._human_scope(cur, node)
+            old = cur.execute("SELECT * FROM human_exchanges WHERE request_id = ?",
+                              (request.id,)).fetchone()
+            if old is not None:
+                previous = validate_exchange(self._human_record(old), node, require_answered=False)
+                if previous["request"] != record["request"]:
+                    raise HumanExchangeError("human_exchange_request_id_collision")
+            else:
+                cur.execute(
+                    "INSERT INTO human_exchanges (request_id, project_id, conversation_id, "
+                    "task_id, role, agent_id, request_json, asked_at) VALUES (?,?,?,?,?,?,?,?)",
+                    (request.id, node.project_id, node.conversation_id, node.id, node.role,
+                     request.agent_id, json.dumps(record["request"], ensure_ascii=False,
+                                                  allow_nan=False), record["asked_at"]),
+                )
+            cur.execute("COMMIT")
+        except BaseException:
+            cur.execute("ROLLBACK")
+            raise
+
+    def record_human_response(self, node: TaskNode, response: HumanResponse) -> None:
+        try:
+            response = HumanResponse.model_validate(response)
+        except (ValueError, TypeError) as exc:
+            raise HumanExchangeError(f"invalid_human_response:{exc}") from exc
+        cur = self.db.conn.cursor()
+        cur.execute("BEGIN IMMEDIATE")
+        try:
+            self._human_scope(cur, node)
+            row = cur.execute("SELECT * FROM human_exchanges WHERE request_id = ?",
+                              (response.request_id,)).fetchone()
+            if row is None:
+                raise HumanExchangeError("human_exchange_request_missing_for_response")
+            previous = validate_exchange(self._human_record(row), node, require_answered=False)
+            payload = response.model_dump(mode="json")
+            if previous["response"] is not None:
+                if previous["response"] != payload:
+                    raise HumanExchangeError("human_exchange_response_is_immutable")
+            else:
+                completed = validate_exchange({
+                    **previous, "response": payload, "answered_at": _now(),
+                }, node)
+                cur.execute(
+                    "UPDATE human_exchanges SET response_json = ?, answered_at = ? "
+                    "WHERE request_id = ?",
+                    (json.dumps(payload, ensure_ascii=False, allow_nan=False),
+                     completed["answered_at"], response.request_id),
+                )
+            cur.execute("COMMIT")
+        except BaseException:
+            cur.execute("ROLLBACK")
+            raise
 
     # -- writes ----------------------------------------------------------
     def add(self, node: TaskNode) -> None:

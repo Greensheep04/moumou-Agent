@@ -290,16 +290,27 @@ class SearchBudgetTool:
                             provider_requests=attempts)
 
     def grant(self, n: int, *, approval_id: str | None = None) -> dict:
-        """Apply an allowance extension already approved by a real human handler."""
+        """Apply one explicit approval once, including after a resumed callback."""
         if type(n) is not int or n <= 0:
             raise ValueError("grant must be a positive integer")
         if not isinstance(approval_id, str) or not approval_id.strip():
             raise ValueError("grant requires an explicit human approval_id")
         with self._db(write=True) as db:
-            db.execute("UPDATE quotas SET request_limit=request_limit+? WHERE namespace=?",
-                       (n, self.namespace))
-            db.execute("DELETE FROM pending WHERE namespace=?", (self.namespace,))
-            self._event(db, "budget_granted", {"amount": n, "approval_id": approval_id})
+            # The committed event and quota increment share this transaction.
+            # Reading the existing journal also covers pre-idempotence databases.
+            prior = [json.loads(row[0]) for row in db.execute(
+                "SELECT payload FROM events WHERE namespace=? AND kind='budget_granted'",
+                (self.namespace,),
+            )]
+            matching = [event for event in prior if event.get("approval_id") == approval_id]
+            if matching:
+                if len(matching) != 1 or matching[0].get("amount") != n:
+                    raise ValueError("approval_id conflicts with a previously recorded grant")
+            else:
+                db.execute("UPDATE quotas SET request_limit=request_limit+? WHERE namespace=?",
+                           (n, self.namespace))
+                db.execute("DELETE FROM pending WHERE namespace=?", (self.namespace,))
+                self._event(db, "budget_granted", {"amount": n, "approval_id": approval_id})
         self._flush_events()
         return self.stats()
 

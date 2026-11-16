@@ -33,6 +33,9 @@ class HumanRequest(BaseModel):
     payload: dict = Field(default_factory=dict)    # full arguments
     options: list[str] = Field(default_factory=list)   # empty => free-text answer
     context: str = ""                              # extra body text for the card
+    project_id: str = ""                           # explicit scope on recoverable requests
+    conversation_id: str = ""
+    role: str = ""
 
 
 class HumanResponse(BaseModel):
@@ -45,3 +48,10 @@ class HumanResponse(BaseModel):
 class HumanIO(Protocol):
     async def ask(self, req: HumanRequest) -> HumanResponse: ...
     async def notify(self, msg: Message) -> None: ...
+
+
+@runtime_checkable
+class ResumableHumanIO(Protocol):
+    """Optional capability: recover an original clarification, never a tool grant."""
+
+    async def resume(self, req: HumanRequest) -> HumanResponse: ...

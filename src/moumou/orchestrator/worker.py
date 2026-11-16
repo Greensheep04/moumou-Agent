@@ -14,15 +14,19 @@ from collections import defaultdict
 from pathlib import Path, PureWindowsPath
 from time import monotonic
 
+from moumou.context.builder import LESSONS_HEADER
+from moumou.context.observation import memory_prompt_observation
 from moumou.contracts import (
     AgentInstance,
     HumanRequest,
+    HumanResponse,
     Message,
     RoleSpec,
     TaskNode,
     TaskResult,
     ToolResult,
 )
+from moumou.human_history import HumanExchangeError
 from moumou.orchestrator.delegation import DelegationError
 from moumou.sandbox.local import LocalJail
 
@@ -86,35 +90,65 @@ class TaskRunner:
 
         agent = self._instance(node, role)
         workspace = Path(agent.workspace)
-        deliveries = self._materialise_dependencies(node, workspace)
-
-        try:
-            await self._loop(node, role, agent, workspace, deliveries)
-        except asyncio.CancelledError:
-            self._park(node.id, "DEAD", "cancelled")
-            raise
-        except BudgetExceeded as exc:
-            self._fail(node.id, f"budget:{exc}")
-        except Exception as exc:
-            self._fail(node.id, f"crash:{type(exc).__name__}:{exc}")
+        with self.trace.span(
+            task_id=node.id, kind="task", name="execution", agent_id=agent.id,
+        ) as span:
+            try:
+                try:
+                    deliveries = self._materialise_dependencies(node, workspace)
+                    await self._loop(node, role, agent, workspace, deliveries)
+                except asyncio.CancelledError:
+                    span.status = "cancelled"
+                    self._park(node.id, "DEAD", "cancelled")
+                    raise
+                except BudgetExceeded as exc:
+                    span.status = "error"
+                    span.payload["handled_error"] = f"budget:{exc}"
+                    self._fail(node.id, f"budget:{exc}")
+                except HumanExchangeError as exc:
+                    span.status = "error"
+                    span.payload["handled_error"] = f"human_exchange:{exc}"
+                    self._fail(node.id, f"human_exchange:{exc}")
+                except Exception as exc:
+                    span.status = "error"
+                    span.payload["handled_error"] = f"crash:{type(exc).__name__}:{exc}"
+                    self._fail(node.id, f"crash:{type(exc).__name__}:{exc}")
+            finally:
+                current = self.repo.get(node.id)
+                if (current is not None and current.status in {"FAILED", "DEAD"}
+                        and span.status is None):
+                    span.status = "error"
+                span.payload["task_status"] = current.status if current is not None else None
+                span.payload["scope"] = (
+                    "one execution attempt; not assignment-to-delivery wall time"
+                )
 
     # -- the loop --------------------------------------------------------
     async def _loop(
         self, node: TaskNode, role: RoleSpec, agent: AgentInstance, workspace: Path,
         deliveries: dict | None = None,
     ) -> None:
+        started = monotonic()
+        await self._resume_human_questions(node, agent)
         hits = (
             self.retriever.fetch(node, role)
             if self.retriever is not None and self.memory_enabled
             else []
         )
-        ctx = self.context.build(node, role, self._dep_reports(node, deliveries), memory_hits=hits)
+        self.trace.record(
+            task_id=node.id, kind="memory", name="memory_retrieved", agent_id=agent.id,
+            role=role.name, project_id=node.project_id, conversation_id=node.conversation_id,
+            retrieved_ids=[record.id for record in hits],
+            record_scopes=[{"id": record.id, "project_id": record.project_id, "role": record.role}
+                           for record in hits],
+            memory_enabled=self.memory_enabled,
+        )
+        ctx = self._opening(node, role, agent, deliveries, hits)
         if ctx.memory_ids:
             self.citations[node.id] = list(ctx.memory_ids)
         self._subscribe(agent.id)
         tool_specs = self.tools.subset(role.tools)
 
-        started = monotonic()
         tokens = 0
 
         for step in range(1, node.budget.max_steps + 1):
@@ -148,6 +182,12 @@ class TaskRunner:
                 )
 
             estimated = self.budget.estimate(ctx.messages())
+            self.trace.record(
+                task_id=node.id, kind="memory", name="memory_prompt_observed", agent_id=agent.id,
+                role=role.name, project_id=node.project_id, conversation_id=node.conversation_id,
+                step=step,
+                **memory_prompt_observation(ctx.messages(), hits, LESSONS_HEADER),
+            )
             with self.trace.span(
                 task_id=node.id, kind="llm", name=f"{role.name}:step{step}", agent_id=agent.id
             ) as span:
@@ -210,6 +250,10 @@ class TaskRunner:
                 else:
                     result = await self.gate.execute(call, node, agent, workspace)
                 ctx.add_tool_result(call.id, result)
+                if call.name == "ask_human":
+                    ctx.replace_opening(self._opening(
+                        node, role, agent, deliveries, hits, reason="after_recorded_answer",
+                    ))
 
         raise BudgetExceeded("max_steps")
 
@@ -248,6 +292,66 @@ class TaskRunner:
             self.repo.transition(node.id, "FAILED", "acceptance_failed")
 
     # -- helpers ---------------------------------------------------------
+    def _opening(self, node, role, agent, deliveries, hits, *, reason="initial"):
+        records = self.repo.human_exchanges(node)
+        options = {"memory_hits": hits}
+        if records:
+            # Existing custom builders without recorded questions retain their
+            # old call shape. A builder must accept the new keyword to recover
+            # actual answers; never silently omit mandatory clarification facts.
+            options["human_exchanges"] = records
+        ctx = self.context.build(
+            node, role, self._dep_reports(node, deliveries), **options,
+        )
+        self.trace.record(
+            task_id=node.id, kind="memory", name="memory_context_selected", agent_id=agent.id,
+            role=role.name, project_id=node.project_id, conversation_id=node.conversation_id,
+            retrieved_ids=[record.id for record in hits], selected_ids=list(ctx.memory_ids),
+            context_reason=reason, recorded_question_count=len(records),
+            interpretation="context admission only; not observed model use or reward",
+        )
+        return ctx
+
+    async def _resume_human_questions(self, node, agent):
+        history = getattr(self.repo, "human_exchanges", None)
+        if not callable(history):
+            raise HumanExchangeError("human_exchange_store_unsupported")
+        records = history(node, require_answered=False)
+        for record in records:
+            if record["response"] is not None:
+                continue
+            request = HumanRequest.model_validate(record["request"])
+            resume = getattr(self.human, "resume", None)
+            if not callable(resume):
+                raise HumanExchangeError(
+                    f"pending_human_exchange_requires_resume:{request.id}"
+                )
+            self.repo.transition(node.id, "WAITING_HUMAN", "question:resume")
+            with self.trace.span(
+                task_id=node.id, kind="question", name="resume_human", agent_id=agent.id,
+            ) as span:
+                span.payload["request_id"] = request.id
+                span.payload["original_agent_id"] = request.agent_id
+                try:
+                    answer = await resume(request)
+                except (ValueError, TypeError, OSError) as exc:
+                    raise HumanExchangeError(
+                        f"human_exchange_resume_failed:{request.id}:{exc}"
+                    ) from exc
+                self._record_human_answer(node, request, answer)
+                span.payload["recorded_response_recovered"] = True
+            self.repo.transition(node.id, "RUNNING", "human:resumed")
+
+    def _record_human_answer(self, node, request, answer):
+        try:
+            answer = HumanResponse.model_validate(answer)
+        except (ValueError, TypeError) as exc:
+            raise HumanExchangeError(f"invalid_human_response:{exc}") from exc
+        if answer.request_id != request.id:
+            raise HumanExchangeError(f"human_response_request_id_mismatch:{request.id}")
+        self.repo.record_human_response(node, answer)
+        return answer
+
     def _instance(self, node: TaskNode, role: RoleSpec) -> AgentInstance:
         agent_id = f"{role.name}@{node.id}"
         workspace = self.workspace.allocate(
@@ -317,17 +421,21 @@ class TaskRunner:
             kind="question",
             summary=question,
             context=str(call.args.get("why", "")),
+            project_id=node.project_id, conversation_id=node.conversation_id, role=node.role,
         )
         # Park the task the same way an approval does, so a crash mid-question
         # is recoverable instead of leaving the task silently stuck.
+        self.repo.record_human_request(node, request)
         self.repo.transition(node.id, "WAITING_HUMAN", "question")
         with self.trace.span(
             task_id=node.id, kind="question", name="ask_human", agent_id=agent.id
         ) as span:
             answer = await self.human.ask(request)
+            answer = self._record_human_answer(node, request, answer)
             span.payload["answer"] = answer.text
+            span.payload["request_id"] = request.id
         self.repo.transition(node.id, "RUNNING", "human:answered")
-        return ToolResult(ok=True, stdout=answer.text or "(the human gave no answer)")
+        return ToolResult(ok=True, stdout=answer.text)
 
     def _materialise_dependencies(self, node: TaskNode, workspace: Path) -> dict:
         """Pull each dependency's declared artifacts into our workspace.
