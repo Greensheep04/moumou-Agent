@@ -85,6 +85,8 @@ def _tree(repo, root_id):
 
 
 def _task_record(engine, node, elapsed, phase):
+    from moumou.eval.session_evidence import capture_failure_snapshot, capture_memory_snapshot
+
     nodes = _tree(engine.repo, node.id)
     current = engine.repo.get(node.id)
     verdicts = [
@@ -104,8 +106,17 @@ def _task_record(engine, node, elapsed, phase):
             {
                 "id": item.id,
                 "parent_id": item.parent_id,
+                "project_id": item.project_id,
+                "conversation_id": item.conversation_id,
                 "role": item.role,
+                "agent_id": item.role,
+                "identity_policy": "instructor_fixed_role",
                 "status": item.status,
+                "deps": list(item.deps),
+                "artifacts": list(item.artifacts),
+                "error": item.error,
+                "retries": item.retries,
+                "wakeups": item.wakeups,
                 "machine_criteria": len(item.acceptance),
                 "result": item.result.model_dump(mode="json") if item.result else None,
             }
@@ -120,6 +131,8 @@ def _task_record(engine, node, elapsed, phase):
         "agent_declared_complete": current.status == "DONE",
         "quality_status": "awaiting_human_or_independent_review",
         "verified_goal_success": None,
+        "memory_snapshot": capture_memory_snapshot(engine, nodes),
+        "failure_snapshot": capture_failure_snapshot(engine, nodes),
         "note": "DONE or empty-criteria self-report does not establish instructor task quality.",
     }
 
@@ -162,6 +175,9 @@ async def run_suite(args, scenarios):
     from moumou.eval.artifacts import _code_version, atomic_json, atomic_text, redact
     from moumou.eval.human import ConsoleHuman, FileHuman, RecordingLLM
     from moumou.eval.search_budget import SearchBudgetTool
+    from moumou.eval.session_evidence import (
+        capture_artifact_snapshot, capture_scenario_state, sanitize_evidence,
+    )
     from moumou.eval.team import configure_team, submit_teacher_task
     from moumou.orchestrator import Engine, Settings
     from moumou.tools import ToolRegistry, default_tools
@@ -212,6 +228,7 @@ async def run_suite(args, scenarios):
         max_retries=1,
     )
     print(f"test session: {root}", flush=True)
+    unsuccessful_scenarios = []
     try:
         for scenario in scenarios:
             folder = root / scenario.id
@@ -250,20 +267,24 @@ async def run_suite(args, scenarios):
             tools.register_all(
                 *(search if tool.name == "web_search" else tool for tool in default_tools())
             )
-            engine = Engine(
-                llm,
-                human=human,
-                tools=tools,
-                settings=Settings(
-                    root=folder,
-                    project_id=scenario.id,
-                    conversation_id="instructor-group",
-                    memory_enabled=True,
-                    max_slots=4,
-                    role_review_enabled=False,
-                    approval={"git_commit": True},
-                ),
-            )
+            try:
+                engine = Engine(
+                    llm,
+                    human=human,
+                    tools=tools,
+                    settings=Settings(
+                        root=folder,
+                        project_id=scenario.id,
+                        conversation_id="instructor-group",
+                        memory_enabled=True,
+                        max_slots=4,
+                        role_review_enabled=False,
+                        approval={"git_commit": True},
+                    ),
+                )
+            except BaseException:
+                await llm.aclose()
+                raise
             entry = {
                 "scenario_id": scenario.id,
                 "name": scenario.name,
@@ -276,6 +297,7 @@ async def run_suite(args, scenarios):
             }
             manifest["scenarios"].append(entry)
             previous = None
+            scenario_ready = False
             try:
                 team = configure_team(engine, scenario, previous_dialogue_path=transcript)
                 team.context.search_budget_notice = (
@@ -286,6 +308,7 @@ async def run_suite(args, scenarios):
                     "the explicit command /grant-search N.\n"
                 )
                 entry["workspaces"] = {role: str(path) for role, path in team.workspaces.items()}
+                scenario_ready = True
                 for index, goal in enumerate(scenario.tasks, start=1):
                     phase = f"task_{index}"
                     llm.set_phase(phase)
@@ -310,6 +333,14 @@ async def run_suite(args, scenarios):
                     task = _task_record(engine, node, monotonic() - began, phase)
                     task["delivery_elapsed_s"] = task["elapsed_s"]
                     task["workspaces"] = entry["workspaces"]
+                    capture_started = monotonic()
+                    current = engine.repo.get(node.id)
+                    task["artifact_snapshot"] = capture_artifact_snapshot(
+                        folder, entry["workspaces"][current.role], current, phase,
+                        secrets=secrets,
+                    )
+                    task["evidence_capture_s"] = round(monotonic() - capture_started, 6)
+                    task = sanitize_evidence(task, secrets)
                     entry["tasks"].append(task)
                     atomic_json(folder / f"{phase}-result.json", task)
                     atomic_json(root / "test.json", manifest)
@@ -324,7 +355,8 @@ async def run_suite(args, scenarios):
                             context=(
                                 "Inspect the actual output and dialogue before deciding. "
                                 "Approval records your quality judgment; it does not create "
-                                "a machine acceptance check. Rejection stops later tasks."
+                                "a machine acceptance check. Rejection stops later tasks "
+                                "in this group; independent groups can still proceed."
                             ),
                             options=["approve", "reject"],
                             payload={"scenario_root": str(folder), "task": task},
@@ -357,6 +389,7 @@ async def run_suite(args, scenarios):
                         )
                     }
                     previous = node.id
+                    task.update(sanitize_evidence(task, secrets))
                     atomic_json(folder / f"{phase}-result.json", task)
                     atomic_json(root / "test.json", manifest)
                     atomic_text(root / "report.md", _report(manifest))
@@ -384,18 +417,55 @@ async def run_suite(args, scenarios):
                     if args.quality_review == "human"
                     else "agent_completed_quality_unreviewed"
                 )
+            except (_TaskIncomplete, _QualityRejected) as exc:
+                # Later tasks in this group depend on its earlier delivery.
+                # Other instructor groups are independent and still need an attempt.
+                entry["status"] = (
+                    "quality_rejected" if isinstance(exc, _QualityRejected) else "incomplete"
+                )
+                entry["outcome_detail"] = str(exc)
+                unsuccessful_scenarios.append(scenario.id)
+            except Exception as exc:
+                if not scenario_ready:
+                    entry["status"] = "setup_error"
+                    raise
+                # Task-stage failure is local to this independent group. Setup
+                # and cleanup errors remain infrastructure stops: resource
+                # closure has not been established, so another group is unsafe.
+                entry["status"] = "error"
+                entry["error_type"] = type(exc).__name__
+                entry["error_message"] = sanitize_evidence(redact(str(exc), settings), secrets)
+                unsuccessful_scenarios.append(scenario.id)
             finally:
                 entry["search"] = search.stats()
                 entry["llm"] = llm.summary()
                 entry["human"] = human.summary()
-                engine.close()
-                await llm.aclose()
+                try:
+                    entry["state_snapshot"] = capture_scenario_state(
+                        folder, engine, secrets=secrets,
+                    )
+                except Exception as exc:
+                    entry["state_snapshot"] = {
+                        "status": "unavailable", "error_type": type(exc).__name__,
+                        "reason": "No state snapshot was established; do not infer final state.",
+                    }
+                try:
+                    engine.close()
+                finally:
+                    await llm.aclose()
                 atomic_json(root / "test.json", manifest)
         manifest["status"] = (
-            "human_accepted"
-            if args.quality_review == "human"
+            "human_accepted" if args.quality_review == "human"
             else "agent_completed_quality_unreviewed"
         )
+        if unsuccessful_scenarios:
+            manifest["status"] = (
+                "quality_rejected" if manifest["scenarios"][0]["status"] == "quality_rejected"
+                else "error" if manifest["scenarios"][0]["status"] == "error"
+                else "agent_incomplete"
+            ) if len(scenarios) == 1 else "partially_completed"
+            manifest["unsuccessful_scenarios"] = unsuccessful_scenarios
+            return 1
     except (_TaskIncomplete, _QualityRejected) as exc:
         manifest["status"] = (
             "quality_rejected" if isinstance(exc, _QualityRejected) else "agent_incomplete"
@@ -409,7 +479,7 @@ async def run_suite(args, scenarios):
             else "error"
         )
         manifest["error_type"] = type(exc).__name__
-        manifest["error_message"] = redact(str(exc), settings)
+        manifest["error_message"] = sanitize_evidence(redact(str(exc), settings), secrets)
         raise
     finally:
         manifest["finished_at"] = _now()

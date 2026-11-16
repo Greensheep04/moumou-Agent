@@ -507,6 +507,152 @@ def _session_wall_time(manifest: dict) -> dict:
             "basis": "saved started_at and finished_at only"}
 
 
+def _saved_observation(task, field, counts, durations, source, *, scope="saved task phase"):
+    values = task.get(field)
+    if values is None or values == {}:
+        return None
+    if not isinstance(values, dict):
+        raise ValueError(f"saved {field} observation must be an object")
+    selected = {}
+    for name in (*counts, *durations):
+        value = values.get(name)
+        if value is not None:
+            valid = (_count(value, nullable=False) if name in counts else
+                     type(value) in {int, float} and math.isfinite(value) and value >= 0)
+            if not valid:
+                raise ValueError(f"invalid saved {field}.{name} observation")
+        selected[name] = value
+    return {"values": selected, "source": str(source), "json_field": field, "scope": scope}
+
+
+def _memory_context_snapshots(directory, nodes):
+    """Read only immutable context inputs; never sample the live memory database."""
+    owners = {node["id"]: node.get("role") for node in nodes}
+    snapshots = []
+    for path in sorted((directory / "workspaces").rglob(".evaluation/context/*.json")):
+        if path.is_symlink() or not path.resolve().is_relative_to(directory.resolve()):
+            raise ValueError("memory context snapshot escapes the saved scenario")
+        if path.stat().st_size > _LIMIT:
+            raise ValueError("memory context snapshot exceeds its size bound")
+        raw = path.read_bytes()
+        digest = hashlib.sha256(raw).hexdigest()
+        if path.name not in {digest + ".json", digest[:32] + ".json"}:
+            raise ValueError("memory context snapshot content hash is invalid")
+        data = _read(path)
+        node_id = data.get("task_id")
+        if node_id not in owners:
+            continue
+        if data.get("schema_version") != 1:
+            raise ValueError("unsupported memory context snapshot schema")
+        hits = data.get("memory_hits")
+        if not isinstance(hits, list) or any(not isinstance(hit, dict) for hit in hits):
+            raise ValueError("saved context memory candidates must be a list of objects")
+        ids = [hit.get("id") for hit in hits]
+        if any(not isinstance(value, str) or not value for value in ids):
+            raise ValueError("saved context memory candidate identity is invalid")
+        snapshots.append({
+            "path": str(path), "sha256": digest, "node_id": node_id,
+            "role": data.get("role"), "recorded_node_role": owners[node_id],
+            "candidate_count": len(hits), "candidate_ids": ids,
+            "scope": "retrieval candidates at saved context build; admission/use unverified",
+        })
+    return snapshots
+
+
+def _session_evidence(task, path, directory, nodes):
+    from moumou.contracts import TraceEvent
+    from moumou.eval.session_evidence import validate_artifact_snapshot
+
+    node_ids = {node["id"] for node in nodes}
+    snapshots = _memory_context_snapshots(directory, nodes)
+    artifacts = validate_artifact_snapshot(directory, task.get("artifact_snapshot"), task=task)
+    memory = task.get("memory_snapshot")
+    if memory is not None:
+        if (not isinstance(memory, dict) or memory.get("schema_version") != 1
+                or memory.get("stage") != "post_engine_run"
+                or memory.get("status") not in {"recorded", "partial", "disabled", "unavailable"}):
+            raise ValueError("invalid saved memory snapshot")
+        scopes, observations = memory.get("scopes"), memory.get("observations")
+        if ((scopes is not None and (not isinstance(scopes, list)
+                or any(not isinstance(scope, dict) or (scope.get("records") is not None
+                       and not isinstance(scope["records"], list))
+                       for scope in scopes)))
+                or (observations is not None and (not isinstance(observations, list)
+                    or any(not isinstance(event, dict) for event in observations)))):
+            raise ValueError("invalid saved memory snapshot evidence")
+        if any(event.get("task_id") not in node_ids for event in observations or []):
+            raise ValueError("saved memory observations include another task tree")
+        for event in observations or []:
+            parsed = TraceEvent.model_validate(event)
+            if parsed.kind != "memory" or parsed.name not in {
+                "memory_retrieved", "memory_context_selected", "memory_prompt_observed",
+            }:
+                raise ValueError("saved memory observation is not a recorded memory stage")
+    failure = task.get("failure_snapshot")
+    if failure is not None:
+        if (not isinstance(failure, dict) or failure.get("schema_version") != 1
+                or failure.get("status") not in {"recorded", "partial"}
+                or not isinstance(failure.get("events"), list)
+                or any(not isinstance(event, dict) or event.get("task_id") not in node_ids
+                       for event in failure["events"])):
+            raise ValueError("invalid saved failure snapshot")
+        saved_tool_failures = 0
+        for event in failure["events"]:
+            parsed = TraceEvent.model_validate(event)
+            saved_tool_failures += int(parsed.kind == "tool" and (
+                parsed.payload.get("ok") is False or parsed.status in {"error", "cancelled"}
+            ))
+        observed = failure.get("observed_tool_failures")
+        count = failure.get("tool_failure_count")
+        if (not _count(observed, nullable=False) or not _count(count)
+                or observed != saved_tool_failures
+                or (failure["status"] == "partial" and count is not None)
+                or (count is not None and count != observed)):
+            raise ValueError("invalid saved tool-failure counts")
+    return {
+        "result_source": str(path),
+        "artifact_snapshot": artifacts,
+        "artifact_reference": task.get("artifact_snapshot"),
+        "artifact_status": ("saved_immutable_snapshot" if artifacts is not None else
+                            "unsupported_historical_artifact_snapshot"),
+        "llm": _saved_observation(
+            task, "llm", ("calls", "error_calls", "usage_missing_calls", "known_tokens_in",
+                          "known_tokens_out", "tokens_in", "tokens_out"),
+            ("cumulative_call_s",), path,
+        ),
+        "human": _saved_observation(task, "human", ("answered_requests",),
+                                    ("cumulative_wait_s",), path),
+        "search_delta": _saved_observation(
+            task, "search_delta", ("tool_calls", "provider_requests", "cache_hits",
+                                   "deduplicated", "budget_denials"), (), path,
+        ),
+        "search_scenario_cumulative": _saved_observation(
+            task, "search_scenario_cumulative", ("limit", "used", "remaining",
+                "provider_requests", "provider_successes", "provider_failures", "tool_calls",
+                "cache_hits", "deduplicated", "budget_denials"), (), path,
+            scope="saved scenario cumulative snapshot; not task-only usage",
+        ),
+        "memory_context_snapshots": snapshots,
+        "memory_snapshot": ({"values": memory, "source": str(path),
+                             "scope": "saved post-engine role-scope state; not task-only writes"}
+                            if memory is not None else None),
+        "memory_status": (memory["status"] if memory is not None else
+                          "saved_candidates_only" if snapshots else "unknown"),
+        "memory_note": "No live memory.db sampled; candidates do not prove use or causal benefit.",
+        "failure": {
+            "source": str(path),
+            "unsuccessful_node_ids": [node["id"] for node in nodes
+                                      if node["status"] in {"FAILED", "DEAD", "CANCELLED"}],
+            "root_machine_rejected": task.get("root_machine_accepted") is False,
+            "recorded_error_type": task.get("error_type"),
+            "recorded_error_message": task.get("error_message"),
+            "tool_failure_count": failure.get("tool_failure_count") if failure else None,
+            "snapshot": failure,
+            "note": "Only saved node/error/trace facts; missing failure measurements are unknown.",
+        },
+    }
+
+
 def _session(root: Path, source: Path) -> dict:
     """Recompute conversation results from each saved task, never cached totals."""
     manifest = _read(source)
@@ -520,7 +666,7 @@ def _session(root: Path, source: Path) -> dict:
     scenarios = manifest.get("scenarios")
     if not isinstance(scenarios, list):
         raise ValueError("session scenarios must be a list")
-    records, protected, seen = [], [], set()
+    records, protected, seen = [], [str(root / "reviews")], set()
     for scenario in scenarios:
         if not isinstance(scenario, dict):
             raise ValueError("session scenario must be an object")
@@ -568,6 +714,9 @@ def _session(root: Path, source: Path) -> dict:
             if root_node["status"] != status:
                 raise ValueError("root status disagrees with saved node evidence")
             success = task.get("verified_goal_success")
+            if (task.get("root_machine_accepted") is not None
+                    and type(task["root_machine_accepted"]) is not bool):
+                raise ValueError("root_machine_accepted must be boolean or null")
             if success is not None and type(success) is not bool:
                 raise ValueError("verified_goal_success must be boolean or null")
             if success is True and not (
@@ -578,12 +727,34 @@ def _session(root: Path, source: Path) -> dict:
                 and task.get("human_quality_response", {}).get("decision") == "approve"
             ):
                 raise ValueError("a successful goal lacks its actual quality-review evidence")
+            raw_quality = {
+                "quality_status": task.get("quality_status", "unreviewed"),
+                "verified_goal_success": success, "quality_method": task.get("quality_method"),
+            }
+            from moumou.eval.review import resolve_review
+
+            review = resolve_review(root, manifest, scenario, task, path)
+            quality_status = raw_quality["quality_status"]
+            quality_source = "raw_task_result" if success is not None else "unknown"
+            if review is not None:
+                if success is not None:
+                    raise ValueError("offline review conflicts with an original quality outcome")
+                approved = review["response"]["decision"] == "approve"
+                quality_status = "human_accepted" if approved else "human_rejected"
+                success = (approved and status == "DONE"
+                           and task.get("root_machine_accepted") is not False)
+                quality_source = "offline_human_review"
             records.append({
                 "scenario_id": identity, "phase": phase, "root_status": status,
+                "result_content_sha256": hashlib.sha256(
+                    _canonical(task).encode("utf-8")
+                ).hexdigest(),
                 "root_task_id": task["root_task_id"], "elapsed_s": elapsed,
                 "root_machine_accepted": task.get("root_machine_accepted"),
-                "quality_status": task.get("quality_status", "unreviewed"),
+                "quality_status": quality_status, "quality_source": quality_source,
                 "verified_goal_success": success,
+                "raw_quality": raw_quality, "review": review, "nodes": nodes,
+                "evidence": _session_evidence(task, path, directory, nodes),
                 "observed_subtasks": len(subtasks),
                 "observed_subtasks_done": sum(node["status"] == "DONE" for node in subtasks),
                 "path": str(path),
@@ -838,19 +1009,87 @@ def _render_session(model: dict) -> str:
         f"Whole-session elapsed time (s): {wall_text}; derived only from saved start/end.",
         f"Saved delivery time mean / sample std / n (s): {_stats(metrics['delivery_time_s'])}.",
         "",
-        "| scenario | phase | root | agent status | machine accepted | quality | "
+        "| scenario | phase | root | agent status | machine accepted | quality | source | "
         "delivery (s) | result |",
-        "|---|---|---|---|---|---|---:|---|",
+        "|---|---|---|---|---|---|---|---:|---|",
     ]
     for row in model["records"]:
         lines.append(f"| {_cell(row['scenario_id'])} | {row['phase']} | "
                      f"{_cell(row['root_task_id'])} | {row['root_status']} | "
                      f"{_cell(row['root_machine_accepted'])} | {_cell(row['quality_status'])} | "
+                     f"{_cell(row['quality_source'])} | "
                      f"{row['elapsed_s']:.3f} | {_link(model, row['path'], 'result.json')} |")
+    lines += [
+        "", "Saved phase observations (N/A means no saved measurement):", "",
+        "| scenario / phase | LLM calls | input / output tokens | missing usage calls | "
+        "cumulative LLM call seconds | fresh search attempts / cache hits / quota denials | "
+        "memory | unsuccessful saved nodes |",
+        "|---|---:|---|---:|---:|---|---|---:|",
+    ]
+    evidence_notes = []
+    for row in model["records"]:
+        evidence = row["evidence"]
+        llm = (evidence["llm"] or {}).get("values", {})
+        search = (evidence["search_delta"] or {}).get("values", {})
+        snapshots = evidence["memory_context_snapshots"]
+        memory_text = evidence["memory_status"]
+        if snapshots:
+            memory_text += f"; {len(snapshots)} saved context candidate snapshots"
+        lines.append(
+            f"| {_cell(row['scenario_id'])} / {row['phase']} | {_optional(llm.get('calls'))} | "
+            f"{_optional(llm.get('tokens_in'))} / {_optional(llm.get('tokens_out'))} | "
+            f"{_optional(llm.get('usage_missing_calls'))} | "
+            f"{_number(llm.get('cumulative_call_s'))} | "
+            f"{_optional(search.get('provider_requests'))} / "
+            f"{_optional(search.get('cache_hits'))} / "
+            f"{_optional(search.get('budget_denials'))} | {_cell(memory_text)} | "
+            f"{len(evidence['failure']['unsuccessful_node_ids'])} |"
+        )
+        if row["review"] is not None:
+            review = row["review"]
+            evidence_notes.append(
+                f"\n{_cell(row['scenario_id'])}/{row['phase']}: original quality "
+                f"{_cell(row['raw_quality']['quality_status'])}; effective quality "
+                f"{_cell(row['quality_status'])}; {_link(model, review['path'], 'human review')}. "
+                "The original execution state/result is unchanged."
+            )
+        if evidence["artifact_reference"] is not None:
+            artifact_path = Path(row["path"]).parent / evidence["artifact_reference"]["path"]
+            reference = evidence["artifact_reference"]
+            evidence_notes.append(
+                f"\n{_cell(row['scenario_id'])}/{row['phase']}: "
+                + _link(model, artifact_path, "saved immutable artifact manifest")
+                + f"; capture {_cell(reference['status'])}, "
+                + f"{reference['captured_count']}/{reference['selected_count']} selected files."
+            )
+        human = (evidence["human"] or {}).get("values", {})
+        failure = evidence["failure"]
+        evidence_notes.append(
+            f"\n{_cell(row['scenario_id'])}/{row['phase']}: saved answered human requests "
+            f"{_optional(human.get('answered_requests'))}; cumulative human wait (s) "
+            f"{_number(human.get('cumulative_wait_s'))}; known token subtotals in/out "
+            f"{_optional(llm.get('known_tokens_in'))}/{_optional(llm.get('known_tokens_out'))}; "
+            f"saved tool failures {_optional(failure['tool_failure_count'])}."
+        )
+    lines += evidence_notes
     lines += [
         "", "Recomputed offline from authoritative task result files; cached manifest totals "
         "and duplicate task summaries do not establish success. "
         "DONE alone is not quality acceptance.",
+        "Offline human decisions require a matching append-only request, consumed response and "
+        "HumanIO event log bound to the saved result/source hashes. Reconsideration retains "
+        "the prior decision through an explicit supersession chain. This checks recorded "
+        "port evidence, not cryptographic human identity. Raw quality and review provenance "
+        "remain separate; a review cannot create a delivery or repair a failed agent state.",
+        "LLM and search observations above come from saved per-phase result fields, not "
+        "scenario cumulative totals. Missing provider usage stays unknown even when known "
+        "token subtotals exist. Cumulative call/wait spans can overlap and are not wall time. "
+        "Memory is limited to saved post-engine snapshots or hash-checked context inputs; "
+        "retrieval candidates do not prove prompt admission, reuse or a causal score gain. "
+        "Live memory databases are not sampled. Missing tool-failure counts remain unknown.",
+        "An immutable artifact snapshot, when saved, is hash-validated independently. Older "
+        "results without one retain the unsupported_historical_artifact_snapshot boundary; "
+        "a current mutable workspace must not be called the original delivery bytes.",
         "Whole-session time includes waiting and time spent on unfinished tasks. "
         "Delivery samples cover only persisted task results and exclude unfinished phases; "
         "a zero-sample delivery sum of zero is not total execution time. "

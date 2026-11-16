@@ -1,6 +1,6 @@
 """Offline, evidence-linked failure and paired-memory observations.
 
-This module reads one already validated batch/ablation. It neither reruns
+This module reads one already validated batch/ablation or instructor session. It neither reruns
 acceptance nor labels a trace symptom as the cause of a task failure.
 """
 
@@ -17,6 +17,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from moumou.eval.artifacts import atomic_text, redact
+from moumou.eval.replay import _from_report as replay_from_report
 from moumou.eval.report import build_report
 
 _LIMIT = 32 * 1024**2
@@ -26,6 +27,8 @@ _INFRASTRUCTURE = {
 _RAW_NAMES = {
     "manifest.json", "ablation.json", "freeze.json", "result.json", "metrics.json",
     "llm-calls.json", "llm-telemetry.json", "memory-snapshot.json", "warmup.json",
+    "test.json", "midtest.json", "active.json", "review.json", "intent.json",
+    "replay.json", "task_1-result.json", "task_2-result.json",
 }
 
 
@@ -299,9 +302,186 @@ def _memory_comparisons(model, rows):
     return output
 
 
+def _session_classification(row, original):
+    """Classify saved outcomes without treating a symptom as model causality."""
+    source = row["path"]
+    status = row["root_status"]
+    root = next(node for node in original["nodes"] if node["id"] == row["root_task_id"])
+    error = root.get("error")
+    if row.get("verified_goal_success") is True:
+        category, basis = "reviewed_success", "validated recorded quality acceptance"
+        if isinstance(row.get("review"), dict):
+            source = row["review"].get("path", source)
+    elif row.get("root_machine_accepted") is False:
+        category, basis = "acceptance", "saved root machine verdict is false"
+    elif isinstance(error, str) and error.startswith("budget:"):
+        category, basis = "budget", "saved root budget error prefix"
+    elif isinstance(error, str) and error.startswith("crash:"):
+        category, basis = "recorded_crash", "saved root crash prefix, origin not inferred"
+    elif row.get("verified_goal_success") is False:
+        category, basis = "recorded_unsuccessful", "validated saved quality outcome"
+    elif status == "DONE":
+        category, basis = "unreviewed", "agent completion has no verified quality outcome"
+    else:
+        category, basis = "unknown", "saved evidence does not establish the terminal cause"
+    return {"category": category, "confidence": "unknown" if category == "unknown" else "recorded",
+            "basis": basis, "source": source, "saved_root_error": error}
+
+
+def _saved_capture(row, original, field):
+    """Expose an existing capture reference; never manufacture one from live state."""
+    evidence = row.get("evidence")
+    report_evidence = evidence.get(field) if isinstance(evidence, dict) else None
+    value = original.get(field)
+    if value is None:
+        value = report_evidence.get("values") if isinstance(report_evidence, dict) else None
+    if value is not None and not isinstance(value, dict):
+        raise ValueError("saved phase capture must be an object")
+    return {
+        "state": "unknown" if value is None else value.get("status", "unknown"),
+        "source": row["path"], "capture": value,
+        "report_evidence": report_evidence,
+        "basis": "saved task capture only; live workspaces and memory.db are not sampled",
+    }
+
+
+def _memory_events(original, trace, scenario_id, source):
+    capture = original.get("memory_snapshot")
+    if isinstance(capture, dict) and isinstance(capture.get("observations"), list):
+        result = []
+        for index, event in enumerate(capture["observations"]):
+            if not isinstance(event, dict):
+                raise ValueError("saved memory observation must be an original event object")
+            result.append({
+                "record": event,
+                "identity": {"scenario_id": scenario_id, "task_id": event.get("task_id")},
+                "source": {**source, "json_pointer": f"/memory_snapshot/observations/{index}"},
+            })
+        return result, "saved_phase_capture"
+    return [item for item in trace if item["record"].get("kind") == "memory"], \
+        "saved_trace_without_phase_capture"
+
+
+def _failure_events(original, trace, scenario_id, source):
+    capture = original.get("failure_snapshot")
+    if not isinstance(capture, dict) or not isinstance(capture.get("events"), list):
+        return trace, "saved_trace_without_phase_capture"
+    result = []
+    for index, event in enumerate(capture["events"]):
+        if not isinstance(event, dict) or not isinstance(event.get("payload", {}), dict):
+            raise ValueError("saved failure observation must be an original event object")
+        result.append({"record": event,
+                       "identity": {"scenario_id": scenario_id, "task_id": event.get("task_id")},
+                       "source": {**source, "json_pointer": f"/failure_snapshot/events/{index}"}})
+    return result, "saved_phase_capture"
+
+
+def _session_analysis(model):
+    replay = replay_from_report(model)
+    by_scenario = {item["scenario_id"]: item for item in replay["scenarios"]}
+    attempts = []
+    for row in model["records"]:
+        scenario = by_scenario[row["scenario_id"]]
+        saved = next(item for item in scenario["task_results"]
+                     if item["record"]["phase"] == row["phase"])
+        original = saved["record"]
+        task_ids = {node["id"] for node in original["nodes"]}
+        trace = [item for item in scenario["trace"]["events"]
+                 if item["record"].get("task_id") in task_ids]
+        verdicts = [item for item in trace if item["record"].get("kind") == "acceptance"
+                    and item["record"].get("name") == "verdict"
+                    and item["record"].get("task_id") == row["root_task_id"]]
+        trace_verdict = verdicts[-1]["record"].get("payload", {}).get("ok") if verdicts else None
+        evidence = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
+        memory_events, memory_basis = _memory_events(
+            original, trace, row["scenario_id"], saved["source"],
+        )
+        failure_events, failure_basis = _failure_events(
+            original, trace, row["scenario_id"], saved["source"],
+        )
+        attempts.append({
+            "identity": {"scenario_id": row["scenario_id"], "task_id": row["root_task_id"]},
+            "phase": row["phase"], "root_status": row["root_status"],
+            "quality_status": row.get("quality_status"),
+            "verified_goal_success": row.get("verified_goal_success"),
+            "quality_source": row.get("quality_source", "unknown"),
+            "raw_quality": row.get("raw_quality"), "review": row.get("review"),
+            "evidence_result": row["path"], "result_source": saved["source"],
+            "classification": _session_classification(row, original),
+            "nodes": original["nodes"],
+            "observed_symptoms": _symptoms({
+                "events": [item["record"] for item in failure_events],
+            }),
+            "failure_snapshot": _saved_capture(row, original, "failure_snapshot"),
+            "failure_observation_basis": failure_basis,
+            "report_failure_evidence": evidence.get("failure"),
+            "trace": {"state": scenario["trace"]["state"],
+                      "source": scenario["trace"]["source"], "events": trace},
+            "success_audit": {
+                "saved_root_machine_accepted": original.get("root_machine_accepted"),
+                "trace_verdict": trace_verdict,
+                "trace_verdict_matches_saved": (
+                    trace_verdict == original.get("root_machine_accepted")
+                    if type(trace_verdict) is bool else None),
+                "acceptance_reexecuted": False,
+            },
+            "artifact_snapshot": saved["artifact_snapshot"],
+            "memory": {
+                "snapshot": _saved_capture(row, original, "memory_snapshot"),
+                "context_candidates": evidence.get("memory_context_snapshots"),
+                "observed_events": memory_events, "observation_basis": memory_basis,
+                "observed_event_counts": dict(sorted(Counter(
+                    item["record"].get("name", "unknown") for item in memory_events
+                ).items())),
+                "retrieval_call_count": None, "causal_benefit": "not_established",
+                "limits": [
+                    "A context archive contains candidates at build time, not proof of admission/use.",
+                    "No live memory database is treated as an earlier phase snapshot.",
+                    "Absent telemetry is unknown, not zero retrieval calls.",
+                    "Sequential teacher tasks are not independent on/off experiment pairs.",
+                ],
+            },
+        })
+    return {
+        "schema_version": 1, "kind": "instructor_test",
+        "analysis_kind": "saved_session_observations", "root": model["root"],
+        "code": model["manifest"].get("code", {}),
+        "model": model["manifest"].get("model", {}),
+        "report_builder": model.get("report_builder", {}),
+        "analysis_builder": {"module": "moumou.eval.analysis", "source_sha256":
+                             hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
+        "summary": model["metrics"], "attempts": attempts,
+        "outcome_categories": dict(sorted(Counter(
+            row["classification"]["category"] for row in attempts).items())),
+        "failure_categories": dict(sorted(Counter(
+            row["classification"]["category"] for row in attempts
+            if row["root_status"] in {"FAILED", "DEAD"}
+            or row["verified_goal_success"] is False
+            or row["success_audit"]["saved_root_machine_accepted"] is False
+        ).items())),
+        "human": [{"scenario_id": item["scenario_id"], "evidence": item["human"]}
+                  for item in replay["scenarios"]],
+        "scenario_diagnostics": [{"scenario_id": item["scenario_id"],
+                                  "evidence": item["state_snapshot"]}
+                                 for item in replay["scenarios"]],
+        "saved_suite_status": replay["saved_suite_status"],
+        "protected_directories": model["protected_directories"],
+        "limitations": [
+            "Raw statuses and the original complete planned denominator remain unchanged.",
+            "Recorded symptoms do not identify model, human or tool causality.",
+            "No acceptance, runtime, network call or memory intervention is re-executed.",
+            "Missing phase captures and unknown quality stay unknown; versions are not pooled.",
+            "Delivery-duration variation is not independent-repeat or causal memory evidence.",
+            "An offline view is not evidence of P2 consumer or teammate sign-off.",
+        ],
+    }
+
+
 def build_analysis(root: Path | str) -> dict:
     """Analyze one validated saved experiment without executing tasks or clients."""
     model = build_report(root)
+    if model["kind"] == "instructor_test":
+        return _session_analysis(model)
     attempts, missing, rows = [], [], {}
     deferred = {
         (item["group"], item["fixture_id"], item["repeat"]): item.get("reason")
@@ -369,6 +549,8 @@ def _link(path, directory, label):
 def render_analysis(model: dict, directory: Path | str | None = None) -> str:
     """Render observed failures, audits and paired memory evidence as Markdown."""
     directory = Path(directory or model["root"])
+    if model["kind"] == "instructor_test":
+        return _render_session_analysis(model, directory)
     summary = model["summary"]
     lines = ["# Evaluation failure and memory analysis", "",
              f"Purpose: {_cell(model['purpose'])}; "
@@ -422,6 +604,51 @@ def render_analysis(model: dict, directory: Path | str | None = None) -> str:
     return "\n".join(lines)
 
 
+def _render_session_analysis(model, directory):
+    metrics = model["summary"]
+    lines = [
+        "# Saved instructor failure and memory observations", "",
+        f"Planned roots: {metrics['planned_root_goals']}; "
+        f"saved deliveries: {metrics['persisted_task_deliveries']}; "
+        f"verified successes: {metrics['verified_successes']}; "
+        f"not delivered: {metrics['not_delivered']}.",
+        f"Raw suite status: {_cell(model['saved_suite_status'])}. "
+        f"Saved suite wall time: {_cell(metrics.get('suite_wall_time_s'))} seconds.",
+        "", "No acceptance is re-executed and no current workspace or memory database "
+        "is sampled as a historical snapshot.", "",
+        "| Scenario | Phase | Root | Saved status | Quality | Observation | Evidence |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in model["attempts"]:
+        lines.append(
+            f"| {_cell(row['identity']['scenario_id'])} | {_cell(row['phase'])} | "
+            f"{_cell(row['identity']['task_id'])} | {_cell(row['root_status'])} | "
+            f"{_cell(row['quality_status'])} | {_cell(row['classification']['category'])} | "
+            f"{_link(row['evidence_result'], directory, 'saved task')} |"
+        )
+    lines += ["", "## Memory and immutable artifact captures", ""]
+    for row in model["attempts"]:
+        memory = row["memory"]
+        lines.append(
+            f"- {_cell(row['identity']['scenario_id'])}/{_cell(row['phase'])}: "
+            f"artifact capture={_cell(row['artifact_snapshot']['state'])}; "
+            f"memory capture={_cell(memory['snapshot']['state'])}; "
+            f"observed memory events={_cell(memory['observed_event_counts'])}; "
+            "retrieval call coverage unknown; causal benefit not established."
+        )
+    lines += ["", "## Human evidence", ""]
+    for item in model["human"]:
+        human = item["evidence"]
+        lines.append(
+            f"- {_cell(item['scenario_id'])}: {len(human['answered'])} recorded response pairs; "
+            f"{len(human['pending_files'])} pending files; "
+            f"{len(human['staged_response_files'])} staged response files. "
+            "A staged file does not prove consumption or manual authorship."
+        )
+    lines += ["", "## Limits", "", *[f"- {item}" for item in model["limitations"]], ""]
+    return "\n".join(lines)
+
+
 def generate_analysis(root: Path | str, out: Path | str | None = None) -> Path:
     """Write a derived .md/.txt or machine-readable .json, preserving raw inputs."""
     model = build_analysis(root)
@@ -434,6 +661,8 @@ def generate_analysis(root: Path | str, out: Path | str | None = None) -> Path:
     if target.name in _RAW_NAMES or any(
             target.is_relative_to(Path(path)) for path in model["protected_directories"]):
         raise ValueError("analysis output would overwrite or enter original evidence")
+    if target.is_relative_to(Path(model["root"]) / "reviews"):
+        raise ValueError("analysis output would enter original review evidence")
     text = json.dumps(model, ensure_ascii=False, indent=2, allow_nan=False) + "\n" \
         if target.suffix.lower() == ".json" else render_analysis(model, target.parent)
     atomic_text(target, text)
