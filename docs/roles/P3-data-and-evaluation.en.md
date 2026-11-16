@@ -19,11 +19,17 @@ inputs separate from framework implementation tests.
 | `src/moumou/eval/cli.py` | Shared formal entry and per-task/scenario accounting |
 | `src/moumou/eval/search_budget.py` | Shared scenario search allowance and audit |
 | `src/moumou/eval/report.py` | Offline reconstruction for current and historical saved evidence |
+| `src/moumou/eval/analysis.py` and `replay.py` | Saved instructor failure/memory observations and a read-only source-linked P2 export |
+| `src/moumou/eval/review.py` and `session_evidence.py` | Append-only explicit review and immutable phase/diagnostic evidence |
 
 Core storage ports remain `TraceStore.append/query` and the `MemoryStore`
 write/search/all/scoring/deletion methods in `contracts/store.py`. Preserve the
 exact event and memory scopes. Project-plus-role storage filtering alone does
 not establish isolation between every possible Engine agent instance.
+
+The instructor adapter has stable role agent IDs and private role directories; within
+that protocol project:role is the continuing persona, while scenario/run databases
+separate teams. Generic Engine per-task instances retain the existing sharing policy.
 
 ## Current formal protocol
 
@@ -62,6 +68,26 @@ are the shared definitions. Offline report generation does not resume an old ses
 or answer a pending review. Preserve forced-stop evidence even if the raw manifest
 still says running.
 
+Analysis/replay/review, question recovery and phase captures are implemented, with
+regression source awaiting execution. The published e35e820 result of 905 passed and
+8 skipped is a historical baseline. It does not validate the changed implementation,
+establish actual six-goal quality or provide P0/P1/P2 consumer sign-off.
+
+## P3 delivery package
+
+| Deliverable | Required content |
+| --- | --- |
+| Code and sources | Reproducible configuration template, the original instructor task hashes, retained supplementary bank and meaningful framework regressions |
+| Architecture and interfaces | Routing/delegation, human recovery, identity/memory policy, sandbox limits and saved-evidence consumer fields |
+| Performance report | Actual selected plan, verified goals, execution times, observed failures, memory changes and limitations, linked to original saved evidence |
+| Reproduction | Native Windows / activated Conda instructions, commands, model identity and non-secret configuration |
+| Contribution evidence | Repository URL and genuine Git history/screenshots showing individual development contributions |
+
+[Delivery requirements](../DELIVERY.en.md) define the packaging and acceptance
+checklist. [Performance evidence](../PERFORMANCE.en.md) keeps measured results separate
+from pending evaluations. Final closed-set measurements must be added after the actual
+set is available and run; no placeholder value is a submitted score.
+
 ## Design freedom and boundaries
 
 Storage layout, retrieval implementation and report presentation remain design choices.
@@ -71,5 +97,6 @@ scripted-answer metadata does not authorize a real response.
 
 P0 owns scheduling, memory policy and orchestration semantics. P1 owns execution/tools;
 P2 owns the interaction/replay interface. P3 adapters consume those contracts and document
-cross-module effects. Existing workflows are unchanged. Low-level archived experiment
-APIs are historical analysis infrastructure, not competing formal task entries.
+cross-module effects. Validation commands are run explicitly; no bundled GitHub Actions
+workflow is required for the delivery. Low-level archived experiment APIs support
+historical analysis, rather than competing formal task entries.

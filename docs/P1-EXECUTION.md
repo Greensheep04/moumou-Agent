@@ -2,26 +2,28 @@
 
 ## 当前交付范围
 
-P1 提供文件工具、shell/Python 执行、Git 本地操作、经过框架审批的推送、Tavily 搜索，以及可注入 Engine 的 Git worktree Provider。共享 contracts 和 P0 编排代码保持不变。
+P1 提供文件工具、shell/Python 执行、Git 本地操作、经过框架审批的推送、Tavily 搜索，以及可注入 Engine 的 Git worktree Provider。当前共享接口及 P3 人答恢复相关字段见[接口说明](INTERFACES.md)，不能将早期“contracts 未改”视为当前仓库状态。
 
 所有工具通过 `default_tools()` 注册。工作区 Provider 通过构造参数注入，默认 Engine 仍保留原来的 LocalDirs，避免改变队友的既有行为。
 
-## 环境和运行
+## 当前环境与运行
 
-本机 checkout：`D:\Projects\moumou-Agent`。专用环境：`D:\Dev\conda-envs\moumou-agent`。环境规格位于 `environment.yml`，Python 包锁位于 `requirements-win-py311.lock`。规格文件不包含机器绝对路径。
+安装及课程 DeepSeek/HKGAI 配置见[环境说明](SETUP.md)。Python 3.11 环境规格保留在
+`environment.yml` 与 `requirements-win-py311.lock`；原生 Windows P3 开发使用
+已激活的 Python 3.12 Conda `nlp` 环境。
 
-在本机 PowerShell 中，从项目目录执行：
+从项目根目录的已激活 PowerShell 环境执行：
 
 ```powershell
-conda activate D:\Dev\conda-envs\moumou-agent
-python -m pip install -r requirements-win-py311.lock
-python -m pip install --no-deps -e .
+conda activate nlp
+python -m pip install -e ".[dev]"
 python -m pytest -q
 python -m ruff check src tests
 python -m moumou.demo.p1
 ```
 
-如需从零创建环境，先指定 Conda 缓存，再通过 `conda env create --prefix ... --file environment.yml` 创建。不要运行仓库旧 Makefile 的 `make install`，它会额外创建 .venv。代码、运行命令和测试均应使用上述专用环境。
+以上是复现命令，不代表当前候选已通过。复用 Conda 时不要用会创建 `.venv` 的 `make install`。
+下文通用 Engine/GitWorkspaces API 与[老师正式入口](EVAL.md)分别描述。
 
 P1 demo 不需要 LLM 或搜索密钥。每次在 `runs/p1-demo/<run-id>/` 生成独立运行目录，包括数据库、trace、工作区和 `p1-summary.json`，不删除此前演示记录。
 
@@ -118,7 +120,7 @@ Git 本地操作和推送会移除继承/上下文中的 GIT_* 重定向及配�
 - 锁覆盖同一 Provider 实例的并发调用，不提供多进程共享 Provider 的事务保证。
 - 执行前后指纹比较不能报告内容未变化的写入，也不能保留在进程运行期间创建后又删除的临时产物；这些不属于最终交付文件。
 - 搜索属于外部付费服务，需要团队提供有效密钥；本地测试不消耗真实检索额度。
-- 已做 Windows 本地验证。Windows/Linux CI 已配置，但运行结果以实际 GitHub Actions 为准，不能将配置文件视为 Linux 验证证据。
+- 历史 Windows 检查仅适用于原版本。仓库工作流已从拟提交目录删除；按[交付说明](DELIVERY.md)记录实际使用平台上的明确检查命令和输出。
 - 与 P0/P3 的人工联调、真实模型测试及正式课程测试集尚需团队完成；本实现已提供不依赖模型的 Engine 集成测试。
 
 ## 演示与验收
@@ -133,4 +135,5 @@ Git 本地操作和推送会移除继承/上下文中的 GIT_* 重定向及配�
 - test_web_search.py：模拟 HTTP 协议、错误、超时、结构化限额。
 - test_p1_integration.py：既有 Engine 的并行交付、依赖传递和脚本执行。
 
-验证结果及审查修复记录见 `docs/P1-PROGRESS.md`。持续提交可用 `git log --graph --oneline origin/main..HEAD` 展示；正式报告中的提交历史截图应在最终分支与团队贡献记录确定后补充。
+当前验证与待测项见[性能报告](PERFORMANCE.md)，带日期的阶段开发记录保留在 Git 历史。
+真实贡献截图与最终材料见[交付清单](DELIVERY.md)。

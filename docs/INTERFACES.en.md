@@ -6,22 +6,23 @@
 > which methods to implement and what goes in and out of them; when they are called; and how to
 > wire your implementation in and test it.
 >
-> The ports live in `src/moumou/contracts/` and are currently frozen. If something needs to change,
-> please raise it first so three implementations do not have to rework at once.
+> The shared ports live in `src/moumou/contracts/`. Coordinate interface changes with
+> their consumers, preserve existing call shapes where possible and update the contract tests.
 
 
 ## 0. Shared conventions
 
 ### 0.1 The async model
 
-Every port method runs on the same event loop, and multiple agents call the same implementation
-concurrently. Therefore:
+Agent execution and asynchronous tool, Channel and HumanIO calls share an event loop.
+Storage ports expose synchronous methods. Multiple agents can call the same adapter, so:
 
 - wrap slow work in `asyncio.create_subprocess_exec` or `asyncio.to_thread`
 - a synchronous call such as `time.sleep` or `requests` blocks the whole event loop (every agent
   stops with it)
-- the framework applies an outer `asyncio.wait_for`; when a coroutine is cancelled, cleaning up the
-  child process is the implementation's job
+- tool/model operations have their own timeouts; adapters must clean up subprocesses and
+  awaited resources on cancellation. Interactive node limits remain cooperative and do not
+  impose a universal hard deadline while a person is answering
 
 ### 0.2 How to express failure
 
@@ -33,7 +34,8 @@ symptom works best; detailed stack traces belong in the trace, where the framewo
 
 ### 0.3 How to wire an implementation in
 
-The constructor of `Engine` is the injection point; all four ports can be replaced:
+The constructor of `Engine` is the injection point for its tool, workspace, Channel,
+HumanIO and memory adapters:
 
 ```python
 from pathlib import Path
@@ -78,11 +80,12 @@ import asyncio
 from pathlib import Path
 
 from moumou.contracts import ToolContext
+from moumou.tools.git import GitTool
 
 
 async def main():
     ctx = ToolContext(agent_id="me@t1", task_id="t1", workspace=Path("."))
-    print(await GitTool().run({"branch": "main"}, ctx))
+    print(await GitTool().run({"operation": "status"}, ctx))
 
 
 asyncio.run(main())
@@ -293,6 +296,7 @@ class HumanIO(Protocol):
 | `payload` | full arguments, for an "expand" view |
 | `options` | allowed answers; an empty list means free text |
 | `context` | extra explanation, e.g. why the question is being asked |
+| `project_id` / `conversation_id` / `role` | explicit scope on recoverable questions; additive fields defaulting to empty text for older callers |
 
 ### `HumanResponse` (output)
 
@@ -318,6 +322,19 @@ quality reviews. `eval.human.ConsoleHuman` and `FileHuman` retain the real reque
 responses. Approval of a tool action does not establish content-quality acceptance.
 `ScriptedHuman` in `adapters/human.py` remains a deterministic framework-test utility,
 not an answer source for formal instructor or supplementary task sessions.
+
+Question recovery is an optional capability rather than a requirement on every HumanIO:
+
+```python
+class ResumableHumanIO(Protocol):
+    async def resume(self, req: HumanRequest) -> HumanResponse: ...
+```
+
+Only the original scoped `question` can be resumed. Console/File ports verify its
+original ID/body, recover a consumed response without repeating its callback, or wait
+for the original outstanding response. An unconsumed callback must be idempotent by
+request ID if it changes external state. Tool approvals and quality reviews are not
+replayed as grants. A runner with pending history and an unsupported port fails explicitly.
 
 ---
 
@@ -347,7 +364,7 @@ class MemoryStore(Protocol):
 | `name` | the concrete name, e.g. `tool:write_file` |
 | `t0` / `t1` | start and end; `duration_ms` is derived |
 | `status` | `ok` / `error` / `cancelled` |
-| `tokens_in` / `tokens_out` | needed for the cost metrics |
+| `tokens_in` / `tokens_out` | recorded usage fields; coverage and provider evidence determine whether totals are known |
 | `payload` | attached data |
 
 Trace consumers, including P2, should recognize `result_rejected` for an invalid final
@@ -355,26 +372,35 @@ file declaration and `declared_files_published` after accepted files are publish
 These events distinguish a correctable result rejection from successful publication;
 neither by itself establishes instructor goal quality.
 
+Recorder supplies active nested-span parents with async context isolation and keeps
+top-level agent metadata distinct from payload. Existing null parents are not backfilled.
+Span parentage is not TaskNode delegation parentage; replay retains both as recorded.
+
 ### `MemoryRecord`
 
 `project_id` + `role` form the scope, `task_id` provides provenance; `situation` / `action` /
 `outcome` / `lesson` are the content; `score` and `uses` drive evolution.
 
-The current memory scope combines project and role, so instances of the same role share experience. How this maps to the course's independent Agent identity requirement still needs alignment; scope filtering alone does not prove isolation between every Agent instance.
+Formal instructor agents have stable role IDs and private role workspaces across their
+two tasks, so project:role identifies one continuing persona. Different scenario/run
+databases isolate teams. Generic Engine role@task instances retain the existing shared
+project-role memory policy; universal per-runtime-instance isolation is not claimed.
 
 ### Implementation conventions
 
 | Item | Convention |
 | --- | --- |
 | Tree structure | `query` results must allow the span parent/child relation to be rebuilt |
-| Scoping | `search` is isolated by scope; one agent's memories should not be retrievable by another |
+| Scoping | `search` and `all` filter the requested project-role scope; generic instances of one role share that scope |
 | Persistence | writes are durable across a restart |
 
 Current implementations:
 
 - `src/moumou/store/trace.py`: `SqliteTraceStore` preserves complete `TraceEvent` data, filters exact task IDs and orders by UTC start time and `span_id`. Identical imports are idempotent; conflicting records cannot overwrite existing data.
 - `src/moumou/trace/recorder.py`: `Recorder` retains `span`, `record`, `query`, `all_events` and `close`, including its original one-argument JSONL use.
-- `src/moumou/memory/store.py`: separate SQLite memory storage; full contract and identity-isolation integration checks remain unfinished.
+- `src/moumou/memory/store.py`: separate SQLite memory storage with project-role
+  filtering, scoring, soft deletion and character-bigram recall. Phase captures belong
+  to `eval/session_evidence.py`; they do not change the storage identity policy.
 
 ### Current trace integration and recovery
 
@@ -392,7 +418,10 @@ A runtime SQLite read or write failure is exposed through `projection_error` and
 
 JSONL and SQLite must use different files. `Recorder.close()` closes both the file and projection connection; `Engine.close()` closes its default Recorder and memory store. The caller closes any injected external memory instance. A SQLite instance belongs to its creating thread; another thread needs its own connection.
 
-Only supplied `parent_span` values are currently preserved. Automatic parent capture and concurrent call-tree validation remain unfinished; the task dependency tree is not the span call tree.
+Automatic nested/async parent capture is implemented in Recorder. Existing supplied
+relationships are preserved, missing historical parents are not invented, and task
+dependency edges are not the span call tree. A Worker `execution` span represents one
+actual attempt, including materialization; it is not assignment-to-delivery wall time.
 
 ### Task sources and continuing teams
 
@@ -416,8 +445,9 @@ automatically shared. Child goals must be self-contained. For missing inputs, us
 `submit_plan` to ask the owning role for an explicit delivery, then declare the dependency,
 or use `ask_human`; do not bypass private workspaces or repeat denied cross-role searches.
 
-`TeamContextBuilder` preserves the complete original role prompt, current goal and every
-`Acceptance` object in the opening messages without mutating their source objects.
+`TeamContextBuilder` preserves the complete original role prompt, current goal, every
+`Acceptance` object and same-task recorded answered questions in the opening messages
+without mutating their source objects.
 Optional prior history, dependency reports, board content and lessons are bounded first;
 their exact auxiliary payload remains recoverable in the role's private
 `.evaluation/context/<digest-prefix>.json`. New filenames use the first 32 digest hex
@@ -429,11 +459,20 @@ instructions to the framework's transmitted context, not to model noncompliance.
 
 ### Real human and model evidence
 
+TaskRepo records question exchanges by project/conversation/task/role, with original
+request ID/body, response and timestamps. `record_human_request`, `record_human_response`
+and `human_exchanges` support same-task re-entry without restoring unmatched tool calls.
+Only recorded scoped questions are resumed with their original ID/body; damaged or
+missing records fail explicitly. Approval is requested afresh, never reused as a grant.
+Gate rejection text is returned in the current ToolResult stderr; wrong IDs or absent
+decisions are invalid approvals. A human-port record alone does not authenticate manual
+versus explicitly assisted/scripted authorship.
+
 `eval.human.RecordingLLM` records complete redacted request/response events, phase,
 call identity and observed usage. `ConsoleHuman` and `FileHuman` implement `HumanIO`.
 The formal CLI requires explicit human confirmation before the `git_commit` operation
-stages and commits files. This is harness approval policy; global Gate and P1 behavior
-are unchanged.
+stages and commits files. This is harness approval policy; the generic default
+approval policy and P1 tool contract remain unchanged.
 File mode retains original requests in `human/requests/` and pending requests in
 `human/pending/`. A real response is placed in `human/responses/REQUEST_ID.json` and
 retained after validation under `human/consumed/`. Echo the actual request ID; questions
@@ -441,7 +480,8 @@ require text, while permissions and reviews require an explicit approve/reject d
 
 Default post-delivery human review waits after the task result is saved and before the
 next task is posted. A rejection preserves the agent's actual status, records rejected
-quality and stops continuation. Deferred review remains unknown. P2 must distinguish
+quality and skips later dependent tasks in that group; independent groups can continue.
+Deferred review remains unknown. P2 must distinguish
 agent `DONE`, machine acceptance and accepted/rejected/pending content quality. Reusing
 an explicit standing tool permission requires provenance; it is not a new manual answer
 and cannot be promoted to quality approval.
@@ -458,6 +498,10 @@ scenario, task phase and human-input directory. A scenario retains:
 - `dialogue.jsonl` containing complete redacted model and real human events;
 - `trace.jsonl`, `trace.db`, task and memory databases;
 - four private role workspaces, durable human exchanges and search audit files.
+- immutable `task_N-artifacts/manifest.json` plus captured file blobs, and inline task
+  artifact/memory/failure capture references; old runs without captures remain unknown;
+- `state-snapshot.json`, when saved, is scenario-close diagnostic state including
+  unfinished nodes; it is not a delivery, a new score or a larger goal plan.
 
 A task record exposes its own `root_task_id`, subtree, `root_status`,
 `root_machine_criteria_present`, nullable `root_machine_accepted`, `quality_status`,
@@ -472,6 +516,10 @@ output directory or answer pending requests automatically.
 
 ### Search metering
 
+Additional search grants require an explicit `approval_id`. Repeating the same ID/amount
+is idempotent; conflicting reuse is rejected. Resumed HumanIO callbacks must use that
+identity and cannot promise exactly-once side effects for arbitrary external callbacks.
+
 `search_budget.SearchBudgetTool` wraps only the registered P1 `web_search` implementation,
 preserving its Tool contract. The initial six fresh Tavily HTTP attempts are shared by
 all four roles and both tasks of one scenario, with separate counters for tool calls,
@@ -482,6 +530,11 @@ allowance is separate from this search counter.
 
 ### Offline report consumer API
 
+The current recovery, trace and phase-evidence additions have regression source but
+await execution. Published e35e820's 905/8 result is a historical baseline, not validation
+of the changed implementation. Actual task quality and consumer sign-off require their
+own evidence; see [delivery requirements](DELIVERY.en.md).
+
 `eval.report.build_report(root)` validates one saved suite and its authoritative task
 records. `generate_report(root, output=None)` writes a derived `.md`/`.txt` report without
 credentials, model calls, test execution or continuation. Pending/missing quality is not
@@ -490,6 +543,31 @@ An unindexed task result or inconsistent task identity fails archive validation;
 reader does not silently include or ignore it when calculating scores.
 The reader also recognizes historical `midtest.json` archives; that filename is read-only
 compatibility, not another application entry.
+
+`eval.review` records an append-only actual Console/File HumanIO review under
+`reviews/<UUID32>/`, bound to the saved run/code/task/artifact hashes. Re-review requires
+the current tip via `--supersedes`. Raw results remain unchanged; report records expose
+`raw_quality`, effective quality, `quality_source` and review history. Matching I/O and
+hashes establish record consistency, not cryptographic human authentication. Old absent
+artifact captures stay `unsupported_historical_artifact_snapshot`.
+
+Offline review publication uses `reviews/.publish.lock`. An existing lock requires
+explicit inspection/reconciliation of the interrupted or concurrent writer; readers
+and writers do not automatically delete a stale lock or bypass current-tip validation.
+
+`eval.analysis.build_analysis/generate_analysis` support the instructor format as well
+as legacy groups. `eval.replay.build_replay/generate_replay` produce a fresh derived JSON
+for P2: scenario+task identity, original node/TraceEvent objects, source/line hashes and
+human-event indexes, with answered/pending/staged observations separate. They consume
+saved phase captures, never live memory.db or mutable workspaces as earlier snapshots.
+An export is not actual P2 consumer sign-off. All readers preserve missing parent/state
+and unknown quality; sidecar stopping evidence does not replace the raw manifest.
+
+Replay checks the report's semantic `result_content_sha256` before combining a reread
+task with effective review data, while retaining the separate original byte hash.
+Original required TraceEvent identity/kind/time/status fields are validated; optional
+historical fields remain absent as recorded. Fresh replay output uses exclusive file
+creation so a concurrent writer's existing evidence is not replaced.
 
 Lower-level `run_once`/`run_all`, worker, telemetry, metrics, snapshot and analysis APIs
 remain for framework checks and archived independent experiments. Their per-attempt
@@ -510,11 +588,20 @@ def transition(task_id, to, reason) -> None      # validate + persist + audit, a
 def event_log(task_id) -> list[dict]             # state-change history
 def set_result(task_id, result) -> None
 def add_artifacts(task_id, artifacts) -> None
+def record_human_request(node, request) -> None
+def record_human_response(node, response) -> None
+def human_exchanges(node, *, require_answered=True) -> list[dict]
 ```
 
 State changes should go through `transition`: it updates the task table and inserts the audit event
 in one transaction. Bypassing it leaves the event log inconsistent with the actual state, and the
 timeline in the report stops adding up.
+
+Human exchanges are scoped by project/conversation/task/role and retain the original
+agent ID as provenance. Requests are committed before waiting; a response must match
+its request ID and cannot overwrite a conflicting recorded answer. The default
+`SqliteTaskRepo` additionally exposes `all_tasks()` for Engine traversal; trace storage
+does not need a separate task-enumeration method.
 
 ---
 
@@ -538,5 +625,6 @@ All of it lives in `src/moumou/contracts/`; import with `from moumou.contracts i
 | `HumanRequest` / `HumanResponse` | `human.py` | human involvement |
 | `Plan` / `RoleDraft` / `SubtaskSpec` | `plan.py` | the decomposition plan the model submits |
 
-If any of these fields changes, `pytest tests/test_contracts.py` fails immediately — that is the
-gate against interface drift.
+Run `pytest tests/test_contracts.py` and relevant adapter regressions after changing
+these fields. A schema-compatible change still needs its actual runtime and consumer
+checks; the existence of a test file is not a passing result.

@@ -4,9 +4,23 @@
 
 [简体中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
-## Unreleased · Formal evaluation context
+## Unreleased · Human context and evaluation delivery
 
-The formal team adapter now preserves complete original role prompts, current goals and
+Current development adds scoped same-task question recovery, fresh approval feedback,
+automatic trace parent/agent metadata, immutable phase evidence, group task-stage
+failure isolation, append-only explicit review and instructor analysis/read-only replay.
+Regressions are written but have not been executed for this candidate. The 905/8 result
+below belongs to the previously published e35e820 baseline. Current readiness is recorded
+in [the performance report](docs/PERFORMANCE.en.md).
+
+Delivery documentation now provides current setup, architecture, interface and evidence
+indexes. Fourteen dated planning/progress/validation notes are retired from the current
+tree; their original content remains in Git history. The bundled GitHub Actions workflow
+is removed. Framework tests remain available through explicit local commands.
+
+### Published e35e820 context/archive behavior
+
+The formal team adapter preserves complete original role prompts, current goals and
 all acceptance criteria before allocating opening-context space to optional history,
 dependencies, board content or lessons. Exact auxiliary content remains recoverable in
 private `.evaluation/context/<digest-prefix>.json`. New filenames use the first 32 digest
@@ -15,7 +29,7 @@ are rejected, and existing archives are not renamed. Mandatory content that cann
 `ContextAdmissionError` before an LLM call. The generic P0 context builder is unchanged.
 Framework/context failures retain their original goal denominator and evidence.
 
-Final full regression on native Windows / activated Conda nlp: 905 passed,
+Published e35e820 full regression on native Windows / activated Conda nlp: 905 passed,
 8 skipped in 209.43 seconds; Ruff passes across src/tests. These are implementation
 checks, not verified completion of the six instructor goals.
 

@@ -1,10 +1,13 @@
 # P1 给 P0 / P3 的接入与验收清单
 
+> 本页保留 P1 Provider 检查清单。共享当前契约见[接口说明](INTERFACES.md)，
+> 当前交付与证据门槛见[交付清单](DELIVERY.md)。带日期的结果仅属于原提交。
+
 ## P0 接入
 
 - 工具保持 default_tools() 入口，现有工具名与标记工具保留。
 - 工作区使用 moumou.adapters.GitWorkspaces，通过 Engine(workspace=provider) 注入。
-- contracts、Gate、TaskRunner 未修改；同步 WorkspaceProvider 延续现状。
+- WorkspaceProvider 保持同步接口；共享 contracts、Gate 和 TaskRunner 的当前问答恢复与审批行为以接口说明和实际源码为准。
 - 本地工具执行请经过 Gate，尤其 git_push，不能直接调工具来代替审批。
 - 建议确认：应用层隔离是否符合本次课程范围；同步 Git 延迟是否可接受；父工作区有修改时先提交的行为是否符合编排预期。
 
@@ -27,7 +30,7 @@
 - [ ] 团队确认隔离与同步接口边界。
 - [ ] 使用约定的 GitHub 分支验证远端认证与推送。
 - [ ] 配置有效 TAVILY_API_KEY，执行一次真实联网检索。
-- [ ] 查看 Windows/Linux CI 结果，修复平台差异。
+- [ ] 在选定平台运行明确检查并保存输出。拟提交目录已移除工作流，历史 CI 不验证当前候选。
 - [ ] 由团队使用真实 DeepSeek/HKGAI 和正式测试集运行评测。
 - [ ] 补最终提交历史截图，并核对每位成员的真实贡献。
 

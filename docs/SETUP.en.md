@@ -32,7 +32,7 @@ conda run --no-capture-output -n nlp python -m moumou
 Copy the template if `.env` does not already exist, then edit the local file:
 
 ```powershell
-Copy-Item .env.example .env
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
 | Variable | Purpose |
@@ -98,7 +98,7 @@ does not replace the original requests with scripted questions or fixed answers.
 
 After each task's deliverables are saved, the default quality review waits for
 an actual `approve` or `reject`, with optional feedback. Rejection stops later
-tasks. `--quality-review deferred` explicitly leaves quality unknown; finishing
+dependent tasks in that group; independent groups can continue. `--quality-review deferred` explicitly leaves quality unknown; finishing
 that mode does not certify that the instructor goals passed.
 
 ## Real human input
@@ -152,6 +152,9 @@ post-delivery quality-review waiting are recorded with their own boundaries.
 | `RUN/scenario_N/workspaces/` | Four private continuing role directories and actual outputs |
 | `RUN/scenario_N/human/` | Durable human requests and responses |
 | `RUN/scenario_N/search/` | Search allowance, cache and request audit |
+| `RUN/scenario_N/task_N-artifacts/` | Immutable delivery manifest and captured hashed files, when recorded |
+| `RUN/scenario_N/state-snapshot.json` | Scenario-close node diagnostics, not additional deliveries |
+| `RUN/reviews/<UUID32>/` | Append-only offline review intent, original HumanIO evidence and decision |
 
 Rebuild a saved report without model calls or credentials:
 
@@ -163,6 +166,35 @@ Report reconstruction does not execute tests, resume a session or approve a task
 There is no automatic resume option. If a process is forcibly stopped, its raw
 manifest may still say `running`; preserve that record and use explicit stop and
 process-cleanup evidence to describe the actual state before planning continuation.
+
+### Saved analysis, replay and later quality review
+
+These commands operate on an existing saved session. The current candidate's
+verification status is recorded in [the performance report](PERFORMANCE.en.md);
+usage examples do not establish that checks were executed.
+
+```powershell
+python -m moumou.eval.analysis --run runs/test/EXISTING_SESSION
+python -m moumou.eval.replay --run runs/test/EXISTING_SESSION --out runs/test/EXISTING_SESSION/replay-v1.json
+python -m moumou.eval.review --run runs/test/EXISTING_SESSION --scenario scenario_1 --phase task_1 --human console
+```
+
+Analysis/replay do not call a model, rerun acceptance or resume the suite. Replay JSON
+must use a fresh output file; original records and existing evidence are not replaced.
+Old missing captures remain unknown, rather than reading current workspaces/memory.db
+as earlier state. The same-task scoped question resume mechanism is separate from
+starting a new CLI suite in an already existing output directory.
+
+Review asks for an explicit Console/File HumanIO approve/reject; there is no decision
+flag or automatic approval. File mode places its pending queue in that new review's
+human directory. Re-review requires `--supersedes CURRENT_TIP_UUID32`; all older reviews
+remain. The report overlays effective quality while preserving the raw result and its
+source/artifact bindings. Matching recorded I/O is not cryptographic human identity.
+
+Review publication holds `reviews/.publish.lock`; an existing lock needs explicit
+operator inspection/reconciliation, not automatic stale-lock deletion. Search-grant
+callbacks use the approval request identity so resumed callbacks cannot add the same
+allowance twice.
 
 ## Make equivalents
 
@@ -178,5 +210,10 @@ commands, the `python3` compatibility alias selects the active interpreter; it
 does not translate POSIX shell syntax into Windows syntax. Use native commands
 and `python` in your own terminal.
 
-See [evaluation workflow](EVAL.en.md), [interfaces](INTERFACES.en.md) and the
-[metric contract](metrics.md) for consumer and reporting details.
+No GitHub Actions workflow is bundled in the proposed delivery tree. Run checks
+explicitly in the chosen environment and retain their actual output. Deleting the
+workflow file locally does not alter historical hosted runs; it takes effect on a
+remote branch only after that deletion is committed and pushed to that branch.
+
+See [evaluation workflow](EVAL.en.md), [interfaces](INTERFACES.en.md), the
+[metric contract](metrics.md) and [delivery checklist](DELIVERY.en.md).

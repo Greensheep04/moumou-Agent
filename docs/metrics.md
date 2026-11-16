@@ -1,5 +1,7 @@
 # Evaluation metric contract
 
+[简体中文](metrics.zh-CN.md) · [English](metrics.md)
+
 This contract is for orchestration instrumentation, human interfaces and report
 consumers. Formal task evaluation uses the instructor Markdown under `eval/tasks/`
 through `python -m moumou` or `python -m moumou.eval.cli`. The authoritative suite
@@ -31,8 +33,18 @@ agent executed or that a person rejected the output.
 Empty acceptance produces self-report. A task may be `DONE` with unknown machine
 acceptance and unknown quality. Human approval can establish a separately
 attributed quality decision; it does not create a machine check. Rejection keeps
-the actual agent state and output, sets the quality outcome to rejected and stops
-later tasks. `--quality-review deferred` leaves quality unknown.
+the actual agent state and output, sets the quality outcome to rejected and skips
+later dependent tasks in that group. Ordinary errors within configured task stages
+continue independent groups; setup/configuration, cleanup failure or cancellation can
+stop the whole suite. Unattempted groups stay unknown in the plan.
+`--quality-review deferred` leaves quality unknown.
+
+Offline append-only reviews preserve `raw_quality` and expose effective quality,
+`quality_source` and review history. The decision binds the original saved result,
+execution/code identity and artifact capture; a later review needs the current tip.
+Approval establishes a verified success only for DONE with no contradictory machine
+failure. Recorded HumanIO consistency is not cryptographic authentication, nor proof
+that every port response was a newly typed manual answer.
 
 Suite `goal_metrics` reports the planned denominator, persisted deliveries,
 agent-declared completions, reviewed goals, verified successes and verified goal
@@ -63,6 +75,32 @@ role directories, memory and real handoff/history. They are sequential dependent
 requests, not independent statistical repeats. Scenarios use separate project
 state. The second raw `Engine.run()` report includes earlier tasks and tokens;
 use P3's per-root subtree and phase accounting for Task 2-only measurements.
+
+Same-task answered questions are stored by project/conversation/task/role, with original
+request IDs, full bodies and provenance. Re-entry restores those answers in pinned
+opening context; pending scoped questions retain their original identity. Approvals
+remain fresh per action. Span parent_span is a separate hierarchy from task parent_id;
+automatic nested/async parent collection never fills missing historical relationships.
+
+## Saved phase evidence
+
+`artifact_snapshot` refers to immutable manifest/blob captures with original relative
+paths, capture time and full hashes; missing/partial/excluded files remain explicit.
+`memory_snapshot` is a post-engine active-record metadata view by project:role, with
+hashed lessons and original observations. It is not task-only writes or deletion counts.
+The events `memory_retrieved`, `memory_context_selected` and `memory_prompt_observed`
+distinguish returned IDs, selected candidates and recorded prompt matches; ambiguous,
+truncated or multiline cases stay unknown. They do not establish use or causal gain.
+
+`failure_snapshot` preserves observed tool/error events and measured counts or null.
+A scenario `state_snapshot` records close-time nodes, including unfinished work, with
+validated hash/scope identity; it never increases delivered goals or the planned count.
+Offline analysis/replay prioritize these captures, never mutable live workspaces or
+memory.db as a previous phase. Old captures/telemetry absent means unknown, not zero.
+
+The [performance report](PERFORMANCE.en.md) records the candidate's actual verification
+status. Schema documentation does not constitute an executed check; historical framework
+results do not validate a later implementation or establish instructor task quality.
 
 ## Time boundaries
 

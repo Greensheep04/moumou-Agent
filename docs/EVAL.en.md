@@ -61,6 +61,9 @@ python -m moumou.eval.cli --tasks eval/supplementary --plan
 `make test` and `make eval` call this protocol. Use `make unit-test` or
 `python -m pytest -q` for deterministic framework regression tests. Those tests
 are implementation evidence, not instructor task-completion scores.
+They may check source loading and the evaluation entry, but the original teacher
+tasks live in `eval/tasks/`, not `tests/`. Regression source is useful repository
+material; caches, temporary files and local test output are not submission artifacts.
 
 ## Human interaction and quality
 
@@ -71,8 +74,12 @@ reviews. Console mode asks the person directly. File mode retains requests under
 There are no predefined answers or automatic approvals.
 
 A task's saved result is available before the quality request. Explicit human
-approval records `human_accepted`; rejection records `human_rejected` and stops
-later tasks. Agent `DONE`, a green child test suite and a working launcher remain
+approval records `human_accepted`; rejection records `human_rejected` and skips
+later dependent tasks in that scenario. Ordinary task-stage errors, rejection and
+incomplete delivery do not prevent independent configured groups from running.
+Initialization/configuration or cleanup failure is a global infrastructure stop;
+cancellation/KeyboardInterrupt also stops the suite. Unattempted groups remain unknown
+in the full denominator. Agent `DONE`, a green child test suite and a working launcher remain
 separate evidence. An empty root acceptance list is self-report, not machine
 verification. Deferred review (`--quality-review deferred`) remains unknown and
 never produces a verified quality success merely because the agents stopped.
@@ -80,6 +87,16 @@ never produces a verified quality success merely because the agents stopped.
 Independent quality assessment can use the full saved dialogue and outputs, with
 its actual evaluator and decision recorded. The default CLI waits for human
 review; it does not fabricate an independent model grade.
+
+Same-task delegation/re-entry restores recorded answered questions from the scoped
+question ledger, with original IDs and provenance. It resumes an original pending
+question rather than inventing a reply. These facts remain in pinned opening context;
+approval grants are never reused. Human-port exchanges can include explicitly authorized
+operator assistance, which must remain distinct from a new manual answer or quality review.
+
+Later quality decisions use the append-only `moumou.eval.review` interface described in
+[setup](SETUP.en.md). Raw task quality remains available separately from an effective
+review overlay; the overlay does not resume execution or rewrite the original result.
 
 ## Credentials, search and limits
 
@@ -109,6 +126,11 @@ archive. The CLI does not automatically resume an existing output directory.
 A later continuation or new trial needs an explicit, documented state-transfer
 plan, preserving the original record and unknown quality decisions.
 
+New deliveries save immutable artifact blobs with hashes and inline memory/failure
+captures at their recorded stage. A scenario-close state snapshot can retain unfinished
+nodes as diagnostics; it is not a delivered task. Old missing captures remain unknown:
+later workspace files and live memory.db are not historical substitutes.
+
 ```powershell
 python -m moumou.eval.report --run runs/test/EXISTING_SESSION
 ```
@@ -126,6 +148,13 @@ that interval. `delivery_time_s` covers only saved delivery samples: `n=0, sum=0
 not zero total execution time. Keep `report_builder.source_sha256` separate from the
 original manifest's `code` startup snapshot; reconstructing does not change run provenance.
 
+Offline `moumou.eval.analysis` and `moumou.eval.replay` expose saved failure/memory
+observations and a P2-compatible read-only JSON view. Original event/line hashes and
+scenario+task identities are retained; answered, pending and staged responses are
+separate. See [the performance report](PERFORMANCE.en.md) for the candidate's actual
+verification status. A usage example, exported schema or historical regression result
+does not establish current task quality or P2 consumer sign-off.
+
 ## Reporting checklist
 
 - State the source hashes, selected scenarios, model, runtime and actual output root.
@@ -139,3 +168,6 @@ The [metric contract](metrics.md) defines these fields. A successful implementat
 regression or a completed self-built experiment does not establish that all six
 instructor goals passed. Only actual execution and recorded quality evidence can
 do so.
+
+The [delivery checklist](DELIVERY.en.md) maps these records to the architecture,
+performance report, contribution screenshots and final presentation requirements.
