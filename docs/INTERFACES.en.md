@@ -9,7 +9,6 @@
 > The ports live in `src/moumou/contracts/` and are currently frozen. If something needs to change,
 > please raise it first so three implementations do not have to rework at once.
 
-> The Chinese [INTERFACES.md](INTERFACES.md) is the authoritative version. This file is a translation.
 
 ## 0. Shared conventions
 
@@ -61,13 +60,16 @@ through `Engine(memory=...)`; it is not provided by `Recorder`.
 
 ### 0.4 How to test it
 
-Each port has a contract suite; run it after swapping the implementation:
+After replacing a port implementation, run its contract checks and framework regression:
 
 ```bash
 pytest tests/test_tool_contract.py -q      # P1
 pytest tests/test_channel_contract.py -q   # P2
-make eval                                  # P3
+make unit-test                           # framework regression, including P3
 ```
+
+`make eval` runs the formal instructor tasks with the configured model and real human
+interaction; it is not a framework self-test.
 
 For a single component, instantiate it directly instead of starting the whole engine:
 
@@ -183,7 +185,7 @@ class WorkspaceProvider(Protocol):
 | --- | --- | --- |
 | `allocate` | before every task starts | returns an existing directory; the same `agent_id` should get the same one |
 | `release` | once a task is fully finished | only clean up inside the provider's own root |
-| `integrate` | when a child finishes / before a task starts | move `artifacts` from `src` to `dst` and report what happened |
+| `integrate` | after successful child acceptance / before a dependent task starts | move published `artifacts` from `src` to `dst` and report what happened |
 
 `integrate` is the only channel through which "several agents worked separately" becomes "one
 verifiable result". The reference implementation copies files; the git version merges a child's
@@ -203,6 +205,19 @@ class IntegrateResult(BaseModel):
 Convention on conflict: the child still counts as done (its own acceptance passed), the conflict is
 written into the child's `error` field and the trace, and the parent sees it in the dependency
 report and decides how to reconcile.
+
+### Declared result files and publication
+
+`submit_result.files` may declare ordinary files already present in the task workspace,
+including unchanged files. Worker validates the entire declaration and rechecks it after
+acceptance; only successful acceptance permits publication into `node.artifacts` and
+integration. Missing files, directories, absolute/outside-workspace paths, invalid paths
+and `.git` entries reject the whole result with correctable `invalid_result_files` tool
+feedback. No subset of that declaration is published.
+
+Published declarations are deduplicated with existing tool-tracked artifact paths,
+including tracked deletions. Validation of declared files does not discard those paths
+or turn the workspace into an automatic whole-directory export.
 
 Reference implementation: `src/moumou/adapters/workspace.py`
 
@@ -256,7 +271,7 @@ Reference implementation: `src/moumou/adapters/bus.py` (in-memory; needs a persi
 
 ---
 
-## 4. `HumanIO` (P2 interactive, P3 scripted)
+## 4. `HumanIO` (real interaction and deterministic port tests)
 
 The single entry point for human involvement, three shapes behind one interface.
 
@@ -293,15 +308,16 @@ class HumanIO(Protocol):
 | --- | --- | --- |
 | `approval` | tool name + argument summary | approve / reject buttons |
 | `question` | the question text | a text field |
-| `steer` | — | can be sent at any time during a run, to redirect the work |
+| `review` | saved deliverables and quality evidence | explicit decision and optional feedback |
+| `steer` (Channel message) | running-task context | a human can redirect work during execution |
 
 ### Why one interface covers three shapes
 
-During a demo the interactive implementation asks a real person; during batch evaluation
-`ScriptedHuman` answers from YAML. That is what keeps tasks requiring human confirmation inside
-automated testing, without which the completion-rate metric would be half meaningless.
-
-Reference implementation: `src/moumou/adapters/human.py`
+Formal task evaluation uses actual `HumanIO` questions, permissions and post-delivery
+quality reviews. `eval.human.ConsoleHuman` and `FileHuman` retain the real requests and
+responses. Approval of a tool action does not establish content-quality acceptance.
+`ScriptedHuman` in `adapters/human.py` remains a deterministic framework-test utility,
+not an answer source for formal instructor or supplementary task sessions.
 
 ---
 
@@ -333,6 +349,11 @@ class MemoryStore(Protocol):
 | `status` | `ok` / `error` / `cancelled` |
 | `tokens_in` / `tokens_out` | needed for the cost metrics |
 | `payload` | attached data |
+
+Trace consumers, including P2, should recognize `result_rejected` for an invalid final
+file declaration and `declared_files_published` after accepted files are published.
+These events distinguish a correctable result rejection from successful publication;
+neither by itself establishes instructor goal quality.
 
 ### `MemoryRecord`
 
@@ -373,149 +394,110 @@ JSONL and SQLite must use different files. `Recorder.close()` closes both the fi
 
 Only supplied `parent_span` values are currently preserved. Automatic parent capture and concurrent call-tree validation remain unfinished; the task dependency tree is not the span call tree.
 
-### Evaluation artifacts for integration and replay
+### Task sources and continuing teams
 
-`run_all(fixtures, llm, root, ..., workspace_backend="local", eval_id=None)` treats `root` as
-one fresh batch directory. The `git` workspace backend remains available for P1 delivery
-checks. Direct `run_once` keeps the existing `<root>/<fixture_id>/r<repeat>/` layout; reused
-run directories are rejected. Each run retains its own databases, trace and workspace tree.
+`eval.cases.load_cases(path)` loads Markdown scenario folders in their README order,
+retaining original role prompts, ordered task texts and source hashes. The default
+`eval/tasks` source is the instructor's three four-member groups and six root goals.
+The optional lower-priority `eval/supplementary` source retains the fifteen self-authored
+tasks in the same format: eight groups, with one task in the last group. It is selected
+explicitly and never automatically mixed into instructor results.
 
-The batch `manifest.json` records the evaluation identity, code and fixture hashes, public
-model/configuration metadata, and planned runs. Per-run `result.json` contains status, task
-and acceptance observations, metrics and evidence paths; unavailable measurements are null.
-`results.jsonl` is appended after each attempt, while `report.md` provides a readable view.
-P2 consumers should use these saved paths instead of assuming a shared trace/database.
+`python -m moumou` and `python -m moumou.eval.cli` invoke the same formal protocol;
+`--tasks` selects the source. There is no separate task-format-specific launch path.
+The team adapter in `eval.team` configures exactly the supplied identities, private
+continuing role workspaces and same-role execution locks. Task 2 receives actual Task 1
+results, delivered files and a readable original dialogue archive, rather than fabricated
+history or a fresh independent attempt. A source's actual task count defines its goal plan.
 
-`moumou.eval.artifacts.load_results(root)` reads authoritative per-run result files using the
-manifest plan, including a result saved before its batch-journal append was interrupted.
-It does not resume execution. Results and the journal are separate durable writes; there is
-no atomic transaction spanning both files. Machine acceptance is distinguished from empty
-acceptance/self-report, and Engine-reported metrics are not a claim of complete token coverage.
+The team context states the file/delegation contract: only direct dependencies with
+explicit `artifacts` transfer files; dependency chains and parent directories are not
+automatically shared. Child goals must be self-contained. For missing inputs, use
+`submit_plan` to ask the owning role for an explicit delivery, then declare the dependency,
+or use `ask_human`; do not bypass private workspaces or repeat denied cross-role searches.
 
-### Supervised evaluation attempts
+`TeamContextBuilder` preserves the complete original role prompt, current goal and every
+`Acceptance` object in the opening messages without mutating their source objects.
+Optional prior history, dependency reports, board content and lessons are bounded first;
+their exact auxiliary payload remains recoverable in the role's private
+`.evaluation/context/<digest-prefix>.json`. New filenames use the first 32 digest hex
+characters; references and validation metadata retain the full SHA-256. A same-name
+archive with different content is rejected, and existing archives are not renamed.
+If mandatory instructions cannot fit, it raises
+`ContextAdmissionError` before the LLM call instead of slicing the goal. Attribute missing
+instructions to the framework's transmitted context, not to model noncompliance.
 
-`run_all(..., hard_timeout_s=None, worker_factory=None)` retains the in-process object API
-when the deadline is absent. A positive deadline selects a separate supervised Python
-worker per attempt. This mode currently requires native Windows and uses suspended launch,
-a parent-owned Job Object and bounded cleanup, including descendants launched by P1 tools.
-The deadline covers startup, execution and client shutdown; OS process creation itself is
-not preemptible by the Python supervisor.
+### Real human and model evidence
 
-Worker requests and diagnostic/candidate files live below the batch's private worker
-artifact directory. The parent validates the candidate's schema, nonce, batch/fixture/repeat
-identity, path and field types after process exit and cleanup, then publishes the normal
-per-run `result.json`. A success candidate written by a worker that later hangs or crashes
-is not success. Timeouts, startup failures, crashes and invalid results remain inspectable;
-an unverified cleanup cannot be presented as successful containment.
+`eval.human.RecordingLLM` records complete redacted request/response events, phase,
+call identity and observed usage. `ConsoleHuman` and `FileHuman` implement `HumanIO`.
+The formal CLI requires explicit human confirmation before the `git_commit` operation
+stages and commits files. This is harness approval policy; global Gate and P1 behavior
+are unchanged.
+File mode retains original requests in `human/requests/` and pending requests in
+`human/pending/`. A real response is placed in `human/responses/REQUEST_ID.json` and
+retained after validation under `human/consumed/`. Echo the actual request ID; questions
+require text, while permissions and reviews require an explicit approve/reject decision.
 
-Model clients are rebuilt and closed inside the worker, not pickled or shared. DeepSeek /
-HKGAI configuration is public metadata; its key travels only in the private child environment.
-Queued `FakeLLM` responses are portable. Callable/closure clients require an explicit trusted
-`module:function` factory, supplied through the Python API rather than task-fixture content.
-Factories receive the `TaskFixture` and synchronously return a client; this is intended for
-deterministic offline integration checks. The public CLI exposes `--hard-timeout SECONDS`
-and does not expose arbitrary factory imports.
+Default post-delivery human review waits after the task result is saved and before the
+next task is posted. A rejection preserves the agent's actual status, records rejected
+quality and stops continuation. Deferred review remains unknown. P2 must distinguish
+agent `DONE`, machine acceptance and accepted/rejected/pending content quality. Reusing
+an explicit standing tool permission requires provenance; it is not a new manual answer
+and cannot be promoted to quality approval.
 
-### Evaluation controls, metrics and behavior
+### Suite files for replay and reporting
 
-`run_once` and `run_all` accept optional `options=EvaluationOptions(...)`. Omitting options
-preserves Engine defaults. Explicit controls include long-term `memory_enabled`, `max_slots`,
-`role_review_enabled`, project/conversation identities and a portable MemoryRecord snapshot.
-The same validated controls pass through supervised requests; actual settings and the
-initial memory hash are recorded in the manifest and attempt `evaluation` metadata.
+Each launch reserves a fresh `runs/test/<id>/` directory, or a new explicit `--out`.
+The suite `test.json` has `kind: instructor_test`, source hashes, public model/runtime
+configuration, `dataset_kind` (`instructor`/`supplementary`), planned root goals and scenario
+`source_kind`. `active.json` identifies the current
+scenario, task phase and human-input directory. A scenario retains:
 
-Fixtures may declare evaluation-only `requirements` and a disjoint `warmup`. Artifact checks
-still use the shared Acceptance interface. `behavior_checks` independently record approval,
-successful search, actual lesson injection, delegation and scheduling evidence. `root_success`
-requires artifact and behavioral acceptance; a root TaskNode can remain DONE while the
-evaluation outcome is failed for missing behavior. P2 should display both verdicts.
+- `task_1-result.json` and, when present, `task_2-result.json`;
+- `dialogue.jsonl` containing complete redacted model and real human events;
+- `trace.jsonl`, `trace.db`, task and memory databases;
+- four private role workspaces, durable human exchanges and search audit files.
 
-Attempt results add nullable `submitted_at`, `terminal_at`, `task_elapsed_s`, `maintenance_s`,
-complete/unknown wrapper usage, `metrics`, `memory_observations`, and node dependencies and
-machine verdicts. Each batch saves `metrics.json`; call `eval.metrics.summarize` with the
-manifest and authoritative results to keep interrupted planned attempts in the denominator.
-The [metric contract](metrics.md) defines coverage, timing and repeated-trial statistics.
+A task record exposes its own `root_task_id`, subtree, `root_status`,
+`root_machine_criteria_present`, nullable `root_machine_accepted`, `quality_status`,
+nullable `verified_goal_success`, delivery/review timing and phase summaries. Scenario
+summaries are cumulative. The raw second `Engine.run()` report includes earlier state;
+do not present it as Task 2-only metrics. See [metrics](metrics.md) for exact boundaries.
 
-`eval.ablation.plan_ablation` creates a call-free plan; `run_ablation` records four fixed groups
-in `ablation.json` and gives each held-out attempt its own normal batch. Only MemoryRecord
-values cross the warmup boundary. Warmup is cooperative in-process execution, separately
-accounted; a held-out `hard_timeout_s` is not a claim of hard containment for warmup.
+Manifest, task-result and dialogue writes do not form a cross-file transaction. A forced
+stop may leave raw status `running`; retain that evidence and an explicit stop/process
+record instead of fabricating a graceful finish. The public CLI does not resume an old
+output directory or answer pending requests automatically.
 
-### Offline reports and experiment snapshots
+### Search metering
 
-`eval.report.build_report(root)` reads a normal batch or an ablation's saved plan and
-authoritative nested attempt files. It recomputes statistics, including planned missing
-attempts, rather than trusting `metrics.json`, JSONL tails or the ablation job-result cache.
-The model has `kind`, `purpose`, `model`, `manifest`, `groups`, `warmups` and evidence paths.
-Each group exposes the normal `metrics.summarize` output plus observed records and missing
-plan rows. P2/report consumers must retain group identities and measured sample counts.
-Mixed source versions, models, purposes, fixture definitions or fixed controls are rejected.
+`search_budget.SearchBudgetTool` wraps only the registered P1 `web_search` implementation,
+preserving its Tool contract. The initial six fresh Tavily HTTP attempts are shared by
+all four roles and both tasks of one scenario, with separate counters for tool calls,
+actual provider attempts, cache hits, deduplication and denials. Cached evidence retains
+its original retrieval time. Additional allowance requires a real human grant; a denied
+search result does not prove a human was asked or approved anything. The school's model
+allowance is separate from this search counter.
 
-`generate_report(root, output=None)` writes only a derived `.md`/`.txt` report, defaulting to
-`root/report.md`. It does not load credentials, call a model, create an event loop or re-run
-tasks. Output cannot overwrite attempt or warmup evidence. Old unlabeled datasets stay
-unclassified; regenerating a report does not turn a self-built pilot into a closed-set score.
+### Offline report consumer API
 
-`eval.freeze.prepare_experiment` saves full effective fixtures, explicit held-out/warmup
-budget overrides, public model settings, runtime/lock-file copies, environment versions and
-the complete four-group schedule. Its `freeze.json`, sidecar hash and `snapshot/` are local
-evidence. Credentials, `.env`, Git internals and personal notes are not copied. Dirty runtime
-snapshots are explicitly recorded; creating one never creates a Git commit.
+`eval.report.build_report(root)` validates one saved suite and its authoritative task
+records. `generate_report(root, output=None)` writes a derived `.md`/`.txt` report without
+credentials, model calls, test execution or continuation. Pending/missing quality is not
+turned into success. Runtime artifacts must remain accessible for replay and output review.
+An unindexed task result or inconsistent task identity fails archive validation; the
+reader does not silently include or ignore it when calculating scores.
+The reader also recognizes historical `midtest.json` archives; that filename is read-only
+compatibility, not another application entry.
 
-`verify_experiment(root)` checks saved contents and the current runtime/environment;
-`check_current=False` validates a historical archive only. `check_start(..., scope="full")`
-returns readiness without executing anything. Missing declared search capability keeps its
-rows `blocked_not_started` in the full plan. The explicit `non-network` scope returns a
-selection with deferred counts; it neither executes that shard nor implements resume.
-
-`run_ablation(..., before_attempt=guard)` optionally invokes a synchronous/async guard before
-each warmup or held-out client is created. Its context contains `phase`, the actual canonical
-`fixture`, original `planned` row, backend and deadline. `freeze.check_attempt` verifies those
-against the snapshot; public model settings are checked only if supplied, not inferred from
-an opaque factory. Guard rejection stops the batch and preserves earlier results. Checks
-occur at attempt boundaries; the runtime must remain unchanged during execution. An archived
-copy is not automatically the executed Python runtime.
-
-`run_ablation(..., selected_fixture_ids=ids, deferred_reason=reason)` explicitly executes
-only those fixtures while retaining the complete original schedule, group rotation and
-paths. The manifest records `selection`, `selected_runs`, `deferred_runs` and a separate
-`deferred_jobs` list. Deferred entries contain their original schedule identity and reason;
-they have no client, warmup, nested batch or outcome. `jobs` contains actual attempts only.
-Exhausting a selection with deferred rows yields `partial`, never full-plan completion.
-The report validates this partition and keeps deferred rows in the original denominator.
-
-`eval.analysis.build_analysis(root)` derives failure evidence, saved successful-attempt
-checks and paired memory observations from one validated report root. `generate_analysis`
-writes an offline Markdown analysis or an explicitly requested JSON view. Analysis does not
-re-run acceptance, infer causes from missing evidence, mix revisions, or treat a faster
-single pair as causal or statistically significant improvement. Result paths and evidence
-coverage remain available to report consumers; archive access is required to inspect them.
+Lower-level `run_once`/`run_all`, worker, telemetry, metrics, snapshot and analysis APIs
+remain for framework checks and archived independent experiments. Their per-attempt
+`manifest.json`/`result.json` semantics are historical and must not be pooled with the
+current continuing-team goal protocol. They do not define a second formal task bank or CLI.
 
 ---
-
 ## 6. `TaskRepo` (used by the orchestration layer; reference only)
-
-### Instructor session consumer contract
-
-The default application calls `eval.midtest`; the independent YAML runner remains separate.
-`midtest_cases.load_midtest_cases(path)` retains source hashes and the instructor's four
-role prompts plus the two ordered task texts. The P3 team adapter uses the existing Engine
-ports to keep a fixed roster, private continuing workspaces and Task 1 handoff/history for
-Task 2. Scenario identifiers, task phases and root IDs must remain distinct in P2 displays.
-
-`midtest_io.RecordingLLM` retains complete redacted requests/responses;
-`ConsoleHuman`/`FileHuman` implement real `HumanIO` with persisted requests and replies.
-`set_phase` identifies task-level accounting; raw Engine reports after Task 2 contain
-cumulative state and must not be mislabeled Task 2-only metrics. P3 records each root's own
-subtree separately. Consumers must distinguish agent completion, machine acceptance and
-pending human/independent content review.
-
-`search_budget.SearchBudgetTool` replaces only the registered `web_search` instance in this
-session, preserving the P1 tool contract. Its six-request initial allowance is per scenario,
-not per role or task. Stats and search events distinguish tool calls, actual provider
-requests, cache hits, in-flight deduplication and budget denial. Cache evidence includes
-original retrieval time. Additional quota requires an explicit real-human grant; a denied
-tool result is not proof that a human was asked or approved it.
 
 When writing evaluation or analysis tooling, reading this interface is enough:
 

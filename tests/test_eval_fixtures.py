@@ -1,204 +1,129 @@
-"""Positive artifacts, plausible mistakes, and execution-evidence requirements.
-
-The solutions below are deterministic acceptance probes, never model scores or
-preloaded answers in evaluated workspaces. Acceptance commands live in the
-fixture, so replacing a workspace test file cannot make these probes pass.
-"""
+"""Official instructor source integrity and independent behavior-evidence contracts."""
 
 from __future__ import annotations
 
+import hashlib
 import json
-from collections import Counter
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from moumou.contracts import TaskNode, TraceEvent
+from moumou.contracts import TraceEvent
 from moumou.eval.behavior import evaluate_behavior, expected_behavior_targets
-from moumou.eval.loader import TaskFixture, load_tasks
-from moumou.eval.workspace import write_setup
-from moumou.orchestrator.acceptance import AcceptanceChecker
+from moumou.eval.cases import load_cases
+from moumou.eval.loader import TaskFixture
 
 TASKS = Path(__file__).resolve().parents[1] / "eval/tasks"
-FIXTURES = {fixture.id: fixture for fixture in load_tasks(TASKS)}
 
 
-def _json(data):
-    return json.dumps(data, ensure_ascii=False) + "\n"
+def probe(**requirements):
+    return TaskFixture(id="behavior_probe", title="Evidence contract", scenario="from_scratch",
+                       goal="Inspect recorded behavior", requirements=requirements)
 
 
-ARTIFACT_SOLUTIONS = {
-    "s1_hello": {"hello.py": "print('hello, moumou')\n"},
-    "s1_stats": {
-        "stats.py": (
-            "import json, sys\n"
-            "def describe(values):\n"
-            "    return dict(count=len(values),sum=sum(values),min=min(values) if values "
-            "else None,max=max(values) if values else None,mean=sum(values)/len(values) "
-            "if values else None)\n"
-            "if __name__ == '__main__':\n"
-            "    with open(sys.argv[1],encoding='utf-8') as f:\n"
-            "        data=list(map(int,f.read().split()))\n"
-            "    with open(sys.argv[2],'w',encoding='utf-8') as f: json.dump(describe(data),f)\n"
-        ),
-    },
-    "s2_bugfix": {
-        "calc.py": "def add(a,b):\n    return a+b\n\n"
-        "if __name__ == '__main__':\n    print(add(2,3))\n",
-    },
-    "s2_tags": {
-        "tags.py": "def normalize_tags(tags):\n"
-        "    return list(dict.fromkeys(t.strip().lower() for t in tags if t.strip()))\n",
-    },
-    "s3_cli": {
-        "greet.py": (
-            "import argparse\n"
-            "def positive(value):\n"
-            "    n=int(value)\n"
-            "    if n<1: raise argparse.ArgumentTypeError('positive count required')\n"
-            "    return n\n"
-            "def main():\n"
-            "    p=argparse.ArgumentParser(); p.add_argument('name')\n"
-            "    p.add_argument('--uppercase',action='store_true')\n"
-            "    p.add_argument('--times',type=positive,default=1); a=p.parse_args()\n"
-            "    text='hello, '+a.name\n"
-            "    if a.uppercase: text=text.upper()\n"
-            "    for _ in range(a.times): print(text)\n"
-            "if __name__ == '__main__': main()\n"
-        ),
-    },
-    "s3_catalog": {
-        "catalog.py": "def select(items,min_price=0,category=None):\n"
-        "    return [r for r in items if r['price']>=min_price and "
-        "(category is None or r['category'].lower()==category.lower())]\n",
-    },
-    "s4_python_research": {
-        "runtime.json": _json({
-            "topic": "python-interpreter", "executable_attribute": "sys.executable",
-            "venv_prefix_attribute": "sys.prefix", "base_prefix_attribute": "sys.base_prefix",
-            "retrieved_on": "2026-11-13", "sources": [{
-                "title": "Python sys documentation",
-                "url": "https://docs.python.org/3/library/sys.html#sys.executable",
-            }],
-        }),
-        "runtime.md": "sys.executable identifies the interpreter binary; sys.prefix and "
-        "sys.base_prefix identify current and base environments.\n"
-        "https://docs.python.org/3/library/sys.html#sys.executable\n",
-    },
-    "s4_http_research": {
-        "rate_limit.json": _json({
-            "status": 429, "meaning": "Too Many Requests", "retry_after_optional": True,
-            "retrieved_on": "2026-11-13", "sources": [{
-                "title": "RFC 6585 section 4",
-                "url": "https://www.rfc-editor.org/rfc/rfc6585#section-4",
-            }],
-        }),
-        "rate_limit.md": "HTTP 429 means Too Many Requests. Retry-After is optional.\n"
-        "https://www.rfc-editor.org/rfc/rfc6585#section-4\n",
-    },
-    "s5_approval": {},
-    "s5_approval_reject": {"decision.md": "Deletion rejected; protected.txt retained.\n"},
-    "s6_csv_memory": {
-        "customers.py": "import csv,io\n"
-        "def parse_customers(text):\n"
-        "    return list(csv.DictReader(io.StringIO(text.lstrip('\\ufeff'))))\n",
-        "customers.json": _json([
-            {"name": "Lee, Kim", "email": "lee@example.test"}, {"name": "Zoë", "email": ""},
-        ]),
-    },
-    "s6_path_memory": {
-        "report_writer.py": "from pathlib import Path\n"
-        "def write_report(path,text):\n"
-        "    path=Path(path); path.parent.mkdir(parents=True,exist_ok=True)\n"
-        "    path.write_text(text,encoding='utf-8')\n",
-        "output/weekly/summary.txt": "résumé ready\n",
-    },
-    "s7_parallel_stats": {
-        "left.json": _json({"count": 3, "sum": 7}),
-        "right.json": _json({"count": 3, "sum": 8}),
-        "combined.json": _json({"count": 6, "sum": 15}),
-    },
-    "s7_parallel_words": {
-        "words_a.json": _json({"red": 2, "blue": 1}),
-        "words_b.json": _json({"blue": 1, "green": 1}),
-        "words.json": _json({"red": 2, "blue": 2, "green": 1}),
-    },
-    "s8_composite": {
-        "status_policy.py": "def classify_status(code):\n"
-        "    groups=['informational','success','redirection','client_error','server_error']\n"
-        "    return groups[code//100-1] if 100<=code<600 else 'unknown'\n",
-        "policy.md": "informational success redirection client_error server_error\n"
-        "https://www.rfc-editor.org/rfc/rfc9110#section-15\n",
-    },
+def test_official_sources_contain_only_three_original_teams_and_six_tasks():
+    assert len(list(TASKS.rglob("*.md"))) == 10
+    assert not list(TASKS.rglob("*.yaml")) and not list(TASKS.rglob("*.yml"))
+    cases = load_cases(TASKS)
+    assert [case.id for case in cases] == ["scenario_1", "scenario_2", "scenario_3"]
+    assert len({role.name for case in cases for role in case.roles}) == 12
+    assert sum(bool(case.task1) + bool(case.task2) for case in cases) == 6
+
+
+@pytest.mark.parametrize("index,identities", [
+    (0, ["lead", "dev", "qa", "release"]),
+    (1, ["chief_editor", "reporter", "fact_checker", "editor"]),
+    (2, ["fund_manager", "research", "risk", "marketing"]),
+])
+def test_official_prompts_keep_source_bytes_identities_and_task_sequence(index, identities):
+    case = load_cases(TASKS)[index]
+    assert [role.name for role in case.roles] == identities
+    assert case.leader == identities[0]
+    assert set(case.source_paths) == {"readme", "roles", "task1", "task2"}
+    for name, path in case.source_paths.items():
+        assert path.resolve().is_relative_to(TASKS.resolve())
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == case.source_sha256[name]
+    role_text = case.source_paths["roles"].read_text(encoding="utf-8-sig")
+    blocks = re.findall(r"^```text[^\S\n]*\n(.*?)^```[^\S\n]*$", role_text, re.M | re.S)
+    assert [role.description for role in case.roles] == [block.rstrip("\n") for block in blocks]
+    for name, filename in [("task1", "02_task_1.md"), ("task2", "03_task_2.md")]:
+        path = case.source_paths[name]
+        assert path.name == filename
+        text = path.read_text(encoding="utf-8-sig")
+        block, = re.findall(r"^```text[^\S\n]*\n(.*?)^```[^\S\n]*$", text, re.M | re.S)
+        assert getattr(case, name) == block.rstrip("\n")
+
+
+# SHA-256 of each original self-authored goal (UTF-8, terminal newline removed).
+# These fixed provenance values do not need Git, local evidence or model answers.
+SUPPLEMENTARY_GOALS = {
+    "s1_hello": "4dfe93342b46f7775b4ba5f11570912a1174e4d75632469f4bf38dec5bacd08f",
+    "s1_stats": "465bab97d05532284fa80af017dfd90090e7261fc2906bdd946d3508b1b0f912",
+    "s2_bugfix": "e067b5ec388860b4e602420b88472fae73258cf536fe5a49a04ae4ada10b7485",
+    "s2_tags": "4253b40ccb463c9a7ce3dbf7a150b027b624043210c93af208fe9846e7490a50",
+    "s3_cli": "b13d62be02867c0192b52ae7d4593b206e7130d3527199343903bfd1e1894640",
+    "s3_catalog": "4bd0976ec7d4d14f9de396062f51060ff8586a432a4aedb51c3a4004f9c5ca67",
+    "s4_python_research": "614fb903d15eb2d9709f33c27b32db2c9ac9d715f8632d83bc6e4f8bba4da988",
+    "s4_http_research": "97558ab3fc6fe9e956a518f2f253f8b360c6ffcd371698ba8356686d5c760574",
+    "s5_approval": "3776c8aa5b8fe37d7d5e3751467ae9c8e74225acb438a15fdd091d98436d7d33",
+    "s5_approval_reject": "7140bd76ef4e6a5606bcc863d8744b865d8d178fe5bdf8944d911ca6c39182d7",
+    "s6_csv_memory": "c449302418e1dcad02c09ae7469e97b41517c4755782e38e00d26b3a3072e735",
+    "s6_path_memory": "8426f484108ade5f0c4393b8385fb2e7fd9420b568fa1d2a9b8172d1cb3fd33f",
+    "s7_parallel_stats": "70622f2d0f76ca5e159340eff09a7338835042e38964ea7edbf934a2beb5cc0a",
+    "s7_parallel_words": "0fe1046e5c6cde30ed551608cfd232e94666af859a0947a40846dd0ebf82a4a6",
+    "s8_composite": "96ca289f04427f5cc2fa7b9e6ba2e95e442bbc2e69f2e4ccb1b9c9570ec8d737",
 }
-
-DELETED_ARTIFACTS = {"s5_approval": ["legacy.py"], "s8_composite": ["legacy_policy.txt"]}
-
-WRONG_ARTIFACTS = {
-    "s1_hello": {"hello.py": "print('Hello, moumou')\n"},
-    "s1_stats": {"stats.py": "def describe(values):\n    return {'count':5,'sum':17}\n"},
-    "s2_bugfix": {"calc.py": "def add(a,b):\n    return 5\n\n"
-                  "if __name__ == '__main__': print(5)\n"},
-    "s2_tags": {"tags.py": "def normalize_tags(tags):\n"
-                "    return [t.strip().lower() for t in tags if t.strip()]\n"},
-    "s3_cli": {"greet.py": "import sys\nprint('hello, '+sys.argv[1])\n"},
-    "s3_catalog": {"catalog.py": "def select(items,min_price=0,category=None):\n"
-                   "    return [r for r in items if r['price']>=min_price]\n"},
-    "s4_python_research": {"runtime.json": ARTIFACT_SOLUTIONS["s4_python_research"][
-        "runtime.json"].replace("docs.python.org", "example.test")},
-    "s4_http_research": {"rate_limit.json": ARTIFACT_SOLUTIONS["s4_http_research"][
-        "rate_limit.json"].replace(
-            '"retry_after_optional": true', '"retry_after_optional": false')},
-    "s5_approval": {"app.py": "print('changed without permission')\n"},
-    "s5_approval_reject": {"protected.txt": "tampered\n"},
-    "s6_csv_memory": {"customers.py": "def parse_customers(text):\n"
-                      "    rows=[line.split(',') for line in text.splitlines()]\n"
-                      "    return [dict(zip(rows[0],r)) for r in rows[1:]]\n"},
-    "s6_path_memory": {"report_writer.py": "from pathlib import Path\n"
-                       "def write_report(path,text):\n"
-                       "    Path(path).write_text(text,encoding='utf-8')\n"},
-    "s7_parallel_stats": {"combined.json": _json({"count": 6, "sum": 14})},
-    "s7_parallel_words": {"words.json": _json({"red": 1, "blue": 2, "green": 1})},
-    "s8_composite": {"status_policy.py": "def classify_status(code):\n    return 'success'\n"},
-}
+SUPPLEMENTARY = TASKS.parent / "supplementary"
 
 
-def seed_solution(workspace: Path, fixture: TaskFixture, *, wrong=False):
-    """Set up an acceptance probe without performing or claiming an agent run."""
-    write_setup(workspace, fixture.setup)
-    write_setup(workspace, ARTIFACT_SOLUTIONS[fixture.id])
-    for name in DELETED_ARTIFACTS.get(fixture.id, []):
-        (workspace / name).unlink()
-    if wrong:
-        write_setup(workspace, WRONG_ARTIFACTS[fixture.id])
+def supplementary_sources():
+    paths = sorted(SUPPLEMENTARY.glob("*/0[23]_task_*.md"))
+    return [(path, path.read_text(encoding="utf-8-sig")) for path in paths]
 
 
-def test_fifteen_unique_fixtures_cover_each_scenario_twice_plus_composite():
-    assert len(FIXTURES) == 15
-    ordinary = [f for f in FIXTURES.values() if "composite" not in f.tags]
-    assert set(Counter(f.scenario for f in ordinary).values()) == {2}
-    assert len({f.scenario for f in ordinary}) == 7
-    assert sum("composite" in f.tags for f in FIXTURES.values()) == 1
-    assert all(f.repeats == 3 and f.acceptance for f in FIXTURES.values())
-    assert set(ARTIFACT_SOLUTIONS) == set(WRONG_ARTIFACTS) == set(FIXTURES)
+def text_prompt(text):
+    prompt, = re.findall(r"^```text[^\S\n]*\n(.*?)^```[^\S\n]*$", text, re.M | re.S)
+    return prompt.rstrip("\n")
 
 
-@pytest.mark.parametrize("fixture_id", sorted(FIXTURES))
-@pytest.mark.parametrize("wrong", [False, True], ids=["correct", "typical-mistake"])
-async def test_each_fixture_accepts_correct_artifacts_and_rejects_a_typical_mistake(
-    tmp_path, fixture_id, wrong,
-):
-    fixture = FIXTURES[fixture_id]
-    workspace = tmp_path / fixture.id
-    workspace.mkdir()
-    seed_solution(workspace, fixture, wrong=wrong)
-    node = TaskNode(id="t1", project_id="probe", conversation_id="probe", role="planner",
-                    goal=fixture.goal, acceptance=fixture.acceptance)
-    passed, checks = await AcceptanceChecker().check(node, workspace)
-    assert passed is not wrong, checks
-    assert all(check["kind"] != "self_report" for check in checks)
+def test_supplementary_keeps_fifteen_unique_original_identities_and_goals():
+    assert len(list(SUPPLEMENTARY.rglob("*.md"))) == 24
+    assert not list(SUPPLEMENTARY.rglob("*.yaml"))
+    assert not list(SUPPLEMENTARY.rglob("*.yml"))
+    observed = {}
+    for _, text in supplementary_sources():
+        identity, = re.findall(r"^Original task ID: `([^`]+)`\.$", text, re.M)
+        assert identity not in observed
+        goal = text_prompt(text).split("\n\n", 1)[0]
+        observed[identity] = hashlib.sha256(goal.encode("utf-8")).hexdigest()
+    assert observed == SUPPLEMENTARY_GOALS
+
+
+def test_supplementary_uses_same_sequence_without_inventing_a_sixteenth_task():
+    cases = load_cases(SUPPLEMENTARY)
+    assert len(cases) == 8
+    assert [len(case.tasks) for case in cases] == [2] * 7 + [1]
+    assert sum(len(case.tasks) for case in cases) == 15
+    assert cases[-1].task2 is None and "task2" not in cases[-1].source_paths
+    assert all(case.source_kind == "supplementary" for case in cases)
+    assert all(case.leader == "lead" and len(case.roles) == 4 for case in cases)
+    expected = [text_prompt(text) for _, text in supplementary_sources()]
+    assert [task for case in cases for task in case.tasks] == expected
+
+
+def test_supplementary_historical_scripted_settings_are_not_live_prompt_instructions():
+    for _, text in supplementary_sources():
+        historical, = re.findall(r"^```json[^\S\n]*\n(.*?)^```[^\S\n]*$", text, re.M | re.S)
+        metadata = json.loads(historical)
+        assert metadata["id"] in SUPPLEMENTARY_GOALS
+        assert metadata["human"]["default"] in {"approve", "reject"}
+        prompt = text_prompt(text)
+        assert historical not in prompt
+        assert '"default": "approve"' not in prompt and '"default": "reject"' not in prompt
+        assert "Ask the actual human" in prompt
 
 
 def test_legacy_fixture_schema_defaults_are_compatible():
@@ -219,18 +144,6 @@ def test_invalid_behavior_requirements_are_rejected(requirements):
                     requirements=requirements)
 
 
-def test_memory_warmups_have_separate_goals_data_and_artifact_paths():
-    for fixture in FIXTURES.values():
-        if not fixture.requirements.memory_injection:
-            assert fixture.warmup is None
-            continue
-        assert fixture.warmup and fixture.warmup.acceptance
-        assert fixture.warmup.goal != fixture.goal
-        assert not set(fixture.warmup.setup) & set(fixture.setup)
-        assert "customers.json" not in fixture.warmup.goal
-        assert "résumé ready" not in fixture.warmup.goal
-
-
 def event(kind, name, start=0, end=1, *, task_id="t1", **payload):
     base = datetime(2026, 11, 13, tzinfo=UTC)
     return TraceEvent(task_id=task_id, kind=kind, name=name,
@@ -244,7 +157,7 @@ def judge(fixture, events=(), *, nodes=(), options=None, observations=None):
 
 
 def test_approval_requires_a_real_same_task_effect_after_the_decision():
-    fixture = FIXTURES["s5_approval"].model_copy(deep=True)
+    fixture = probe(approvals=[{"tool": "delete_file", "decision": "approve"}])
     fixture.requirements.required_tools = []
     approved = event("approval", "delete_file", decision="approve")
     deleted = event("tool", "delete_file", 2, 3, ok=True)
@@ -256,7 +169,7 @@ def test_approval_requires_a_real_same_task_effect_after_the_decision():
 
 
 def test_rejection_requires_a_decision_and_forbids_later_successful_effects():
-    fixture = FIXTURES["s5_approval_reject"]
+    fixture = probe(approvals=[{"tool": "delete_file", "decision": "reject"}])
     rejected = event("approval", "delete_file", decision="reject")
     assert judge(fixture, [rejected])[0]["ok"]
     assert not judge(fixture, [])[0]["ok"]
@@ -265,7 +178,7 @@ def test_rejection_requires_a_decision_and_forbids_later_successful_effects():
 
 
 def test_research_requires_successful_search_instead_of_a_source_claim():
-    fixture = FIXTURES["s4_python_research"]
+    fixture = probe(required_tools=["web_search"])
     assert judge(fixture, [event("tool", "web_search", ok=True)])[0]["ok"]
     assert not judge(fixture, [event("tool", "web_search", ok=False)])[0]["ok"]
     assert not judge(fixture, [event("tool", "write_file", ok=True)])[0]["ok"]
@@ -279,13 +192,13 @@ def test_research_requires_successful_search_instead_of_a_source_claim():
     (True, [{"task_id": "t1", "memory_ids": ["lesson"], "injected": False}], False),
 ])
 def test_memory_controls_are_checked_against_real_context_citations(enabled, observations, wanted):
-    checks = judge(FIXTURES["s6_csv_memory"], options={"memory_enabled": enabled},
+    checks = judge(probe(memory_injection=True), options={"memory_enabled": enabled},
                    observations=observations)
     assert checks[0]["ok"] is wanted
 
 
 def test_missing_memory_observations_fail_closed_even_when_memory_is_disabled():
-    checks = evaluate_behavior(FIXTURES["s6_csv_memory"], [], nodes=[],
+    checks = evaluate_behavior(probe(memory_injection=True), [], nodes=[],
                                options={"memory_enabled": False}, memory_observations=None)
     assert not checks[0]["ok"]
 
@@ -293,7 +206,7 @@ def test_missing_memory_observations_fail_closed_even_when_memory_is_disabled():
 @pytest.mark.parametrize("slots,overlap,wanted", [(4, True, True), (4, False, False),
                                                 (1, False, True), (1, True, False)])
 def test_parallel_and_serial_groups_check_real_child_intervals(slots, overlap, wanted):
-    fixture = FIXTURES["s7_parallel_stats"]
+    fixture = probe(min_children=2, parallel_children=True)
     nodes = [{"id": "t1", "parent_id": None}, {"id": "t1.a", "parent_id": "t1"},
              {"id": "t1.b", "parent_id": "t1"}]
     events = [event("delegate", "plan_applied", children=["t1.a", "t1.b"]),
@@ -306,7 +219,7 @@ def test_parallel_and_serial_groups_check_real_child_intervals(slots, overlap, w
 
 
 def test_parent_intervals_and_unmaterialized_plans_cannot_fake_collaboration():
-    fixture = FIXTURES["s7_parallel_words"]
+    fixture = probe(min_children=2, parallel_children=True)
     events = [event("delegate", "plan_applied", children=["t1.a", "t1.b"]),
               event("llm", "chat", 0, 10), event("tool", "run_python", 1, 9, ok=True)]
     checks = judge(fixture, events)
@@ -314,7 +227,7 @@ def test_parent_intervals_and_unmaterialized_plans_cannot_fake_collaboration():
 
 
 def test_zero_duration_child_markers_do_not_establish_concurrency():
-    fixture = FIXTURES["s7_parallel_words"]
+    fixture = probe(min_children=2, parallel_children=True)
     nodes = [{"id": "t1.a", "parent_id": "t1"}, {"id": "t1.b", "parent_id": "t1"}]
     events = [event("delegate", "plan_applied", children=["t1.a", "t1.b"]),
               event("llm", "chat", 1, 1, task_id="t1.a"),
@@ -330,7 +243,7 @@ def test_zero_duration_child_markers_do_not_establish_concurrency():
     (["t1.a"], []),
 ])
 def test_parallel_fixtures_reject_dependent_or_invalid_sibling_plans(deps, extra):
-    fixture = FIXTURES["s7_parallel_words"]
+    fixture = probe(min_children=2, parallel_children=True)
     nodes = [{"id": "t1", "parent_id": None},
              {"id": "t1.a", "parent_id": "t1", "deps": deps},
              {"id": "t1.b", "parent_id": "t1", "deps": []}, *extra]
@@ -342,7 +255,7 @@ def test_parallel_fixtures_reject_dependent_or_invalid_sibling_plans(deps, extra
 
 
 def test_nested_descendants_are_not_counted_as_independent_root_children():
-    fixture = FIXTURES["s7_parallel_words"]
+    fixture = probe(min_children=2, parallel_children=True)
     nodes = [{"id": "t1", "parent_id": None}, {"id": "t1.a", "parent_id": "t1"},
              {"id": "t1.a.b", "parent_id": "t1.a"}]
     events = [event("delegate", "plan_applied", children=["t1.a"]),

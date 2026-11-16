@@ -9,15 +9,13 @@ from contextlib import closing
 from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
 from moumou.adapters import FakeLLM
 from moumou.adapters.llm import LLMResponse
-from moumou.config import LLMSettings
 from moumou.contracts import Acceptance, Budget, MemoryRecord, TraceEvent
-from moumou.eval import artifacts, cli, runner
+from moumou.eval import artifacts, runner
 from moumou.eval.artifacts import atomic_json, create_manifest, load_results
 from moumou.eval.loader import TaskFixture
 from moumou.eval.runner import render_markdown, run_all
@@ -314,42 +312,19 @@ async def test_exception_cannot_import_another_batch_result(tmp_path, monkeypatc
     assert manifest["status"] == "error" and manifest["completed_runs"] == 0
 
 
-async def test_cli_default_creates_fresh_batches_and_closes_each_client(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    task_dir = tmp_path / "tasks"
-    task_dir.mkdir()
-    (task_dir / "cli.yaml").write_text(
-        json.dumps(fixture("cli").model_dump(mode="json")), encoding="utf-8"
-    )
-    clients = []
-
-    def make_client(**kwargs):
-        fake = model()
-        fake.aclose = AsyncMock()
-        clients.append(fake)
-        return fake
-
-    monkeypatch.setattr(cli, "DeepSeekClient", make_client)
-    monkeypatch.setattr(cli.LLMSettings, "from_env", classmethod(lambda cls: LLMSettings(
-        api_key="offline-test-placeholder", model="offline-model",
-        base_url="https://api.invalid", timeout_s=1,
-    )))
-    args = cli.parse_args(["--tasks", str(task_dir)])
-    assert args.out is None
-    assert await cli.main_async(args) == 0
-    assert await cli.main_async(args) == 0
-    paths = sorted((tmp_path / "runs/eval").glob("*/manifest.json"))
-    assert len(paths) == len(clients) == 2
-    manifests = [read_json(path) for path in paths]
+async def test_direct_runner_creates_fresh_batches_with_independent_identifiers(tmp_path):
+    clients = [model(), model()]
+    roots = [tmp_path / "first", tmp_path / "second"]
+    for root, client in zip(roots, clients, strict=True):
+        result, = await run_all([fixture()], client, root, repeats=1)
+        assert result.root_success is True
+    manifests = [read_json(root / "manifest.json") for root in roots]
     assert manifests[0]["eval_id"] != manifests[1]["eval_id"]
-    assert paths[0].parent != paths[1].parent
-    for path, manifest in zip(paths, manifests, strict=True):
+    for root, manifest, client in zip(roots, manifests, clients, strict=True):
         assert manifest["status"] == "completed"
-        records = load_results(path.parent)
+        records = load_results(root)
         assert len(records) == 1 and records[0]["root_success"] is True
-    for fake in clients:
-        assert fake.calls
-        fake.aclose.assert_awaited_once()
+        assert client.calls
 
 
 @pytest.mark.parametrize(

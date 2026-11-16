@@ -1,21 +1,21 @@
-"""The task fixture format must stay parseable — P3 writes 15 of these."""
+"""Internal fixture parsing uses isolated contract probes, not the instructor bank."""
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from moumou.eval.loader import TaskFixture, load_task, load_tasks
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-TASKS = REPO_ROOT / "eval" / "tasks"
 
-
-def test_bundled_fixtures_are_valid():
-    fixtures = load_tasks(TASKS)
-    assert len(fixtures) >= 3, "at least one sample per implemented scenario"
+def test_multiple_temporary_fixtures_are_valid(tmp_path):
+    for index in range(3):
+        (tmp_path / f"probe{index}.yaml").write_text(
+            f"id: probe{index}\ntitle: Parser probe\nscenario: from_scratch\ngoal: g\n",
+            encoding="utf-8",
+        )
+    fixtures = load_tasks(tmp_path)
+    assert len(fixtures) == 3
     for fixture in fixtures:
         assert fixture.id and fixture.goal.strip()
         assert fixture.scenario
@@ -32,7 +32,8 @@ def test_scenarios_are_drawn_from_the_course_list():
         "use_memory",
         "parallel",
     }
-    assert {f.scenario for f in load_tasks(TASKS)} <= known
+    for scenario in known:
+        assert TaskFixture(id="probe", title="t", scenario=scenario, goal="g").scenario == scenario
 
 
 def test_executable_acceptance_needs_expect(tmp_path):
@@ -63,9 +64,14 @@ def test_duplicate_ids_are_rejected(tmp_path):
         load_tasks(tmp_path)
 
 
-def test_loader_defaults_and_setup_files():
-    fixture = load_task(TASKS / "s2_bugfix.yaml")
-    assert "def add" in fixture.setup["calc.py"]
+def test_loader_defaults_and_setup_files(tmp_path):
+    source = tmp_path / "setup.yaml"
+    source.write_text(
+        "id: setup\ntitle: t\nscenario: from_scratch\ngoal: g\n"
+        "setup:\n  prepared.txt: test-only marker\n", encoding="utf-8",
+    )
+    fixture = load_task(source)
+    assert fixture.setup == {"prepared.txt": "test-only marker"}
 
     bare = TaskFixture(id="x", title="t", scenario="from_scratch", goal="g")
     assert bare.budget.max_steps > 0

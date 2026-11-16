@@ -12,7 +12,9 @@ import hashlib
 import json
 import math
 import os
+import statistics
 import sys
+from datetime import UTC, datetime
 from pathlib import Path, PureWindowsPath
 from urllib.parse import quote
 
@@ -477,16 +479,163 @@ def _ablation(root):
             + [str(root / "warmups")]}
 
 
+def _session_wall_time(manifest: dict) -> dict:
+    """Use saved aware timestamps only; an unfinished span has no total yet."""
+    times, missing = {}, []
+    for name in ("started_at", "finished_at"):
+        raw = manifest.get(name)
+        if raw is None:
+            missing.append(name)
+            continue
+        if not isinstance(raw, str):
+            raise ValueError(f"saved session {name} must be an ISO timestamp with timezone")
+        try:
+            value = datetime.fromisoformat(raw)
+            if value.tzinfo is None or value.utcoffset() is None:
+                raise ValueError("timezone is missing")
+            times[name] = value.astimezone(UTC)
+        except (ValueError, OverflowError) as exc:
+            raise ValueError(f"invalid saved session {name}: timezone-aware timestamp required") \
+                from exc
+    if missing:
+        return {"seconds": None, "status": "unknown", "missing_timestamps": missing,
+                "basis": "saved started_at and finished_at only"}
+    seconds = (times["finished_at"] - times["started_at"]).total_seconds()
+    if seconds < 0:
+        raise ValueError("saved session finished_at precedes started_at")
+    return {"seconds": seconds, "status": "known", "missing_timestamps": [],
+            "basis": "saved started_at and finished_at only"}
+
+
+def _session(root: Path, source: Path) -> dict:
+    """Recompute conversation results from each saved task, never cached totals."""
+    manifest = _read(source)
+    if (manifest.get("schema_version") != 1
+            or manifest.get("kind") not in {"instructor_test", "instructor_midtest"}):
+        raise ValueError("unsupported saved test-session schema")
+    wall_time = _session_wall_time(manifest)
+    planned = manifest.get("planned_root_goals")
+    if type(planned) is not int or planned < 1:
+        raise ValueError("planned_root_goals must be a positive integer")
+    scenarios = manifest.get("scenarios")
+    if not isinstance(scenarios, list):
+        raise ValueError("session scenarios must be a list")
+    records, protected, seen = [], [], set()
+    for scenario in scenarios:
+        if not isinstance(scenario, dict):
+            raise ValueError("session scenario must be an object")
+        identity = scenario.get("scenario_id")
+        if (not isinstance(identity, str) or not identity.startswith("scenario_")
+                or not identity.removeprefix("scenario_").isdigit() or identity in seen):
+            raise ValueError("invalid or duplicate session scenario")
+        seen.add(identity)
+        directory = _inside(root, identity)
+        protected.append(str(directory))
+        tasks = scenario.get("tasks", [])
+        if not isinstance(tasks, list) or len(tasks) > 2:
+            raise ValueError("a conversation group supports one or two sequential tasks")
+        indexed = {f"task_{index}-result.json" for index in range(1, len(tasks) + 1)}
+        if any(path.name not in indexed for path in directory.glob("task_*-result.json")):
+            raise ValueError("unindexed task result; recover the session index before reporting")
+        for index, cached in enumerate(tasks, 1):
+            phase = f"task_{index}"
+            if not isinstance(cached, dict) or cached.get("phase") != phase:
+                raise ValueError("saved tasks are not in conversation order")
+            path = _inside(root, f"{identity}/{phase}-result.json")
+            task = _read(path)
+            if (task.get("phase") != phase
+                    or task.get("root_task_id") != cached.get("root_task_id")):
+                raise ValueError("saved task identity disagrees with the session index")
+            status = task.get("root_status")
+            if status not in _NODE_STATUSES:
+                raise ValueError("unknown saved task status")
+            elapsed = task.get("delivery_elapsed_s", task.get("elapsed_s"))
+            if (type(elapsed) not in {int, float} or not math.isfinite(elapsed)
+                    or elapsed < 0):
+                raise ValueError("saved delivery time must be finite and nonnegative")
+            nodes = task.get("nodes")
+            if (not isinstance(nodes, list) or not nodes
+                    or any(not isinstance(node, dict) for node in nodes)):
+                raise ValueError("saved task has no node evidence")
+            node_ids = [node.get("id") for node in nodes]
+            if (any(not isinstance(item, str) or not item for item in node_ids)
+                    or len(set(node_ids)) != len(node_ids)
+                    or task["root_task_id"] not in node_ids
+                    or any(node.get("status") not in _NODE_STATUSES for node in nodes)):
+                raise ValueError("invalid saved node identities or statuses")
+            subtasks = [node for node in nodes if node["id"] != task["root_task_id"]]
+            root_node = next(node for node in nodes if node["id"] == task["root_task_id"])
+            if root_node["status"] != status:
+                raise ValueError("root status disagrees with saved node evidence")
+            success = task.get("verified_goal_success")
+            if success is not None and type(success) is not bool:
+                raise ValueError("verified_goal_success must be boolean or null")
+            if success is True and not (
+                status == "DONE" and task.get("root_machine_accepted") is not False
+                and task.get("quality_status") == "human_accepted"
+                and task.get("quality_method") == "actual_human_review"
+                and isinstance(task.get("human_quality_response"), dict)
+                and task.get("human_quality_response", {}).get("decision") == "approve"
+            ):
+                raise ValueError("a successful goal lacks its actual quality-review evidence")
+            records.append({
+                "scenario_id": identity, "phase": phase, "root_status": status,
+                "root_task_id": task["root_task_id"], "elapsed_s": elapsed,
+                "root_machine_accepted": task.get("root_machine_accepted"),
+                "quality_status": task.get("quality_status", "unreviewed"),
+                "verified_goal_success": success,
+                "observed_subtasks": len(subtasks),
+                "observed_subtasks_done": sum(node["status"] == "DONE" for node in subtasks),
+                "path": str(path),
+            })
+    if len(records) > planned:
+        raise ValueError("saved task deliveries exceed the planned denominator")
+    times = [record["elapsed_s"] for record in records]
+    successes = sum(record["verified_goal_success"] is True for record in records)
+    subtask_count = sum(record["observed_subtasks"] for record in records)
+    subtask_done = sum(record["observed_subtasks_done"] for record in records)
+    metrics = {
+        "planned_root_goals": planned, "persisted_task_deliveries": len(records),
+        "agent_declared_complete": sum(record["root_status"] == "DONE" for record in records),
+        "verified_successes": successes,
+        "unreviewed_deliveries": sum(record["verified_goal_success"] is None for record in records),
+        "known_unsuccessful": sum(record["verified_goal_success"] is False for record in records),
+        "not_delivered": planned - len(records),
+        "provisional_verified_goal_rate": successes / planned,
+        "observed_subtasks": subtask_count, "observed_subtasks_done": subtask_done,
+        "observed_subtask_completion_rate": subtask_done / subtask_count if subtask_count else None,
+        "suite_wall_time_s": wall_time["seconds"],
+        "suite_wall_time_evidence": wall_time,
+        "delivery_time_s": {"n": len(times), "sum": sum(times),
+                            "mean": statistics.mean(times) if times else None,
+                            "sample_std": statistics.stdev(times) if len(times) > 1 else None},
+    }
+    return {"schema_version": 1, "kind": "instructor_test", "root": str(root),
+            "manifest": manifest, "records": records, "metrics": metrics,
+            "report_builder": {
+                "module": "moumou.eval.report", "kind": "offline_reconstruction",
+                "source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            },
+            "sources": [{"path": str(source)}], "protected_directories": protected}
+
+
 def build_report(root: Path | str) -> dict:
     """Read and validate one saved batch or experiment without changing any input."""
     root = Path(root).resolve()
     batch_file, ablation_file = root / "manifest.json", root / "ablation.json"
+    session_files = [path for path in (root / "test.json", root / "midtest.json")
+                     if path.is_file()]
+    if session_files:
+        if len(session_files) != 1 or batch_file.is_file() or ablation_file.is_file():
+            raise ValueError("report root contains ambiguous session and batch manifests")
+        return _session(root, session_files[0])
     if batch_file.is_file() and ablation_file.is_file():
         raise ValueError("report root is ambiguous: both manifest and ablation files exist")
     if ablation_file.is_file():
         return _ablation(root)
     if not batch_file.is_file():
-        raise FileNotFoundError("report root has neither manifest.json nor ablation.json")
+        raise FileNotFoundError(
+            "report root has neither a saved test session nor a historical batch")
     batch = _batch(root)
     manifest = batch["manifest"]
     return {"schema_version": 1, "kind": "batch", "root": str(root), "manifest": manifest,
@@ -542,6 +691,8 @@ def _summary_table(rows, label):
 
 def render_report(model: dict) -> str:
     """Render a deterministic Markdown view of the validated report model."""
+    if model["kind"] == "instructor_test":
+        return _render_session(model)
     manifest, purpose = model["manifest"], model["purpose"]
     labels = {"offline_validation": "Offline validation; not real-model performance.",
               "custom_worker_validation": "Custom worker validation; not model performance.",
@@ -661,6 +812,61 @@ def render_report(model: dict) -> str:
               "result copies or the potentially truncated JSONL index. It does not resume work, "
               "call a model, certify undeclared provenance, or turn pending research into success.",
               ""]
+    return "\n".join(lines)
+
+
+def _render_session(model: dict) -> str:
+    manifest, metrics = model["manifest"], model["metrics"]
+    wall = metrics["suite_wall_time_evidence"]
+    wall_text = (_number(wall["seconds"]) if wall["status"] == "known" else
+                 "unknown (missing " + ", ".join(wall["missing_timestamps"]) + ")")
+    lines = [
+        "# Test session report", "",
+        f"Dataset: {_cell(manifest.get('dataset_kind', 'instructor'))}; "
+        f"source: {_cell(manifest.get('source', 'not recorded'))}.",
+        f"Saved status: {_cell(manifest['status'])}. This is not a process-liveness check.",
+        "",
+        f"Planned goals: {metrics['planned_root_goals']}; saved deliveries: "
+        f"{metrics['persisted_task_deliveries']}; agent DONE: "
+        f"{metrics['agent_declared_complete']}; verified successes: "
+        f"{metrics['verified_successes']}; unreviewed: {metrics['unreviewed_deliveries']}; "
+        f"not delivered: {metrics['not_delivered']}.",
+        f"Provisional verified goal coverage: {metrics['provisional_verified_goal_rate']:.2%}. "
+        "Unreviewed or unstarted goals are not silently counted as successes or measured failures.",
+        f"Observed subtasks DONE: {metrics['observed_subtasks_done']}/"
+        f"{metrics['observed_subtasks']}.",
+        f"Whole-session elapsed time (s): {wall_text}; derived only from saved start/end.",
+        f"Saved delivery time mean / sample std / n (s): {_stats(metrics['delivery_time_s'])}.",
+        "",
+        "| scenario | phase | root | agent status | machine accepted | quality | "
+        "delivery (s) | result |",
+        "|---|---|---|---|---|---|---:|---|",
+    ]
+    for row in model["records"]:
+        lines.append(f"| {_cell(row['scenario_id'])} | {row['phase']} | "
+                     f"{_cell(row['root_task_id'])} | {row['root_status']} | "
+                     f"{_cell(row['root_machine_accepted'])} | {_cell(row['quality_status'])} | "
+                     f"{row['elapsed_s']:.3f} | {_link(model, row['path'], 'result.json')} |")
+    lines += [
+        "", "Recomputed offline from authoritative task result files; cached manifest totals "
+        "and duplicate task summaries do not establish success. "
+        "DONE alone is not quality acceptance.",
+        "Whole-session time includes waiting and time spent on unfinished tasks. "
+        "Delivery samples cover only persisted task results and exclude unfinished phases; "
+        "a zero-sample delivery sum of zero is not total execution time. "
+        "A missing saved finish remains unknown; the current clock or an external stop ledger "
+        "is not substituted. Human/tool/LLM spans may overlap; "
+        "they are not subtracted blindly. Missing usage, search or memory evidence is unknown, "
+        "not zero; no memory benefit is inferred from an unpaired conversation.",
+        "Full dialogue, actual human exchanges, private workspaces and metered search records "
+        "remain in each scenario directory. "
+        "Supplementary results remain separate from instructor scores.",
+        "Offline report builder: " + _cell(model["report_builder"]["module"])
+        + "; source SHA-256: " + model["report_builder"]["source_sha256"] + ". "
+        "This identifies the report reconstruction and does not replace the run-start "
+        "code snapshot stored in the original manifest.",
+        "",
+    ]
     return "\n".join(lines)
 
 

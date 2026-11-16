@@ -10,7 +10,6 @@ from moumou.adapters import FakeLLM, GitWorkspaces
 from moumou.adapters.llm import LLMResponse, ToolCall
 from moumou.contracts import Acceptance
 from moumou.demo.skeleton import PLAN, responder
-from moumou.eval.cli import parse_args
 from moumou.eval.loader import TaskFixture
 from moumou.eval.runner import run_all, run_once
 
@@ -31,13 +30,6 @@ def events(result):
     return [json.loads(line) for line in (Path(result.run_dir) / "trace.jsonl").read_text(
         encoding="utf-8"
     ).splitlines()]
-
-
-def test_cli_selects_workspace_backend():
-    assert parse_args([]).workspace_backend == "local"
-    assert parse_args(["--workspace-backend", "git"]).workspace_backend == "git"
-    with pytest.raises(SystemExit):
-        parse_args(["--workspace-backend", "other"])
 
 
 async def test_default_backend_preserves_local_layout(tmp_path):
@@ -141,22 +133,15 @@ async def test_unknown_backend_fails_before_model_calls(tmp_path):
     assert llm.calls == []
 
 
-async def test_cli_passes_selected_backend_to_real_runner(tmp_path, monkeypatch):
-    from unittest.mock import AsyncMock
-
-    from moumou.eval import cli
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-placeholder")
-    fake = FakeLLM(responder)
-    fake.aclose = AsyncMock()
-    monkeypatch.setattr(cli, "DeepSeekClient", lambda **kwargs: fake)
-    args = parse_args(["--only", "s1_hello", "--workspace-backend", "git",
-                       "--out", str(tmp_path)])
-    assert await cli.main_async(args) == 0
-    parent = GitWorkspaces(tmp_path / "s1_hello/r0/workspaces").allocate(
-        "s1_hello", "c1", "planner@t1"
+async def test_batch_runner_passes_selected_backend_to_real_engine(tmp_path):
+    task = fixture(acceptance=[Acceptance(kind="file_exists", target="README.md")])
+    result, = await run_all([task], FakeLLM(responder), tmp_path,
+                           repeats=1, workspace_backend="git")
+    assert result.root_success is True
+    parent = GitWorkspaces(Path(result.run_dir) / "workspaces").allocate(
+        result.fixture_id, "c1", "planner@t1"
     )
     assert (parent / ".git").is_file() and (parent / "hello.py").is_file()
-    fake.aclose.assert_awaited_once()
 
 
 async def test_git_evaluation_materialises_dependency(tmp_path):
@@ -234,18 +219,3 @@ async def test_run_all_rejects_existing_batch_before_model_calls(tmp_path):
         await run_all([fixture(id="new_fixture")], llm, root, workspace_backend="git")
     assert llm.calls == []
     assert (root / "report.md").read_text(encoding="utf-8") == "previous report"
-
-
-async def test_cli_rejects_prior_batch_before_constructing_model(tmp_path, monkeypatch):
-    from moumou.eval import cli
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-placeholder")
-    (tmp_path / "report.md").write_text("previous report", encoding="utf-8")
-    (tmp_path / "old_fixture").mkdir()
-
-    def unexpected(**kwargs):
-        raise AssertionError("model constructed before rejecting prior batch")
-    monkeypatch.setattr(cli, "DeepSeekClient", unexpected)
-    args = parse_args(["--only", "s2_bugfix", "--workspace-backend", "git",
-                       "--out", str(tmp_path)])
-    assert await cli.main_async(args) == 2
-    assert (tmp_path / "report.md").read_text(encoding="utf-8") == "previous report"

@@ -6,18 +6,19 @@
 
 **`ModuleNotFoundError: No module named 'moumou'`**
 
-Use the Python inside the virtual environment:
+Use the activated project environment (native Windows may use Conda `nlp`):
 
 ```bash
-.venv/bin/python -m pytest -q
+python -m pytest -q
 ```
 
-Or simply `make test`. Do not use the system Python.
+Or use `make unit-test`. `make test` and `make eval` run the real instructor protocol,
+with model access and human interaction; they are not pytest shortcuts.
 
 **My code changed but the tests still run the old version**
 
-Same cause: a bare `pytest` may resolve to a globally installed one. Use `make` or
-`.venv/bin/python` consistently.
+Same cause: a bare `pytest` may resolve to a globally installed one. Activate the
+project environment and use `python -m pytest` or `make unit-test` consistently.
 
 **`make install` cannot find uv**
 
@@ -118,5 +119,13 @@ No. It uses a scripted model, finishes in seconds and spends nothing. Run it as 
 
 **Can I delete `runs/`**
 
-Yes. It holds run artifacts (databases, workspaces, logs) and is entirely gitignored. If you want
-to keep evidence, copy `runs/eval/report.md` out first.
+It holds local evidence, including databases, continuing workspaces, dialogue and actual
+human decisions. Preserve the entire relevant `runs/test/<id>/` directory before cleanup;
+one report does not preserve its original evidence. Do not remove an active session.
+
+**Which task source is used?**
+
+`python -m moumou` and `python -m moumou.eval.cli` default to `eval/tasks`, the instructor's
+three teams and six goals. The retained self-authored bank uses the same Markdown format
+and requires `--tasks eval/supplementary`; it has lower priority and separate scores.
+Use `--plan` to inspect sources without model calls. See [evaluation](EVAL.en.md).

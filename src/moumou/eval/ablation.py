@@ -542,10 +542,13 @@ async def run_ablation(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Dedicated ablation entry point; the normal CLI still supports --ablation."""
-    from moumou.eval.cli import main as evaluation_main
-
-    return evaluation_main(["--ablation", *(sys.argv[1:] if argv is None else argv)])
+    """Retired command; internal mechanisms remain available for archived runs."""
+    print(
+        "The standalone ablation command is retired. Run instructor evaluation with "
+        "python -m moumou.eval.cli --tasks eval/tasks; add --plan to inspect it offline.",
+        file=sys.stderr,
+    )
+    return 2
 
 
 if __name__ == "__main__":

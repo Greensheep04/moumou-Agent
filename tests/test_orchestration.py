@@ -396,6 +396,11 @@ async def test_finished_tasks_land_on_the_conclusion_board(tmp_path):
 
 async def test_an_agent_hands_off_a_structured_result(tmp_path):
     def responder(messages, tools):
+        if messages[-1]["role"] != "tool":
+            return LLMResponse(tool_calls=[ToolCall(
+                id="write", name="write_file",
+                args={"path": "out.txt", "content": "placeholder"},
+            )])
         return LLMResponse(
             tool_calls=[
                 ToolCall(
@@ -416,6 +421,9 @@ async def test_an_agent_hands_off_a_structured_result(tmp_path):
         task = engine.submit("write a file")
         await engine.run()
         node = engine.repo.get(task.id)
+        workspace = engine.workspace.allocate(node.project_id, node.conversation_id,
+                                              f"{node.role}@{node.id}")
+        assert (workspace / "out.txt").read_text(encoding="utf-8") == "placeholder"
     finally:
         engine.close()
 
@@ -423,7 +431,9 @@ async def test_an_agent_hands_off_a_structured_result(tmp_path):
     assert node.result is not None
     assert node.result.summary == "created out.txt"
     assert node.result.files == ["out.txt"]
+    assert node.result.notes == "contents are a placeholder"
     assert node.result.blockers == ["no tests yet"]
+    assert node.artifacts == ["out.txt"]
 
 
 async def test_a_role_review_runs_after_enough_finished_tasks(tmp_path):

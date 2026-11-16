@@ -14,7 +14,7 @@ git clone https://github.com/Greensheep04/moumou-Agent.git
 cd moumou-Agent
 make install
 cp .env.example .env      # put your own DeepSeek key in it
-make test                 # 142 tests, no key needed
+make unit-test            # framework pytest, no key needed
 ```
 
 ## 2. What you own
@@ -23,7 +23,7 @@ make test                 # 142 tests, no key needed
 | --- | --- | --- |
 | **P1 execution** | extract the path checks into a standalone `LocalJail`, then add `git`, `git_push` and `web_search` | `pytest tests/test_tool_contract.py -q` |
 | **P2 interaction** | a persistent `Channel` (SQLite or JSONL), pointed at by `make_bus` in the contract test | `pytest tests/test_channel_contract.py -q` |
-| **P3 data** | import `trace.jsonl` into SQLite so `make eval` runs | `make eval` |
+| **P3 data** | persistent trace and a shared Markdown team/task protocol; instructor first, supplementary explicit | Framework regression plus real task/review evidence |
 
 Signatures, fields and conventions are in [the interface spec](../INTERFACES.en.md). Nothing
 needs guessing.
@@ -46,17 +46,21 @@ Details are in [the sub-agent document](../SUBAGENTS.en.md).
 
 | Command | Time | What it is |
 | --- | --- | --- |
-| `make test` | ~2s | all 142 |
+| `make unit-test` | varies | framework pytest; no model calls |
 | `pytest tests/test_tool_contract.py -q` | ~1s | P1's acceptance |
 | `pytest tests/test_channel_contract.py -q` | <1s | P2's acceptance |
-| `make eval` | seconds per task | needs a key; P3's acceptance |
+| `make test` / `make eval` | includes actual human waiting | same formal protocol; model key and real human input |
 
 **The contract suites must stay green after you swap in your implementation.** If you need to
 change anything under `src/moumou/contracts/`, raise it in the group first.
 
+The default formal source is `eval/tasks` (three instructor teams, six goals).
+The retained 15-task `eval/supplementary` bank uses the same format and requires
+explicit `--tasks eval/supplementary`. Results remain separate; see [evaluation](../EVAL.en.md).
+
 ## 5. Branching
 
-One long-lived branch each: `feat/p1-sandbox`, `feat/p2-cli`, `feat/p3-eval`.
+One long-lived branch each: `feat/p1-sandbox`, `feat/p2-cli`, `dev-P3`.
 Rebase onto main before merging so the history stays linear.
 
 ## 6. If you get stuck

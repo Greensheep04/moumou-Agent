@@ -107,74 +107,73 @@ async def test_python3_mapping_does_not_mutate_parent_environment_and_is_removed
     assert {name: os.environ.get(name) for name in names} == before
 
 
-@pytest.mark.parametrize("fixture_id", ["s1_hello", "s2_bugfix"])
-async def test_existing_python3_fixtures_run_without_rewriting_them(tmp_path, fixture_id):
-    source = Path(__file__).resolve().parents[1] / "eval/tasks" / f"{fixture_id}.yaml"
-    original = source.read_bytes()
-    fixture = load_task(source)
-    command = next(item.target for item in fixture.acceptance if item.kind == "command")
-    assert command.startswith("python3 ")
+def compatibility_probe(tmp_path, *, prepared):
+    """A temporary command-contract input, independent of all evaluation prompts."""
+    source = tmp_path / "command-probe.yaml"
+    data = {
+        "id": "command_probe", "title": "Interpreter contract", "scenario": "from_scratch",
+        "goal": "Prepare a marker module and check it with the active interpreter",
+        "setup": {"probe.py": "def value(): return 0\n"} if prepared else {},
+        "acceptance": [{
+            "kind": "command", "expect": "0",
+            "target": 'python3 -c "import probe; assert probe.value() == 9"',
+        }],
+        "budget": {"max_retries": 0},
+    }
+    source.write_text(json.dumps(data), encoding="utf-8")
+    return source, load_task(source)
 
-    if fixture_id == "s1_hello":
-        filename = "hello.py"
-        content = "print('hello, moumou')\n"
-        actions = [
-            ToolCall(id="write", name="write_file", args={"path": filename, "content": content}),
-            ToolCall(id="verify", name="shell", args={"command": command}),
-        ]
-    else:
-        filename = "calc.py"
-        content = (
-            "def add(a, b):\n    return a + b\n\n\n"
-            "if __name__ == '__main__':\n    print(add(2, 3))\n"
-        )
-        actions = [
-            ToolCall(id="read", name="read_file", args={"path": filename}),
-            ToolCall(id="write", name="write_file", args={"path": filename, "content": content}),
-            ToolCall(id="verify", name="shell", args={"command": command}),
-        ]
+
+@pytest.mark.parametrize("prepared", [False, True], ids=["new-file", "prepared-file"])
+async def test_temporary_python3_command_runs_without_rewriting_its_source(tmp_path, prepared):
+    source, fixture = compatibility_probe(tmp_path, prepared=prepared)
+    original = source.read_bytes()
+    command = next(item.target for item in fixture.acceptance if item.kind == "command")
+    content = "def value(): return 9\n"
+    actions = []
+    if prepared:
+        actions.append(ToolCall(id="read", name="read_file", args={"path": "probe.py"}))
+    actions += [
+        ToolCall(id="write", name="write_file", args={"path": "probe.py", "content": content}),
+        ToolCall(id="verify", name="shell", args={"command": command}),
+    ]
 
     def respond(messages, tools):
         turn = sum(message["role"] == "assistant" for message in messages)
         if turn < len(actions):
             return LLMResponse(tool_calls=[actions[turn]])
-        return LLMResponse(content="Completed and verified the fixture")
+        return LLMResponse(content="Completed and verified the command probe")
 
     result = await run_once(fixture, FakeLLM(respond), tmp_path / "evaluation", repeat=0)
-
     assert result.total == result.done == 1
     assert result.dead == 0 and result.errors == []
     assert result.completion_rate == 1.0
-    workspace = Path(result.run_dir) / "workspaces" / fixture_id / "c1" / "planner@t1"
-    assert (workspace / filename).read_text(encoding="utf-8") == content
+    workspace = Path(result.run_dir) / "workspaces" / fixture.id / "c1" / "planner@t1"
+    assert (workspace / "probe.py").read_text(encoding="utf-8") == content
     assert source.read_bytes() == original
 
 
-async def test_bugfix_fixture_rejects_a_success_claim_without_the_fix(tmp_path):
-    source = Path(__file__).resolve().parents[1] / "eval/tasks/s2_bugfix.yaml"
+async def test_python3_command_rejects_a_success_claim_without_changing_the_module(tmp_path):
+    source, fixture = compatibility_probe(tmp_path, prepared=True)
     original = source.read_bytes()
-    fixture = load_task(source)
     llm = FakeLLM(lambda messages, tools: LLMResponse(content="Fixed and verified everything"))
-
     result = await run_once(fixture, llm, tmp_path / "evaluation", repeat=0)
-
     assert result.total == result.dead == 1
     assert result.done == 0 and result.completion_rate == 0.0
     assert result.errors
     run_dir = Path(result.run_dir)
     workspace = run_dir / "workspaces" / fixture.id / "c1" / "planner@t1"
-    assert (workspace / "calc.py").read_text(encoding="utf-8") == fixture.setup["calc.py"]
+    assert (workspace / "probe.py").read_text(encoding="utf-8") == fixture.setup["probe.py"]
     events = [
         TraceEvent.model_validate_json(line)
         for line in (run_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
     checks = [
-        e.payload
-        for e in events
+        e.payload for e in events
         if e.kind == "acceptance" and e.payload.get("kind") == "command"
     ]
-    assert checks, "the original Python command acceptance must actually run"
+    assert checks, "the Python command acceptance must actually run"
     assert all(
         not item["ok"] and item["exit_code"] == 1 and "AssertionError" in item["stderr"]
         for item in checks

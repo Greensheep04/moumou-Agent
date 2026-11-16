@@ -1,139 +1,144 @@
 # Evaluation metric contract
 
-This English contract is for P0 instrumentation and P2/report consumers. The implementation
-is `moumou.eval.metrics.summarize(manifest, results)`. Read authoritative attempt files with
-`moumou.eval.artifacts.load_results(batch_path)`; do not reconstruct scores from console text.
-Each batch writes `metrics.json` and a Markdown report. These definitions apply to self-built
-fixtures; they do not claim that the instructor's closed test set has been evaluated.
+This contract is for orchestration instrumentation, human interfaces and report
+consumers. Formal task evaluation uses the instructor Markdown under `eval/tasks/`
+through `python -m moumou` or `python -m moumou.eval.cli`. The authoritative suite
+manifest is `RUN/test.json` (`kind: instructor_test` identifies the shared protocol), with saved
+`task_1-result.json` and, when present, `task_2-result.json`. Do not reconstruct scores from a
+console message or substitute framework pytest counts for task quality.
 
-## Completion
+`dataset_kind` identifies `instructor` or `supplementary`; scenario `source_kind`
+and source hashes retain that provenance. The common protocol kind does not turn
+supplementary work into instructor evidence. A historical missing label stays unknown.
 
-The root-goal denominator is every attempt in `manifest.runs`, including planned attempts
-whose result is missing after interruption. Missing results are separately counted and do
-not imply that execution started. A verified root success requires `status == succeeded`,
-`root_status == DONE`, `root_machine_accepted == true`, and `root_success == true`.
-The last field also requires every declared behavioral check to pass. Empty acceptance
-self-report is unverified and never raises the verified goal score.
+## Root goals and quality
 
-Subtasks are observed nodes with a non-null `parent_id`; the root is excluded. Report both
-the DONE fraction and the machine-verified DONE fraction. A root failure can coexist with
-successful subtasks. Nodes without machine criteria and unknown criteria are counted
-separately. A killed worker can leave unknown nodes, so observed-subtask rates are explicitly
-coverage-limited; they are not estimates of unobserved work.
+`planned_root_goals` is the actual number of task texts in the selected source and
+scenarios: six for all instructor scenarios, two for one instructor scenario, and
+fifteen for the explicitly selected supplementary bank. Its last group has one task.
+Supplementary results do not enter the instructor denominator. Unposted,
+interrupted and unreviewed goals stay in that denominator. They do not prove an
+agent executed or that a person rejected the output.
+
+| Observation | Meaning |
+| --- | --- |
+| `agent_declared_complete` / `root_status == DONE` | The framework reached its terminal completion state |
+| `root_machine_criteria_present` | The root has actual executable criteria |
+| `root_machine_accepted` | Saved machine verdict; null when no machine criteria establish one |
+| `quality_status` | Pending, explicitly human-accepted/rejected, or otherwise unreviewed quality |
+| `verified_goal_success` | True only with recorded quality acceptance and no contradictory root machine failure; null while review is unknown |
+
+Empty acceptance produces self-report. A task may be `DONE` with unknown machine
+acceptance and unknown quality. Human approval can establish a separately
+attributed quality decision; it does not create a machine check. Rejection keeps
+the actual agent state and output, sets the quality outcome to rejected and stops
+later tasks. `--quality-review deferred` leaves quality unknown.
+
+Suite `goal_metrics` reports the planned denominator, persisted deliveries,
+agent-declared completions, reviewed goals, verified successes and verified goal
+coverage. Only true `verified_goal_success` values enter the success numerator.
+Pending, missing and unposted observations are separately described rather than
+invented as model failures or human rejections.
+
+Failure attribution must inspect the actual transmitted instructions. The formal adapter
+keeps the full role prompt, current goal and all acceptance criteria; optional history,
+dependencies, board content and lessons yield first, with exact auxiliary content saved
+in private `.evaluation/context/<digest-prefix>.json`. Only new filenames use the first
+32 digest hex characters; references and validation metadata retain full SHA-256,
+different-content collisions are rejected, and existing archives are not renamed.
+An unfit mandatory payload raises
+`ContextAdmissionError` before an LLM call. Requirements omitted from the framework's
+transmitted context are system/context failures, not evidence of model noncompliance; retain those unfinished
+goals in their original planned denominator and keep later repaired runs separate.
+
+## Subtasks and continuing state
+
+Each task record contains only that root's subtree. `observed_subtasks` excludes
+the root; `observed_subtasks_done` counts its observed DONE children. A node's
+machine-criteria count is not itself a machine verdict. Use the saved acceptance
+trace when evaluating whether individual checks actually ran.
+
+Task 1 and Task 2 intentionally share their scenario's four-member team, private
+role directories, memory and real handoff/history. They are sequential dependent
+requests, not independent statistical repeats. Scenarios use separate project
+state. The second raw `Engine.run()` report includes earlier tasks and tokens;
+use P3's per-root subtree and phase accounting for Task 2-only measurements.
 
 ## Time boundaries
 
-| Field | Start and end |
+| Field | Boundary |
 | --- | --- |
-| `task_elapsed_s` | `Engine.submit` to the root terminal scheduler callback, before root reflection |
-| `maintenance_s` | Root terminal callback to closing Engine-owned resources |
-| `elapsed_s` | Runner attempt setup to result preparation; supervised mode also includes process launch and cleanup |
-| `wall_s` | Legacy Engine scheduler interval, excluding its later maintenance and role review |
+| `elapsed_s` / `delivery_elapsed_s` | Task posting through returned agent delivery and framework maintenance, before quality review |
+| `quality_review_wait_s` | Waiting for the actual post-delivery human review |
+| `total_to_review_s` | Task posting through completion of the configured review stage |
+| `suite_wall_time_s` | Difference between saved, timezone-aware suite `started_at` and `finished_at`; unknown if either endpoint is missing |
+| `delivery_time_s` | Summary over saved delivered-task samples only; not the suite's total execution time |
 
-Task time includes workspace seeding performed after submit, machine acceptance, and child
-reflection completed before the root terminates. It is measured with a monotonic clock;
-`submitted_at` and `terminal_at` provide UTC correlation. Failure and timeout attempt times
-remain reported. A worker killed before a terminal callback has an unknown task-terminal
-time rather than a fabricated zero. The parent still records its attempt elapsed time.
-HTTP-client shutdown happens outside `engine.close()` and is not part of `maintenance_s`;
-supervised `elapsed_s` includes that later shutdown and containment cleanup.
+Delivery time includes actual tool execution and any human questions or tool
+permission waits during that task. Review duration is additional. Pending or
+forcibly interrupted review has no fabricated zero duration. Task durations use a
+monotonic clock. Offline suite wall time uses only the saved timestamp endpoints;
+invalid, timezone-naive or reversed timestamps fail validation. It includes waiting
+and time spent in unfinished stages within that interval. A missing endpoint stays
+unknown; it is not inferred from the current clock or the sum of task deliveries.
+For `delivery_time_s`, `n=0` and `sum=0` mean there are no saved delivery samples,
+not that the suite took zero seconds.
 
-`metrics.spans` reports LLM, tool, approval and question cumulative durations, interval unions,
-overlaps and missing endpoints. Concurrent spans may overlap and must not be summed as wall
-time. These traces retain P0's capture coverage. Client telemetry independently covers all
-wrapped chat calls, including reflection and role review, with execution/post-terminal phases.
+Human summaries contain completed request waits, pending IDs and phase totals.
+Parallel human or LLM spans can overlap: cumulative wait/call time must not be
+added or subtracted blindly to infer end-to-end wall time. Cooperative per-node
+loop budgets are not hard process or whole-scenario deadlines.
 
-## Usage and repeated trials
+## Model calls and token coverage
 
-`LLMResponse.usage_present` and whitelisted `usage_raw` preserve whether the provider actually
-returned usage. The old non-null integer token fields remain compatible with budget logic.
-The evaluation wrapper records calls before and after awaiting the client, in the attempt's
-`llm-telemetry.json`, without storing prompts, model responses or credentials.
+`human.RecordingLLM` writes complete redacted requests/responses to the scenario's
+`dialogue.jsonl`, including phase, call identity and timing. Human events retain
+the actual request, response, request ID and wait. API credentials are removed.
+This evidence is local and can include user/task data; it is not committed source.
 
-`total_tokens_in` and `total_tokens_out` are complete wrapper-observed successful-call totals
-only when every observed call has the relevant provider measurement. Otherwise they are
-null; telemetry retains known subtotals and missing-call coverage. Cache usage is independently
-nullable. FakeLLM counters are scripted diagnostics, not measured provider usage. Internal
-HTTP retries, failed-request billing and unreported provider charges remain unknown; there
-is no assumed price or fabricated monetary cost.
+Task `llm` and `human` summaries describe their own phase. Scenario summaries are
+cumulative across both tasks. Known token subtotals remain available; complete
+totals are null if a recorded call lacks provider usage. Scripted test counters
+are not provider-billed cost. Internal HTTP retries, billing for failed calls,
+unreported cache usage and monetary price must not be inferred from zero/default
+fields. The school model allowance is separate from the search allowance.
 
-Structured statistics are grouped by fixture, scenario and whole batch. Numeric summaries
-carry `n`, `mean` and sample standard deviation (`n - 1`); one measurement has no standard
-deviation. Goal outcome statistics include planned missing attempts as failures, while
-duration statistics include only measured durations and expose their sample count. Legacy
-`runner.aggregate` output remains labeled as Engine diagnostics and uses its historical
-definition; use `metrics.json` for the metric contract above.
+## Search audit
 
-## Behavioral and experiment evidence
+`search_delta` reports per-task changes in tool calls, provider attempts, cache
+hits, deduplication and denied requests. `search_scenario_cumulative` is a snapshot
+of the shared scenario counter, not Task 2-only usage. Scenario search summaries
+retain request allowance, used/remaining quota and audit paths.
 
-Fixture `requirements` supplement artifact checks: approvals require recorded decisions and
-matching effects; search requires a successful search tool call; memory requires known lesson
-text actually present in the outgoing system Lessons section. Candidate retrieval IDs alone
-are insufficient. Memory-off checks reject any observed Lessons injection.
+The initial six fresh Tavily HTTP attempts are shared across all four members
+and both tasks of one scenario. Cache hits retain their original retrieval time;
+concurrent matching callers do not automatically create duplicate provider
+requests. A denied tool result is not an actual human question or grant. Extra
+allowance requires a real, explicitly recorded human authorization.
 
-Parallel fixtures require real delegated independent siblings and observed positive-duration
-child spans. Parallel-on requires overlap; max-slots-one controls require no overlap. Root
-artifact acceptance remains separate from these checks. Supervised parents re-evaluate
-behavior from saved trace and client metadata before accepting a candidate. This consistency
-check is not a security boundary against hostile code editing its own evidence files.
+## Saved evidence and offline reconstruction
 
-The four ablation groups change long-term experience memory and task slots (4 or 1), with
-role review disabled throughout. The conclusion board remains enabled. Warmup uses a separate
-conversation and workspace; only exported MemoryRecord values seed each fresh held-out run.
-Warmup time/usage is separate. Its in-process cooperative deadline is distinct from the native
-Windows held-out worker deadline. Independent repeats rebuild the same starting state per
-group and never share a mutable memory database. Run a dry plan before the default formal
-15-fixture, three-repeat, four-group experiment (180 held-out attempts).
+`python -m moumou.eval.report --run DIRECTORY` rebuilds a derived Markdown report
+without credentials, network calls or task execution. For the instructor format,
+use the suite plan and authoritative saved task records, retaining missing and
+pending outcomes. Rebuilding cannot turn an unanswered quality request into a
+success or resume a stopped group. Manifest/task/journal writes are separate
+operations and do not form a cross-file transaction.
 
-## Offline report reconstruction
+A forcibly stopped process may leave a stale `running` manifest. Preserve the
+raw file and report the actual external stop/process evidence; do not fabricate
+a graceful finish, review rejection or accepted goal. Public source/model hashes
+and dirty-version facts stay attached to the execution that produced them.
 
-`python -m moumou.eval.report --run DIRECTORY` recomputes the saved batch or ablation from
-its original plan and authoritative per-attempt files. Cached report text, `metrics.json`,
-JSONL indexes and serialized ablation job results do not establish success. Reports retain
-missing planned outcomes in their denominators, list failures and evidence paths, and show
-per-fixture/per-scenario statistics separately for each ablation group. Independent warmup
-time and usage are shown separately. A single fixed fixture/group observation has no sample
-standard deviation. Mixed versions, purposes or experimental controls are rejected.
+`report_builder.source_sha256` identifies the code used for offline reconstruction.
+It is separate from the original manifest's `code` startup snapshot, which identifies
+the code that executed the tasks. Rebuilding a report does not relabel the run with
+the report builder's version.
 
-Snapshot readiness is not performance: a frozen 180-row plan with 36 capability-blocked
-rows has zero started attempts until actually executed. `check-start` is a call-free guard,
-not a task attempt or automatic recovery. Its 144-ready selection must not be reported as
-180 completed runs. Historical missing dataset-source or usage fields remain unknown when
-reports are rebuilt; no label, token estimate, price or cached hit rate is invented.
-
-## Partial execution and failure analysis
-
-An explicit selection retains the entire original schedule. `deferred_jobs` records rows
-that were intentionally not started, separately from actual `jobs`; `selected_runs` and
-`deferred_runs` describe the planned partition. A completed non-network selection may have
-144 persisted attempts and 36 deferred rows in a 180-row plan. Its status is `partial`.
-Deferred rows stay in full-plan goal coverage and missing counts, and are not observed
-model failures. A selected-scope completion rate must name its 144-row denominator and
-cannot replace the full-plan result. Warmup remains separately measured.
-
-`eval.analysis` derives evidence-backed failure categories and saved successful-attempt
-checks without running a model or acceptance commands. Missing evidence yields unknown or
-unverified attribution. File inventory is an existence check, not a fresh correctness verdict.
-Paired memory-on/off results retain fixture, repeat and scheduling identities; higher/lower
-success and elapsed time are separate observations. Equal success is not an improvement,
-and a recorded lesson alone does not prove actual retrieval or injection. Benefit, no change,
-regression and incomplete comparisons must all remain visible. These are descriptive
-observations, not causal or significance claims.
-
-## Instructor continuous sessions
-
-The default application evaluates the instructor's six original goals in three teams.
-Task 2 retains its team's state and handoff, so it must not use the independent YAML
-runner's fresh-state semantics. Each task record filters its own root subtree and phase
-calls; scenario summaries are cumulative. Delivery wall time, real human review waiting
-and total time through review are separate. Concurrent human/LLM spans may overlap.
-
-Agent `DONE` is not itself instructor quality success. Empty machine criteria remain
-unknown machine acceptance; default real-human review supplies a separate, explicitly
-attributed quality decision. Rejection preserves the agent status and the rejected result,
-and stops Task 2 from being posted. Deferred quality review remains unknown.
-
-Search-tool calls, fresh Tavily provider attempts, cache hits, deduplicated callers and
-budget denials are independently counted. The initial six-request allowance covers both
-tasks and all four roles of one scenario. The school model allowance is not this search
-budget. Cached retrieval timestamps remain the original timestamps.
+Legacy result, telemetry and analysis APIs remain available for historical
+archives and internal framework checks. Their independent attempts, optional
+memory comparisons and sample statistics are not the current instructor task
+protocol. Do not pool those observations with sequential instructor goals or
+relabel archived scores as six-goal quality results. Repeated runs need independent
+session identities, actual n and compatible settings; one observation has no
+sample standard deviation and timing variation alone is not a causal memory gain.

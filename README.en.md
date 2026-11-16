@@ -6,9 +6,7 @@
 > subtasks to sub-agents, runs them in parallel, and only delivers the final result once
 > every subtask has passed acceptance.
 
-Stack: Python 3.11+ · asyncio · SQLite · Pydantic v2 · DeepSeek API
-
-> The Chinese [README.md](README.md) is the authoritative version. This file is a translation.
+Stack: Python 3.11+ · asyncio · SQLite · Pydantic v2 · DeepSeek / HKGAI API
 
 ---
 
@@ -24,7 +22,7 @@ Stack: Python 3.11+ · asyncio · SQLite · Pydantic v2 · DeepSeek API
 | Memory and experience evolution | P0 | ⬜ |
 | Execution sandbox · Git / GitHub · web search | P1 | ⬜ |
 | Message bus · CLI | P2 | 🚧 reference impl |
-| Persistent storage · task set · metrics | P3 | 🚧 partial |
+| Persistent storage · instructor task sessions · reviewed metrics | P3 | Protocol implemented; actual task quality recorded separately |
 
 Legend: ✅ done　🚧 in progress　⬜ not started
 
@@ -35,11 +33,11 @@ Per-member tasks, acceptance commands and milestones live in
 
 - **Autonomous decomposition** — not a fixed pipeline; the model decides whether to split,
   how many subtasks to create, and who owns each one
-- **Instructor teams by default** — use the four supplied identities per scenario; the
-  independent regression harness still supports dynamically constructed roles
+- **Instructor teams** — use the four supplied identities per scenario and continue from
+  Task 1 to Task 2 with the same group; generated roles remain a lower-level Engine capability
 - **Parallel agents** — independent subtasks run concurrently to cut wall-clock time
-- **Sandbox isolation** — one private workspace per agent, mutually invisible, so a project
-  cannot be corrupted by a neighbouring agent
+- **Private workspaces** — each team member keeps a private working directory; declared
+  deliverables cross workspace boundaries through the integration interface
 - **Human-in-the-loop** — risky actions (deleting files, pushing code, installing packages)
   stop and wait for approval
 - **Proactive clarification** — the agent asks when the requirement is ambiguous instead of
@@ -48,38 +46,44 @@ Per-member tasks, acceptance commands and milestones live in
 
 ## Quick start
 
-The primary application entry now follows the instructor's [Mid_Test](Mid_Test/README.md):
-three four-member groups, each receiving Task 1 and then Task 2 with continuing state.
-In an activated Python/Conda environment:
+The canonical [instructor tasks](eval/tasks/README.md) define three four-member groups,
+each receiving Task 1 and then Task 2 with continuing state. From an activated environment:
 
 ```powershell
 python -m moumou --plan
 python -m moumou
+python -m moumou.eval.cli --tasks eval/tasks
 ```
 
-The default uses actual terminal answers, not scripted approvals. It shares an initial
-six-request Tavily allowance across each group's two tasks and records cache hits separately.
-The school's DeepSeek/HKGAI model API is used for task quality; the explicit search allowance
-controls new Tavily requests. Full dialogue and evidence stay under local `runs/midtest/`.
-See [English setup](docs/SETUP.en.md) for file-based human input and artifact locations.
-The older YAML entry below remains an independent regression tool; its entry-point migration
-is a separate next-day task.
+The two launch commands use the same formal protocol. Real human questions and quality
+reviews are retained; each group's two tasks share an initial six-request Tavily allowance.
+The school's DeepSeek/HKGAI model access is separate from that search allowance. Full dialogue,
+private outputs and `test.json` stay under a fresh local `runs/test/` directory. Agent `DONE`
+and implementation tests do not establish reviewed task quality. See [setup](docs/SETUP.en.md)
+and [evaluation](docs/EVAL.en.md) for real file-based replies and report reconstruction.
+
+The [supplementary bank](eval/supplementary/README.md) retains the fifteen self-authored
+tasks in the same Markdown protocol. It has lower priority and runs only when explicitly
+selected with `python -m moumou.eval.cli --tasks eval/supplementary`; its results are kept
+separate from the instructor's six goals. Both sources use the same launch path and real
+human interaction.
 
 ```bash
 git clone https://github.com/Greensheep04/moumou-Agent.git
 cd moumou-Agent
 
-# 1. Environment (Python 3.11+)
-make install
+# 1. Activate your Python 3.11+ environment first.
+python -m pip install -e ".[dev]"
 
 # 2. No API key needed
-make test          # 127 tests
+make unit-test     # framework regression tests
 make demo          # full pipeline against a scripted model, finishes in seconds
 make demo-memory   # memory loop: a task fails → reflection → the next one reuses it
 
 # 3. Needs a real model (configure the key first, see below)
 make smoke    # verify the key and model name
-make eval     # run the evaluation set
+make test     # instructor tasks, real human interaction and quality review
+make eval     # the same formal evaluation entry
 ```
 
 ## Configure your API key (one per person)
@@ -91,12 +95,12 @@ cp .env.example .env
 # edit .env and put your key after DEEPSEEK_API_KEY=
 ```
 
-Get one at <https://platform.deepseek.com/api_keys>. The defaults are usually fine:
+Use the course-provided DeepSeek or HKGAI configuration:
 
 ```ini
 DEEPSEEK_API_KEY=your-key
-DEEPSEEK_MODEL=deepseek-flash          # stable id for DeepSeek-V4.1-Flash-1017
-DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=your-course-model
+DEEPSEEK_BASE_URL=your-compatible-course-endpoint
 ```
 
 Verify it:
@@ -118,13 +122,13 @@ correct. Expected output:
 ## How to plug in
 
 You only need to implement one port; nothing else changes. Full signatures, input/output
-fields and implementation conventions are in **[docs/INTERFACES.md](docs/INTERFACES.md)** (Chinese).
+fields and implementation conventions are in **[docs/INTERFACES.en.md](docs/INTERFACES.en.md)**.
 
 | You | Implement | Put it in | Acceptance |
 | --- | --- | --- | --- |
 | **P1** | `Tool`, `WorkspaceProvider` | `src/moumou/tools/`, `src/moumou/sandbox/` | `pytest tests/test_tool_contract.py` |
 | **P2** | `Channel`, `HumanIO` (interactive) | `src/moumou/bus/`, `src/moumou/ui/` | `pytest tests/test_channel_contract.py` |
-| **P3** | `TraceStore`, `MemoryStore`, `HumanIO` (scripted) | `src/moumou/store/`, `src/moumou/eval/` | `make eval` |
+| **P3** | Storage, real-human instructor evaluation and metrics | `src/moumou/store/`, `src/moumou/eval/` | Framework tests plus recorded task/review evidence |
 
 Three conventions:
 
@@ -140,7 +144,8 @@ Suggested first day:
   the three `../etc/passwd` contract cases green, then add `git`, `git_push`, `web_search`.
 - **P2**: implement a persistent `Channel`, point `make_bus` in the contract test at it, then
   build the CLI.
-- **P3**: import `trace.jsonl` into SQLite, then grow the task set from 3 to 15.
+- **P3**: retain trace data, original instructor sources, continuing team state and actual
+  quality decisions; distinguish framework regression tests from task evaluation.
 
 ## Repository layout
 
@@ -154,7 +159,8 @@ src/moumou/
   adapters/      reference implementations        ← replaced by P1/P2/P3
   eval/          task loading · evaluation runner  ← extended by P3
   demo/          runnable demo
-eval/tasks/      task set (YAML)                  ← written by P3
+eval/tasks/      original instructor Markdown teams and sequential tasks
+eval/supplementary/ lower-priority self-authored tasks in the same Markdown protocol
 docs/            documentation (see below)
 tests/           tests, including three interface contract suites
 runs/            runtime artifacts (not committed)
@@ -171,7 +177,7 @@ Every document is available in both Chinese and English.
 | [docs/STATUS.en.md](docs/STATUS.en.md) · [中文](docs/STATUS.md) | everyone | Module progress, per-member tasks, milestones |
 | [docs/ARCHITECTURE.en.md](docs/ARCHITECTURE.en.md) · [中文](docs/ARCHITECTURE.md) | anyone curious about the design | Mechanism rationale, diagrams, known limits |
 | [docs/SUBAGENTS.en.md](docs/SUBAGENTS.en.md) · [中文](docs/SUBAGENTS.md) | anyone asking how sub-agents work | Creation, context, memory, communication |
-| [docs/EVAL.en.md](docs/EVAL.en.md) · [中文](docs/EVAL.md) | P3 | Task format, metric definitions, how to run |
+| [docs/EVAL.en.md](docs/EVAL.en.md) · [中文](docs/EVAL.md) | P3 / report consumers | Instructor protocol, real interaction, metrics and reports |
 | [docs/FAQ.en.md](docs/FAQ.en.md) · [中文](docs/FAQ.md) | everyone | Environment, key, git and test pitfalls |
 | [docs/roles/TASKS.en.md](docs/roles/TASKS.en.md) · [中文](docs/roles/TASKS.md) | **teammates, start here** | One page: where to start, what changed |
 | [docs/roles/](docs/roles/) | P1 / P2 / P3 | One detailed brief per teammate, bilingual |

@@ -2,7 +2,7 @@
 
 [简体中文](STATUS.md) · [English](STATUS.en.md)
 
-Last updated: 2026-10-22
+P3 evaluation update: 2026-11-16. Other module milestones retain their recorded scope.
 
 ## Overall progress
 
@@ -18,14 +18,14 @@ Last updated: 2026-10-22
 | Context assembly | P0 | ✅ done | four layers, admission rules, opening budget, three-layer compaction |
 | Memory and experience evolution | P0 | ✅ done | conclusion board + reflection + scoring / decay / eviction |
 | Execution sandbox | P1 | 🚧 implemented; team integration pending | path checks, file/code tools, process cleanup; Windows/Ubuntu CI passed |
-| Git / GitHub integration | P1 | 🚧 implemented; evaluation wiring pending | worktrees, artifact delivery and opt-in Git evaluation implemented; live GitHub push through Gate passed; team review pending |
+| Git / GitHub integration | P1 | 🚧 implemented; team review pending | Worktree/artifact APIs and P1 demo evidence retained; formal task commands are documented in EVAL.en.md |
 | Web search | P1 | 🚧 implemented; live validation pending | Tavily protocol/error tests passed; team owns credential-based validation |
 | Message bus | P2 | 🚧 reference impl | in-memory version works, needs persistence |
 | Command line interface | P2 | ⬜ not started | |
 | Approval interaction UI | P2 | ⬜ not started | |
-| Persistent storage | P3 | ⬜ not started | JSONL and SQLite references only |
-| Evaluation task set | P3 | 🚧 3 / 15 | format and loader are ready |
-| Metrics and reports | P3 | 🚧 reference impl | markdown works, charts and ablations pending |
+| Persistent storage | P3 | implemented | JSONL plus SQLite projection and recovery |
+| Task sources | P3 | unified Markdown protocol | Instructor 3 teams / 6 goals first; retained supplementary 15 tasks explicitly selected |
+| Metrics and reports | P3 | implemented; actual quality stays evidence-based | Real human decisions, phase/subtree accounting and offline reconstruction |
 
 Legend: ✅ done　🚧 in progress / partial　⬜ not started
 
@@ -66,13 +66,15 @@ Acceptance: `pytest tests/test_channel_contract.py`
 
 ### P3 — data and evaluation
 
-- persistent storage (trace and memory, keyword searchable)
-- bring the task set to 15
-- metrics (completion rate, time breakdown, token cost)
-- ablations (memory on/off, parallel on/off)
-- report generation
+- persistent trace and memory interfaces, with explicit scopes and recovery limits
+- original instructor Markdown as the default; supplementary fifteen tasks retained in the same format
+- continuing four-member groups, real HumanIO and separately recorded quality review
+- task/subtask completion, delivery/review timing, measured usage and search audit
+- offline reports from authoritative task evidence; no claim that all six goals passed
 
-Acceptance: `make eval`
+Formal run: `make test` / `make eval` or `python -m moumou.eval.cli --tasks eval/tasks`.
+Framework regression: `make unit-test`. Supplementary runs require explicit
+`--tasks eval/supplementary` and keep a separate denominator. See [evaluation](EVAL.en.md).
 
 ## Milestones
 

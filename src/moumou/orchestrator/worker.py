@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import defaultdict
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from time import monotonic
 
 from moumou.contracts import (
@@ -24,10 +24,15 @@ from moumou.contracts import (
     ToolResult,
 )
 from moumou.orchestrator.delegation import DelegationError
+from moumou.sandbox.local import LocalJail
 
 
 class BudgetExceeded(RuntimeError):
     """A task hit max_steps / max_tokens / max_wall_s."""
+
+
+class InvalidResultFiles(ValueError):
+    """An explicit result file cannot be published from this workspace."""
 
 
 class TaskRunner:
@@ -182,7 +187,23 @@ class TaskRunner:
                     # Successful delegation transitions the parent to PENDING itself.
                     return
                 if call.name == "submit_result":
-                    await self._finish(node, workspace, _coerce_result(call.args))
+                    try:
+                        await self._finish(node, workspace, _coerce_result(call.args))
+                    except InvalidResultFiles as exc:
+                        result = ToolResult(
+                            ok=False,
+                            error=(
+                                f"invalid_result_files: {str(exc)[:2000]}\n"
+                                "No declared files were published. List existing "
+                                "workspace-relative files and call submit_result again."
+                            ),
+                        )
+                        self.trace.record(
+                            task_id=node.id, kind="task", name="result_rejected",
+                            agent_id=agent.id, error=result.error,
+                        )
+                        ctx.add_tool_result(call.id, result)
+                        continue
                     return
                 if call.name == "ask_human":
                     result = await self._ask_human(call, node, agent)
@@ -194,15 +215,31 @@ class TaskRunner:
 
     # -- completion ------------------------------------------------------
     async def _finish(self, node: TaskNode, workspace: Path, result: TaskResult) -> None:
+        # Explicit deliverables may already exist in a stable role workspace;
+        # read-only verification will not have recorded them as tool changes.
+        # Validate the entire declaration before touching persistent state.
+        declared = _declared_artifacts(workspace, result.files)
         # tools recorded artifacts against the database row, not this snapshot
         node = self.repo.get(node.id) or node
         ok, details = await self.acceptance.check(node, workspace)
         self.trace.record(
             task_id=node.id, kind="acceptance", name="verdict", ok=ok, checks=details
         )
+        if ok:
+            # Acceptance commands may clean up or move files. Recheck the whole
+            # declaration immediately before publication, still without writing
+            # a partial result or artifact batch on failure.
+            declared = _declared_artifacts(workspace, result.files)
         self.repo.set_result(node.id, result)
 
         if ok:
+            self.repo.add_artifacts(node.id, declared)
+            node = self.repo.get(node.id) or node
+            if declared:
+                self.trace.record(
+                    task_id=node.id, kind="task", name="declared_files_published",
+                    files=declared,
+                )
             self.repo.transition(node.id, "DONE", "accepted")
             self._integrate_into_parent(node, workspace)
         else:
@@ -385,9 +422,32 @@ class TaskRunner:
             pass          # the node already moved; never mask the original error
 
 
+def _declared_artifacts(workspace: Path, files: list[str]) -> list[str]:
+    if not isinstance(files, list) or any(not isinstance(path, str) for path in files):
+        raise InvalidResultFiles("files must be a list of relative file paths")
+    if not files:
+        return []
+    try:
+        jail = LocalJail(workspace)
+        declared = []
+        for path in files:
+            if Path(path).is_absolute() or PureWindowsPath(path).anchor:
+                raise ValueError(f"absolute or drive-qualified path is not allowed: {path!r}")
+            resolved = jail.resolve(path)
+            if not resolved.is_file():
+                raise ValueError(f"declared path is not an existing file: {path!r}")
+            declared.append(jail.relative(resolved))
+        return list(dict.fromkeys(declared))
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise InvalidResultFiles(str(exc)) from exc
+
+
 def _coerce_result(args: dict) -> TaskResult:
     """A malformed submit_result must not lose the work; fall back to plain text."""
+    files = args.get("files", []) if isinstance(args, dict) else []
+    if not isinstance(files, list) or any(not isinstance(path, str) for path in files):
+        raise InvalidResultFiles("files must be a list of relative file paths")
     try:
         return TaskResult.model_validate(args)
     except Exception:
-        return TaskResult(summary=str(args)[:500])
+        return TaskResult(summary=str(args)[:500], files=files)

@@ -108,21 +108,27 @@ async def test_frozen_guard_rejects_changed_fixture_before_client(tmp_path, monk
     assert deadlines == [180]
 
 
-async def test_missing_search_never_creates_a_model(monkeypatch, capsys, tmp_path):
-    from moumou.config import LLMSettings
-    from moumou.eval import cli
+async def test_missing_capability_guard_never_creates_a_model(monkeypatch, tmp_path):
+    from functools import partial
 
+    from moumou.eval.freeze import check_attempt, prepare_experiment
+
+    # This is a pre-client guard probe, not a containment test. Match the frozen
+    # deadline on POSIX too, without creating a Windows worker.
+    monkeypatch.setattr("moumou.eval.isolation.validate_timeout", lambda value: float(value))
     source = fixture(scenario="research", requirements={"required_tools": ["web_search"]})
-    monkeypatch.setattr(cli, "load_tasks", lambda _: [source])
-    monkeypatch.setattr(cli.LLMSettings, "from_env", lambda: LLMSettings(api_key="offline-test"))
-    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    frozen = tmp_path / "freeze"
+    prepare_experiment([source], frozen, repeats=1, capabilities={"web_search": False},
+                       model_config={"model": "test", "base_url": "https://api.hkgai.net",
+                                     "timeout_s": 35, "max_retries": 2, "temperature": 0.2})
 
     def forbidden(*args, **kwargs):
-        raise AssertionError("known-blocked research must not create a paid client")
+        raise AssertionError("known-blocked search must not create a paid client")
 
-    monkeypatch.setattr(cli, "DeepSeekClient", forbidden)
-    output = tmp_path / "never-created"
-    args = cli.parse_args(["--ablation", "--repeats", "3", "--out", str(output)])
-    assert await cli.main_async(args) == 2
-    assert "TAVILY_API_KEY" in capsys.readouterr().err
-    assert not output.exists()
+    output = tmp_path / "execution"
+    with pytest.raises(ValueError, match="missing external capability"):
+        await run_ablation([source], forbidden, output, repeats=1, hard_timeout_s=180,
+                           before_attempt=partial(check_attempt, frozen))
+    manifest = json.loads((output / "ablation.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "error" and manifest["started_runs"] == 0
+    assert manifest["jobs"] == [] and not (output / "baseline").exists()

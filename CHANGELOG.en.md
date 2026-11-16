@@ -1,6 +1,29 @@
 # Changelog
 
+> These dated entries preserve historical implementations, commands and measured results. Current formal runs use the [shared task protocol](docs/EVAL.en.md): instructor first, retained supplementary tasks explicitly selected; framework pytest uses make unit-test.
+
 [简体中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
+
+## Unreleased · Formal evaluation context
+
+The formal team adapter now preserves complete original role prompts, current goals and
+all acceptance criteria before allocating opening-context space to optional history,
+dependencies, board content or lessons. Exact auxiliary content remains recoverable in
+private `.evaluation/context/<digest-prefix>.json`. New filenames use the first 32 digest
+hex characters; references/validation retain full SHA-256, differing-content collisions
+are rejected, and existing archives are not renamed. Mandatory content that cannot fit raises
+`ContextAdmissionError` before an LLM call. The generic P0 context builder is unchanged.
+Framework/context failures retain their original goal denominator and evidence.
+
+Final full regression on native Windows / activated Conda nlp: 905 passed,
+8 skipped in 209.43 seconds; Ruff passes across src/tests. These are implementation
+checks, not verified completion of the six instructor goals.
+
+- Worker now publishes validated existing/unchanged files declared in
+  `submit_result.files` after acceptance, preserving tracked artifacts and rejecting
+  invalid declarations atomically with correctable feedback. Publication/team checks:
+  21 passed; archive-path/orchestration/session checks: 31 passed, followed by the
+  successful full regression above. The earlier failed full run remains preserved.
 
 ## 2026-10-23 · Role review
 

@@ -110,24 +110,27 @@ async def test_terminal_timing_and_post_terminal_reflection_are_separate(tmp_pat
     assert summary["by_kind"]["reflection"]["calls_total"] == 1
 
 
-def test_cli_exposes_dry_plan_and_controls():
-    args = parse_args(["--ablation", "--plan", "--repeats", "3"])
-    assert args.ablation and args.plan and args.repeats == 3
-    controls = parse_args(["--no-memory", "--max-slots", "1", "--no-role-review"])
-    assert controls.memory is False and controls.max_slots == 1 and controls.role_review is False
+def test_teacher_cli_exposes_task_safety_bounds_and_real_human_modes():
+    args = parse_args(["--plan", "--human", "files", "--max-steps", "12",
+                       "--max-tokens", "240000", "--task-timeout", "900"])
+    assert args.plan and args.human == "files"
+    assert args.max_steps == 12 and args.max_tokens == 240000 and args.task_timeout == 900
+    assert args.quality_review == "human"
 
 
-def test_cli_dry_plan_needs_neither_event_loop_nor_api(monkeypatch, capsys, tmp_path):
+def test_official_teacher_plan_needs_neither_event_loop_nor_api(monkeypatch, capsys, tmp_path):
+    from moumou.config import LLMSettings
     from moumou.eval import cli
 
     def forbidden(*args, **kwargs):
         raise AssertionError("a dry plan must not execute a model or create an event loop")
 
     monkeypatch.setattr(cli.asyncio, "run", forbidden)
-    monkeypatch.setattr(cli, "DeepSeekClient", forbidden)
-    tasks = Path(__file__).resolve().parents[1] / "eval" / "tasks"
+    monkeypatch.setattr(LLMSettings, "from_env", forbidden)
+    tasks = Path(__file__).resolve().parents[1] / "eval/tasks"
     output = tmp_path / "never-created"
-    assert cli.main(["--ablation", "--plan", "--tasks", str(tasks), "--out", str(output)]) == 0
+    assert cli.main(["--plan", "--tasks", str(tasks), "--out", str(output)]) == 0
     plan = json.loads(capsys.readouterr().out)
-    assert plan["planned_runs"] == 180 and len(plan["groups"]) == 4
+    assert plan["planned_root_goals"] == 6 and len(plan["scenarios"]) == 3
+    assert plan["human"] == "console" and plan["quality_review"] == "human"
     assert not output.exists()

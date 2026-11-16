@@ -8,10 +8,9 @@ import pytest
 
 from moumou.adapters import FakeLLM
 from moumou.adapters.llm import LLMResponse
-from moumou.config import LLMSettings
-from moumou.eval import ablation, cli
+from moumou.eval import ablation
 from moumou.eval.ablation import plan_ablation, plan_selected_ablation, run_ablation
-from moumou.eval.loader import TaskFixture, load_tasks
+from moumou.eval.loader import TaskFixture
 
 
 def fixture(fixture_id, *, correct=True, search=False, warmup=False):
@@ -29,18 +28,16 @@ def fixture(fixture_id, *, correct=True, search=False, warmup=False):
     return TaskFixture.model_validate(values)
 
 
-def test_non_network_selection_preserves_all_180_original_rows_and_indices():
-    from pathlib import Path
-
-    sources = load_tasks(Path("eval/tasks"))
-    original = plan_ablation(sources, repeats=3)
+def test_non_network_selection_preserves_full_original_plan_and_indices():
+    sources = [fixture("first"), fixture("network", search=True), fixture("last")]
+    original = plan_ablation(sources, repeats=2)
     selected = {item.id for item in sources if "web_search" not in item.requirements.required_tools}
-    planned = plan_selected_ablation(sources, repeats=3, selected_fixture_ids=selected,
+    planned = plan_selected_ablation(sources, repeats=2, selected_fixture_ids=selected,
                                      deferred_reason="search configuration unavailable")
     assert planned["schedule"] == original["schedule"]
-    assert planned["planned_runs"] == 180
-    assert planned["selected_runs"] == 144 and planned["deferred_runs"] == 36
-    assert len(planned["deferred_jobs"]) == 36
+    assert planned["planned_runs"] == 24
+    assert planned["selected_runs"] == 16 and planned["deferred_runs"] == 8
+    assert len(planned["deferred_jobs"]) == 8
     for row in planned["deferred_jobs"]:
         assert row["status"] == "deferred"
         assert row["reason"] == "search configuration unavailable"
@@ -134,65 +131,3 @@ async def test_guard_rejection_preserves_full_deferred_plan_before_any_client(tm
     assert saved["status"] == "error" and saved["started_runs"] == 0
     assert saved["planned_runs"] == 8 and len(saved["deferred_jobs"]) == 4
     assert saved["jobs"] == []
-
-
-def test_non_network_plan_needs_no_environment_client_or_event_loop(monkeypatch, capsys):
-    def forbidden(*args, **kwargs):
-        raise AssertionError("planning must stay offline and synchronous")
-
-    monkeypatch.setattr(cli.LLMSettings, "from_env", forbidden)
-    monkeypatch.setattr(cli, "DeepSeekClient", forbidden)
-    monkeypatch.setattr(cli.asyncio, "run", forbidden)
-    assert cli.main(["--ablation", "--non-network", "--plan"]) == 0
-    plan = json.loads(capsys.readouterr().out)
-    assert plan["planned_runs"] == 180
-    assert plan["selected_runs"] == 144 and plan["deferred_runs"] == 36
-
-
-async def test_non_network_is_rejected_for_normal_batch_before_model_loading(monkeypatch, tmp_path):
-    def forbidden(*args, **kwargs):
-        raise AssertionError("invalid scope must not load the model environment")
-
-    monkeypatch.setattr(cli.LLMSettings, "from_env", forbidden)
-    args = cli.parse_args(["--non-network", "--out", str(tmp_path / "never")])
-    assert await cli.main_async(args) == 2
-    assert not (tmp_path / "never").exists()
-
-
-async def test_non_network_cli_preserves_all_fixtures_and_forwards_selection(monkeypatch, tmp_path,
-                                                                          capsys):
-    sources = [fixture("ready"), fixture("blocked", search=True)]
-    monkeypatch.setattr(cli, "load_tasks", lambda _: sources)
-    monkeypatch.setattr(cli.LLMSettings, "from_env", lambda: LLMSettings(api_key="offline-test"))
-    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.setattr(cli, "_regenerate_report", lambda _: True)
-    observed = []
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError("mocked batch must not create a real client")
-
-    async def selected(fixtures, factory, output, **kwargs):
-        observed.append((fixtures, kwargs))
-        return {"status": "partial"}
-
-    monkeypatch.setattr(cli, "DeepSeekClient", forbidden)
-    monkeypatch.setattr(ablation, "run_ablation", selected)
-    args = cli.parse_args(["--ablation", "--non-network", "--out", str(tmp_path / "selection")])
-    assert await cli.main_async(args) == 1
-    assert observed[0][0] == sources
-    assert observed[0][1]["selected_fixture_ids"] == {"ready"}
-    assert "web_search" in observed[0][1]["deferred_reason"]
-    assert "partial" in capsys.readouterr().out
-
-
-async def test_non_network_with_no_selected_fixture_creates_no_model(monkeypatch, tmp_path):
-    monkeypatch.setattr(cli, "load_tasks", lambda _: [fixture("blocked", search=True)])
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError("no eligible task must not load credentials or create a client")
-
-    monkeypatch.setattr(cli.LLMSettings, "from_env", forbidden)
-    monkeypatch.setattr(cli, "DeepSeekClient", forbidden)
-    args = cli.parse_args(["--ablation", "--non-network", "--out", str(tmp_path / "never")])
-    assert await cli.main_async(args) == 2
-    assert not (tmp_path / "never").exists()

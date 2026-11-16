@@ -161,6 +161,10 @@ the bar.
 
 ### 4.3 Roles: look before you create, and permissions only shrink
 
+The formal task adapter presets the four identities from the selected Markdown source
+and refuses additional members. The following describes the general Engine API's role
+creation capability, not the roster used by instructor/supplementary sessions.
+
 Roles are not hard-coded; the model invents them during decomposition. Left unconstrained that
 causes two problems:
 
@@ -189,6 +193,15 @@ So each agent's context is **assembled separately**:
 | Memory | historical lessons for similar tasks (implemented, see [Context and Memory](CONTEXT-MEMORY.md)) |
 | Dialogue | only the messages that concern me |
 
+The P3 formal-team adapter preserves the full original role prompt, current goal and all
+acceptance objects; optional history, dependencies, board content and lessons are bounded
+first. Exact auxiliary content is recoverable in each role's private
+`.evaluation/context/<digest-prefix>.json`. New filenames use the first 32 digest hex
+characters; references/validation metadata retain full SHA-256, differing-content
+collisions are rejected, and existing archives are not renamed. Mandatory content that cannot fit raises
+`ContextAdmissionError` before an LLM call. This adapter policy does not change the generic
+P0 builder; evaluation must distinguish framework-omitted instructions from model failure.
+
 One more principle: **artifacts are the only thing that crosses a workspace boundary**. A file
 written by agent A does not appear for agent B automatically; only when B declares a dependency on
 A do A's declared artifacts get copied into B's workspace.
@@ -203,10 +216,9 @@ Human involvement really has three forms, but they share one interface, `HumanIO
 | `question` | the requirement is ambiguous, which file did you mean? | free text |
 | `review` | I suggest changing this role definition, is that okay? | approve / reject + a note |
 
-**The real value of this abstraction is testability**: the same interface is wired to a terminal
-for a human during a demo, and to `ScriptedHuman` answering from YAML during batch evaluation.
-Without it, every task that needs human confirmation would be excluded from automated testing, and
-half of the completion-rate metric would be meaningless.
+The formal protocol wires this port to real console/file questions, permissions and
+post-delivery quality review. `ScriptedHuman` remains a deterministic framework-test
+adapter; its responses do not establish formal human authorization or quality acceptance.
 
 ### 4.6 Acceptance: why it must be executable
 
@@ -223,6 +235,10 @@ Because it is executable it can run automatically; because it runs automatically
 rate is computed rather than felt. The model may write its own criteria, but only in these forms —
 "the code is good quality" is not a legal criterion.
 
+Formal goal quality is recorded separately from these machine checks. An empty acceptance
+list is self-report; Agent DONE alone does not certify the delivered work. Actual human
+review and the original dialogue/outputs remain evidence for the reviewed goal score.
+
 ## 5. Boundaries and known limits
 
 To be honest, these are **not** fully solved yet:
@@ -231,7 +247,7 @@ To be honest, these are **not** fully solved yet:
 | --- | --- | --- |
 | Workspace isolation | application-level path checks | stops `../`, does not stop malicious code reading the disk directly; a Docker backend can close this |
 | Artifact integration | file copy | no version history, the later writer wins on conflict; P1's branch merge will replace it |
-| Task set | 3 samples | 12 short of 15 |
+| Task sources | Instructor six goals first; supplementary fifteen tasks retained in the same Markdown protocol | Explicit source selection and separate scores; actual quality is not inferred from code tests |
 | Reflection quality | backed by scoring and eviction | a bad lesson that keeps being cited needs several failures before it drops out |
 
 Stating the boundary plainly scores better than pretending — when the demo is asked "does this
@@ -243,11 +259,14 @@ isolation really hold", the answer is this table.
 | --- | --- | --- | --- |
 | P1 | `Tool`, `WorkspaceProvider` | `src/moumou/tools/`, `src/moumou/sandbox/` | `pytest tests/test_tool_contract.py` |
 | P2 | `Channel`, `HumanIO` | `src/moumou/bus/`, `src/moumou/ui/` | `pytest tests/test_channel_contract.py` |
-| P3 | `TraceStore`, `MemoryStore`, `HumanIO` | `src/moumou/store/`, `src/moumou/eval/` | `make eval` |
+| P3 | `TraceStore`, `MemoryStore`, `HumanIO` | `src/moumou/store/`, `src/moumou/eval/` | `make unit-test` (framework regression) |
 
-The three contract suites are **"still green after you swap the implementation"**. They test
+Contract checks and framework regression tests must **remain green after you swap the implementation**. They test
 interface behaviour, not your internals — so refactor freely; as long as they pass, the framework
 can drive your code.
+
+`make eval` separately runs the formal instructor tasks with model configuration and
+real human interaction. Its task outcomes are distinct from framework regression results.
 
 ## 7. What the data looks like
 
@@ -298,6 +317,6 @@ flowchart LR
     A --> C["interaction layer<br/>bus·CLI·replay"]
     A --> D["evaluation layer<br/>storage·task set·metrics"]
     A --> E["✔ context and memory<br/>compaction·board·evolution"]
-    B & C & D & E --> F["ablations<br/>memory on/off·parallel on/off"]
+    B & C & D & E --> F["task evidence<br/>reviewed quality·timing·usage"]
     F --> G["demo and report"]
 ```

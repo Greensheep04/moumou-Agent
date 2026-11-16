@@ -21,7 +21,6 @@ from moumou.contracts import Acceptance, Budget, TraceEvent
 from moumou.eval import isolation
 from moumou.eval import process as supervisor
 from moumou.eval.artifacts import load_results
-from moumou.eval.cli import parse_args
 from moumou.eval.loader import TaskFixture
 from moumou.eval.runner import run_all
 
@@ -425,9 +424,9 @@ async def test_protocol_reserved_fixture_ids_fail_before_model_or_worker_start(
 
 
 @pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "invalid"])
-def test_cli_rejects_nonpositive_or_nonfinite_hard_timeout(value):
-    with pytest.raises(SystemExit):
-        parse_args(["--hard-timeout", value])
+def test_worker_api_rejects_string_deadlines_instead_of_coercing_them(value):
+    with pytest.raises(ValueError, match="finite positive"):
+        isolation.validate_timeout(value)
 
 
 def test_callable_fake_client_requires_an_explicit_trusted_factory():

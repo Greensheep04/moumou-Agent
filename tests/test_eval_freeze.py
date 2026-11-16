@@ -5,13 +5,12 @@ from __future__ import annotations
 import copy
 import json
 import sys
-from pathlib import Path
 
 import pytest
 
 from moumou.adapters import DeepSeekClient
 from moumou.eval import freeze
-from moumou.eval.loader import TaskFixture, load_tasks
+from moumou.eval.loader import TaskFixture
 
 MODEL = {"provider": "hkgai", "model": "course-model",
          "base_url": "https://api1.hkgai.net", "timeout_s": 35,
@@ -66,32 +65,34 @@ def context(manifest, **changes):
             "hard_timeout_s": 180, "model_config": copy.deepcopy(MODEL), **changes}
 
 
-def test_full_180_plan_keeps_36_blocked_without_creating_a_client(repo, tmp_path, monkeypatch):
+def test_full_plan_retains_blocked_rows_without_creating_a_client(repo, tmp_path, monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("freeze and readiness must not create model clients")
 
     monkeypatch.setattr(DeepSeekClient, "__init__", forbidden)
-    fixtures = load_tasks(Path(__file__).resolve().parents[1] / "eval/tasks")
+    fixtures = [task(id="first"), task(id="network",
+                requirements={"required_tools": ["web_search"]}), task(id="last")]
     out = tmp_path / "freeze"
-    result = prepare(out, fixtures, budget_override={"max_tokens": 150_000, "max_steps": 20},
+    result = prepare(out, fixtures, repeats=2,
+                     budget_override={"max_tokens": 150_000, "max_steps": 20},
                      warmup_budget_override={"max_tokens": 150_000, "max_steps": 25})
-    assert result["plan"]["planned_runs"] == 180
-    assert result["readiness"]["ready_count"] == 144
-    assert result["readiness"]["blocked_count"] == 36
+    assert result["plan"]["planned_runs"] == 24
+    assert result["readiness"]["ready_count"] == 16
+    assert result["readiness"]["blocked_count"] == 8
     assert result["readiness"]["full_run_ready"] is False
     assert {item["fixture_id"] for item in result["readiness"]["blocked_fixtures"]} == {
-        "s4_http_research", "s4_python_research", "s8_composite",
+        "network",
     }
     assert all(row["status"] == "blocked_not_started" for row in result["plan"]["schedule"]
-               if row["fixture_id"].startswith("s4_") or row["fixture_id"] == "s8_composite")
+               if row["fixture_id"] == "network")
     full = freeze.check_start(out)
     assert full["ready"] is False and full["selected_count"] == 0
     partial = freeze.check_start(out, scope="non-network")
-    assert partial["eligible_count"] == 144 and partial["deferred_count"] == 36
-    assert partial["selected_count"] == (144 if sys.platform == "win32" else 0)
+    assert partial["eligible_count"] == 16 and partial["deferred_count"] == 8
+    assert partial["selected_count"] == (16 if sys.platform == "win32" else 0)
     assert full["model_calls"] == partial["model_calls"] == 0
     assert read(out)["execution"]["started"] is False
-    assert read(out)["plan"]["planned_runs"] == 180
+    assert read(out)["plan"]["planned_runs"] == 24
 
 
 def test_snapshot_copies_only_allowlisted_runtime_and_exact_bytes(repo, tmp_path):
@@ -305,7 +306,13 @@ def test_cli_is_synchronous_call_free_and_refuses_blocked_full_start(repo, tmp_p
 
     monkeypatch.setattr(asyncio, "run", forbidden)
     monkeypatch.setattr(DeepSeekClient, "__init__", forbidden)
-    tasks = Path(__file__).resolve().parents[1] / "eval/tasks"
+    tasks = tmp_path / "fixtures"
+    tasks.mkdir()
+    for item in [task(id="local"), task(id="network",
+                      requirements={"required_tools": ["web_search"]})]:
+        (tasks / f"{item.id}.yaml").write_text(
+            json.dumps(item.model_dump(mode="json")), encoding="utf-8",
+        )
     model = tmp_path / "model.json"
     model.write_text(json.dumps(MODEL), encoding="utf-8")
     out = tmp_path / "freeze"
@@ -317,5 +324,5 @@ def test_cli_is_synchronous_call_free_and_refuses_blocked_full_start(repo, tmp_p
     assert json.loads(capsys.readouterr().out)["valid"] is True
     assert freeze.main(["check-start", str(out)]) == 2
     result = json.loads(capsys.readouterr().out)
-    assert result["planned_runs"] == 180 and result["model_calls"] == 0
-    assert result["blocked_count"] == 36 and result["selected_count"] == 0
+    assert result["planned_runs"] == 24 and result["model_calls"] == 0
+    assert result["blocked_count"] == 12 and result["selected_count"] == 0

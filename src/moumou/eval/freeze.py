@@ -486,7 +486,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     commands = parser.add_subparsers(dest="command", required=True)
     prepare = commands.add_parser("prepare")
-    prepare.add_argument("--tasks", default="eval/tasks")
+    prepare.add_argument("--tasks", required=True,
+                         help="explicit legacy YAML source for archive validation only")
     prepare.add_argument("--out", required=True)
     prepare.add_argument("--model-config", required=True,
                          help="JSON containing public model fields")
