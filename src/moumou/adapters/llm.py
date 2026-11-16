@@ -31,6 +31,11 @@ class LLMResponse(BaseModel):
     tokens_out: int = 0
     cache_hit_tokens: int = 0      # reported for the cost analysis, not for budgets
     model: str = ""
+    # None means an old/scripted caller did not report whether usage was measured.
+    # Keep the legacy integer fields for budget compatibility, but never infer a
+    # measured zero from their defaults.
+    usage_present: bool | None = None
+    usage_raw: dict[str, int] = Field(default_factory=dict)
 
     @property
     def tokens(self) -> int:
@@ -153,7 +158,16 @@ class DeepSeekClient:
                 args = {"__unparsed__": raw}
             calls.append(ToolCall(id=tc.get("id", ""), name=fn.get("name", ""), args=args))
 
-        usage = data.get("usage") or {}
+        usage = data.get("usage")
+        usage = usage if isinstance(usage, dict) else {}
+        usage_fields = (
+            "prompt_tokens", "completion_tokens", "total_tokens",
+            "prompt_cache_hit_tokens", "prompt_cache_miss_tokens",
+        )
+        observed_usage = {
+            key: usage[key] for key in usage_fields
+            if type(usage.get(key)) is int and usage[key] >= 0
+        }
         return LLMResponse(
             content=msg.get("content") or "",
             tool_calls=calls,
@@ -161,4 +175,8 @@ class DeepSeekClient:
             tokens_out=int(usage.get("completion_tokens") or 0),
             cache_hit_tokens=int(usage.get("prompt_cache_hit_tokens") or 0),
             model=data.get("model", self.model),
+            usage_present=all(key in observed_usage for key in (
+                "prompt_tokens", "completion_tokens"
+            )),
+            usage_raw=observed_usage,
         )

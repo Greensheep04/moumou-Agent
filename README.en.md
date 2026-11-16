@@ -1,185 +1,166 @@
-# Moumou Coding Agent
+# Moumou Multi-Agent Collaboration System
 
 [简体中文](README.md) · [English](README.en.md)
 
-> Moumou is a coding agent. Hand it a task and it decomposes the work itself, assigns
-> subtasks to sub-agents, runs them in parallel, and only delivers the final result once
-> every subtask has passed acceptance.
+Moumou turns a human request into a group of cooperating agents. Agents delegate
+work, use private workspaces, ask people for clarification or approval, and retain
+experience for later tasks. Formal evaluation uses the instructor's continuing
+team conversations.
 
-Stack: Python 3.11+ · asyncio · SQLite · Pydantic v2 · DeepSeek API
+Stack: Python 3.11+ · asyncio · SQLite · Pydantic v2 · course DeepSeek / HKGAI API.
+Document deliverables use Markdown or plain text.
 
-> The Chinese [README.md](README.md) is the authoritative version. This file is a translation.
+## Start here
 
----
+| Need | Guide |
+| --- | --- |
+| Install and configure the runtime | [Setup](docs/SETUP.en.md) |
+| Run instructor tasks and interpret outcomes | [Evaluation](docs/EVAL.en.md) |
+| Prepare the final submission and evidence | [Delivery checklist](docs/DELIVERY.en.md) |
+| Understand routing, memory and isolation | [Architecture](docs/ARCHITECTURE.en.md) |
+| Integrate another module | [Interfaces](docs/INTERFACES.en.md) · [Team responsibilities](docs/roles/TASKS.en.md) |
+| Check implementation and outstanding acceptance | [Project status](docs/STATUS.en.md) |
 
-## Project status
+The question-history, trace, evidence and offline review additions are implemented
+in the current development tree; their new regression tests have not been executed.
+Agent `DONE`, framework tests and reviewed instructor-task quality are distinct.
+No claim is made that all six instructor goals have passed.
 
-| Area | Owner | Status |
-| --- | --- | --- |
-| Data contracts · task state machine · scheduling · autonomous delegation | P0 | ✅ |
-| Human-in-the-loop (approval / question / review) | P0 | ✅ |
-| Machine acceptance (command · pytest · file · JSON) | P0 | ✅ |
-| Execution log (JSONL, replayable) | P0 | ✅ |
-| Context assembly | P0 | 🚧 baseline |
-| Memory and experience evolution | P0 | ⬜ |
-| Execution sandbox · Git / GitHub · web search | P1 | ⬜ |
-| Message bus · CLI | P2 | 🚧 reference impl |
-| Persistent storage · task set · metrics | P3 | 🚧 partial |
+## Install and configure
 
-Legend: ✅ done　🚧 in progress　⬜ not started
+From the repository root, activate a Python 3.11+ environment. The target native
+Windows setup uses Conda `nlp`:
 
-Per-member tasks, acceptance commands and milestones live in
-**[docs/STATUS.md](docs/STATUS.md)**.
-
-## Capabilities
-
-- **Autonomous decomposition** — not a fixed pipeline; the model decides whether to split,
-  how many subtasks to create, and who owns each one
-- **No preconfigured role templates** — the model determines and constructs the agent roles
-  it needs, then puts them to work
-- **Parallel agents** — independent subtasks run concurrently to cut wall-clock time
-- **Sandbox isolation** — one private workspace per agent, mutually invisible, so a project
-  cannot be corrupted by a neighbouring agent
-- **Human-in-the-loop** — risky actions (deleting files, pushing code, installing packages)
-  stop and wait for approval
-- **Proactive clarification** — the agent asks when the requirement is ambiguous instead of
-  guessing
-- **Mid-run steering** — a human can steer or redirect a running task through conversation
-
-## Quick start
-
-```bash
-git clone https://github.com/Greensheep04/moumou-Agent.git
-cd moumou-Agent
-
-# 1. Environment (Python 3.11+)
-make install
-
-# 2. No API key needed
-make test          # 127 tests
-make demo          # full pipeline against a scripted model, finishes in seconds
-make demo-memory   # memory loop: a task fails → reflection → the next one reuses it
-
-# 3. Needs a real model (configure the key first, see below)
-make smoke    # verify the key and model name
-make eval     # run the evaluation set
+```powershell
+conda activate nlp
+python -m pip install -e ".[dev]"
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-## Configure your API key (one per person)
-
-Please avoid committing any key. `.env` is gitignored; the repository only ships a template.
-
-```bash
-cp .env.example .env
-# edit .env and put your key after DEEPSEEK_API_KEY=
-```
-
-Get one at <https://platform.deepseek.com/api_keys>. The defaults are usually fine:
+Edit local `.env` with the course-provided values:
 
 ```ini
-DEEPSEEK_API_KEY=your-key
-DEEPSEEK_MODEL=deepseek-flash          # stable id for DeepSeek-V4.1-Flash-1017
-DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_API_KEY=your-course-key
+DEEPSEEK_MODEL=your-course-model
+DEEPSEEK_BASE_URL=your-compatible-course-endpoint
+TAVILY_API_KEY=your-search-key
 ```
 
-Verify it:
+The model configuration supports the course DeepSeek/HKGAI backbone. Live search
+currently uses Tavily. Keep `.env` and actual credentials out of Git; commit only
+the template. Follow [setup](docs/SETUP.en.md) for file-based human replies,
+environment details and optional smoke commands.
 
-```bash
-make smoke
+## Run the instructor protocol
+
+```powershell
+python -m moumou --plan
+python -m moumou
 ```
 
-It performs three checks: a plain chat round-trip, a request with function calling, and a
-listing of the tools the agent advertises. All three passing means the key and model id are
-correct. Expected output:
+`--plan` inspects source identities without model calls. The second command starts
+real execution and waits for real human answers and quality decisions.
+`python -m moumou.eval.cli` is the same formal entry.
 
+The original [instructor bank](eval/tasks/README.md) has three groups, each with
+four supplied roles and two sequential tasks. Task 2 reuses its group's identities,
+private role workspaces, delivered files and memory. Groups have separate state.
+Each group initially shares six fresh Tavily requests across both tasks and all
+roles; cache hits are separate, and extra allowance requires an explicit human
+grant. The school's model allowance is separate from search metering.
+
+The fifteen self-authored [supplementary tasks](eval/supplementary/README.md) remain
+available in the same Markdown format, at lower priority:
+
+```powershell
+python -m moumou.eval.cli --tasks eval/supplementary
 ```
-[1] plain chat  1.57s   content: 'pong'    tokens: 38 in / 14 out
-[2] tool call   1.13s   tool: echo  args={'text': 'hi'}
-[3] agent advertises 8 tools: ['ask_human', 'delete_file', ...]
+
+Their scores remain separate from instructor results. Every execution uses a fresh
+local `runs/test/<id>/` directory, retaining dialogue, actual human exchanges, task
+results, trace, databases and outputs. The CLI does not overwrite or resume an
+existing output directory automatically.
+
+## Inspect results and run framework checks
+
+```powershell
+# Rebuild a report from existing evidence; no model call or task rerun.
+python -m moumou.eval.report --run runs/test/EXISTING_SESSION
+
+# Framework regression, separate from real task evaluation.
+python -m pytest -q
 ```
 
-## How to plug in
+These are reproduction commands, not new test results. With Make available,
+`make unit-test` runs pytest; `make test` and `make eval` run the instructor protocol.
+Native Windows does not require Make. Offline review, analysis and replay export
+are documented in [setup](docs/SETUP.en.md) and [evaluation](docs/EVAL.en.md).
 
-You only need to implement one port; nothing else changes. Full signatures, input/output
-fields and implementation conventions are in **[docs/INTERFACES.md](docs/INTERFACES.md)** (Chinese).
+`tests/` contains code-function, interface and regression checks, including checks
+of the task loader and evaluation framework. It is separate from the instructor
+bank in `eval/tasks/` and the lower-priority bank in `eval/supplementary/`.
+All framework tests passing does not prove that the six instructor goals passed.
+Keep meaningful regression sources with their code; generated test output stays local.
 
-| You | Implement | Put it in | Acceptance |
-| --- | --- | --- | --- |
-| **P1** | `Tool`, `WorkspaceProvider` | `src/moumou/tools/`, `src/moumou/sandbox/` | `pytest tests/test_tool_contract.py` |
-| **P2** | `Channel`, `HumanIO` (interactive) | `src/moumou/bus/`, `src/moumou/ui/` | `pytest tests/test_channel_contract.py` |
-| **P3** | `TraceStore`, `MemoryStore`, `HumanIO` (scripted) | `src/moumou/store/`, `src/moumou/eval/` | `make eval` |
+## P2 interaction UI (unverified compatibility candidate)
 
-Three conventions:
+Install the optional UI dependency, then attach to the existing formal file port:
 
-1. `src/moumou/contracts/` is frozen for now. If it needs to change, please raise it first so
-   three implementations do not have to rework at once.
-2. Keep each module's implementation in its own directory; `orchestrator/` stays with the
-   orchestration layer.
-3. Passing contract tests is the definition of done.
+```powershell
+python -m pip install -e ".[dev,p2]"
+# Terminal 1: keep the formal instructor entry and use a fresh output directory.
+python -m moumou --human files --out runs/test/P2_SESSION
+# Terminal 2: attach to that same saved run and answer its actual pending requests.
+python -m moumou.ui.cli --run runs/test/P2_SESSION
+```
 
-Suggested first day:
+P2 renders and stages actual human replies. P3 still owns approvals, consumption,
+question recovery, search grants and quality evidence. P1 tools and the formal task
+bank remain unchanged. `--demo` is a separate scripted demonstration, not instructor
+acceptance. See [P2 integration](docs/delivery/P2_DELIVERY.en.md). These commands and
+the new regressions have not been executed for this candidate.
 
-- **P1**: extract the path check in `tools/builtin.py` into a standalone `LocalJail` that keeps
-  the three `../etc/passwd` contract cases green, then add `git`, `git_push`, `web_search`.
-- **P2**: implement a persistent `Channel`, point `make_bus` in the contract test at it, then
-  build the CLI.
-- **P3**: import `trace.jsonl` into SQLite, then grow the task set from 3 to 15.
+## Integration boundaries
+
+| Area | Responsibilities | Evidence needed for acceptance |
+| --- | --- | --- |
+| P0 orchestration | Task states, routing, delegation, context, approval and memory evolution | Contract/regression results and actual integration behavior |
+| P1 execution | Tools, workspace boundaries, explicit artifact handoff, native process handling and search | Tool contracts, environment and live-operation evidence |
+| P2 interaction | Human/private/group channels, interactive presentation and replay consumer | Channel contracts and an actual consumer/interface check |
+| P3 data and evaluation | Trace/memory persistence, task sources, real HumanIO evaluation, metrics and reports | Framework results plus saved deliveries and quality decisions |
+
+Shared-contract changes require consumer coordination. Keep APIs and bilingual
+documentation consistent, and retain failures and unknowns in the report. Passing
+one contract suite establishes that suite's scope; it does not establish complete
+system acceptance. Formal Git staging/commit operations require approval under the
+formal runner policy, while lower-level Engine defaults are documented separately.
 
 ## Repository layout
 
-```
+```text
 src/moumou/
-  contracts/     data contracts and port protocols (frozen; see the contract tests first)
-  orchestrator/  core: state machine · scheduling · delegation · approval gate · acceptance
-  trace/         execution log (JSONL)
-  context/       context assembly
-  tools/         tool implementations             ← extended by P1
-  adapters/      reference implementations        ← replaced by P1/P2/P3
-  eval/          task loading · evaluation runner  ← extended by P3
-  demo/          runnable demo
-eval/tasks/      task set (YAML)                  ← written by P3
-docs/            documentation (see below)
-tests/           tests, including three interface contract suites
-runs/            runtime artifacts (not committed)
+  contracts/      shared data models and port protocols
+  orchestrator/   states, scheduling, delegation, approval and acceptance
+  context/        context admission, compaction and conclusion board
+  memory/         experience storage, retrieval, reflection and evolution
+  trace/          JSONL journal and SQLite projection
+  tools/          file, Python, shell, Git and search tools
+  sandbox/        workspace and native execution boundaries
+  adapters/       reference model, HumanIO, channel and workspace implementations
+  eval/           formal sessions, saved evidence, reports, review and replay
+  demo/           deterministic framework demonstrations
+
+eval/tasks/       original instructor Markdown sources
+eval/supplementary/ lower-priority sources using the same protocol
+tests/            meaningful framework and integration regressions
+docs/             architecture, interfaces, operation and delivery guides
+runs/             local runtime evidence; excluded from Git
 ```
 
-## Documentation
-
-Every document is available in both Chinese and English.
-
-| Document | Audience | Contents |
-| --- | --- | --- |
-| [docs/SETUP.en.md](docs/SETUP.en.md) · [中文](docs/SETUP.md) | **new joiners, read first** | Dependencies, `.env`, verification, commands |
-| [docs/INTERFACES.en.md](docs/INTERFACES.en.md) · [中文](docs/INTERFACES.md) | **anyone implementing a port** | Port signatures, input/output formats, conventions |
-| [docs/STATUS.en.md](docs/STATUS.en.md) · [中文](docs/STATUS.md) | everyone | Module progress, per-member tasks, milestones |
-| [docs/ARCHITECTURE.en.md](docs/ARCHITECTURE.en.md) · [中文](docs/ARCHITECTURE.md) | anyone curious about the design | Mechanism rationale, diagrams, known limits |
-| [docs/SUBAGENTS.en.md](docs/SUBAGENTS.en.md) · [中文](docs/SUBAGENTS.md) | anyone asking how sub-agents work | Creation, context, memory, communication |
-| [docs/EVAL.en.md](docs/EVAL.en.md) · [中文](docs/EVAL.md) | P3 | Task format, metric definitions, how to run |
-| [docs/FAQ.en.md](docs/FAQ.en.md) · [中文](docs/FAQ.md) | everyone | Environment, key, git and test pitfalls |
-| [docs/roles/TASKS.en.md](docs/roles/TASKS.en.md) · [中文](docs/roles/TASKS.md) | **teammates, start here** | One page: where to start, what changed |
-| [docs/roles/](docs/roles/) | P1 / P2 / P3 | One detailed brief per teammate, bilingual |
-| [CHANGELOG.en.md](CHANGELOG.en.md) · [中文](CHANGELOG.md) | everyone | What each milestone delivered |
-
-## Architecture in one picture
-
-```mermaid
-flowchart LR
-    CLI["CLI / Gradio<br/>P2"] --> BUS["Channel<br/>P2"]
-    CLI --> HUMAN["HumanIO<br/>P2 · P3"]
-    ENG["Engine<br/>P0"] --> SCH["Scheduler<br/>P0"]
-    SCH --> RUN["TaskRunner<br/>P0"]
-    RUN --> GATE["Gate<br/>approval · trace · timeout"]
-    GATE --> TOOLS["Tool<br/>P1"]
-    TOOLS --> WS["Workspace<br/>P1"]
-    GATE --> HUMAN
-    RUN --> REPO[("TaskRepo<br/>SQLite")]
-    RUN --> TRACE[("TraceStore<br/>P3")]
-```
-
-**Rectangles are the orchestration core; rounded boxes are external implementations.** The core
-only reaches them through six ports — swap any implementation and nobody else edits a line.
-
----
-
-> Environment and configuration: [docs/SETUP.md](docs/SETUP.md) ·
-> [docs/SETUP.en.md](docs/SETUP.en.md)
+Chinese and English runtime and P3 interface guides are maintained for this delivery.
+Older changelog entries retain their original milestone scope; use the current
+guides for the formal protocol. Detailed module briefs are under [docs/roles](docs/roles/),
+context details in
+[Context and memory](docs/CONTEXT-MEMORY.en.md), and troubleshooting in the
+[FAQ](docs/FAQ.en.md). The [Chinese delivery checklist](docs/DELIVERY.md) and
+[English delivery checklist](docs/DELIVERY.en.md) describe the final submission.

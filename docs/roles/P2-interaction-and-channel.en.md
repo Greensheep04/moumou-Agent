@@ -1,125 +1,105 @@
-# P2 — Interaction and Channel
+# P2 — Interaction and channel
 
 [简体中文](P2-交互与通信层.md) · [English](P2-interaction-and-channel.en.md)
 
-> The lightest part of the project, but **half of the demo depends on you**. Everyone else shows an
-> architecture diagram; you get to show "the agents actually arguing in a group chat".
+P2 owns direct/group communication, human interaction and presentation of recorded
+execution. The course requires Agent–Human private messaging, multi-agent/human group
+chat and proactive clarification/permission handling. A minimal CLI, bot or text UI is
+sufficient; elaborate frontend design earns no extra credit.
 
-| Item | Detail |
-| --- | --- |
-| Course features covered | 1 communication and collaboration · 3 the interface side of HITL |
-| Estimated effort | about 17% (≈12 person-days) |
-| Upstream dependency | P0's `contracts/` (delivered by the end of week 1) |
-| Downstream consumers | P0's orchestration core, P3's evaluation harness (the other `HumanIO` implementation) |
-| Key risk | you are light on work, but deliver `HumanIO` **early**, otherwise P3's automated evaluation cannot run |
+These responsibilities are fixed. Transport, persistence and replay presentation are
+design choices coordinated through the shared contracts.
 
----
+## Current boundaries
 
-## 1. What you own
-
-| Directory | Technical name | Purpose |
+| Area | Contract or implementation | Status boundary |
 | --- | --- | --- |
-| `bus/` | message bus (pub-sub) | how agents talk to each other and to humans; 1:1 and group |
-| `agents/human.py` | human-as-agent | treat the person as an ordinary member with the fixed id `human` |
-| `ui/cli.py` | command line interface (TUI) | one terminal window for group chat, direct messages, approvals and logs |
-| `ui/gradio_app.py` | web interface (optional, extra credit) | the same in a browser; working is enough, do not spend time on polish |
-| `ui/replay.py` | trace replay | replay one task from start to finish |
+| Agent/human addressing | `contracts/message.py`: Message, Scope, Channel | Shared API |
+| Human questions/approvals/review | `contracts/human.py`: HumanIO | Shared API; decision policy belongs to orchestration |
+| Question recovery | Optional ResumableHumanIO | Original scoped question only; no reused tool grants |
+| Default Channel | `adapters/bus.py`: InMemoryBus | Reference adapter, not persistent production delivery |
+| Formal console/file interaction | `eval/human.py`: ConsoleHuman, FileHuman | Current formal task ports with recorded request/response evidence |
+| Replay data | `eval/replay.py` | P3 read-only export; actual P2 consumer acceptance remains pending |
 
----
+Implementation locations are a design choice; document the actual source paths.
+Do not infer a persistent transport or finished replay UI from a reference adapter
+or an export file.
 
-## 2. Interfaces to implement (frozen)
+## Channel contract
 
-```python
-# contracts/message.py — provided by P0; you write the implementations
-from typing import Protocol, Callable, Awaitable, Literal
-from pydantic import BaseModel
+Implement `publish(msg)`, `subscribe(agent_id, callback)` and
+`history(scope, limit=50)` from [interfaces](../INTERFACES.en.md).
+The human member uses fixed ID `human`; Message carries project/conversation/task
+identity, sender, recipients, kind, content and metadata.
 
+- Direct messages reach the addressed members without leaking to unrelated subscribers.
+- Group/broadcast delivery remains within the intended project and conversation.
+- Persistent implementations save before delivery and retain ascending historical order.
+- Subscriber callbacks must not stall the bus; cancellation and errors must be surfaced.
+- Scope filtering must include project/conversation and membership, not only a display tab.
 
-class Scope(BaseModel):
-    kind: Literal["dm", "group"]
-    project_id: str
-    conversation_id: str
-    members: list[str]          # dm: [agent_a, agent_b]; group: every member
+The in-memory default is useful for framework behavior but does not prove restart
+persistence, complete private-channel isolation or production consumer sign-off.
 
+## HumanIO and recovery
 
-class Channel(Protocol):
-    async def publish(self, msg: Message) -> None: ...
-    def subscribe(
-        self, agent_id: str, cb: Callable[[Message], Awaitable[None]]
-    ) -> None: ...
-    def history(self, scope: Scope, limit: int = 50) -> list[Message]: ...
+`ask(req) -> HumanResponse` shows the original request and returns its explicit answer.
+`notify(msg)` presents a notification. Keep these meanings separate:
 
+| Request | Required interaction |
+| --- | --- |
+| `question` | Non-empty clarification matching the original request ID/options |
+| `approval` | Explicit approve/reject for the displayed action and full arguments |
+| `review` | Explicit quality/proposal decision, with its evidence and optional feedback |
+| `steer` (Channel) | Human adjustment during execution; not an action approval |
 
-# contracts/human.py
-class HumanIO(Protocol):
-    async def ask(self, req: HumanRequest) -> HumanResponse: ...
-    async def notify(self, msg: Message) -> None: ...
-```
+The UI displays and records decisions. It does not decide business requirements,
+change Gate policy, accept an output automatically or invent a response. Scripted and
+auto-approving development adapters cannot supply formal human authorization.
 
-### The one design decision that makes the rest simple
+For durable same-task recovery, preserve project/conversation/task/role scope, original
+request ID/body and provenance. An optional `resume(req)` may wait for that original
+pending question or recover its already consumed response. It does not create a new
+ID, reuse an approval or promote clarification into a quality decision. Recovering a
+consumed response does not replay its callback; unconsumed callbacks with external side
+effects must be idempotent by request ID.
 
-**A human is an ordinary member with `agent_id == "human"`.**
+Cancellation should stop active waits/background work while preserving truthful
+pending/consumed evidence. A pending file is not proof that a process is alive; a
+staged response is not proof the agent consumed it. Matching records also do not
+authenticate manually typed versus assisted authorship.
 
-Direct messages, group chat and approvals then become **one mechanism** instead of three:
+## Formal workflow and P3 handoff
 
-- direct message = `Scope(kind="dm", members=[agent, "human"])`
-- group chat = `Scope(kind="group", members=[...every agent..., "human"])`
-- approval = a message with `kind="ask_human"` plus `HumanIO.ask()` waiting for the answer
+The formal entry is `python -m moumou` (also `python -m moumou.eval.cli`), using real
+console/file interaction. Instructor sources are default; the supplementary bank
+requires explicit selection. See [setup](../SETUP.en.md) and
+[evaluation](../EVAL.en.md) for pending/response file formats.
 
----
+Formal team members keep stable role IDs/private directories across sequential tasks,
+with project:role long-term memory. Generic runtime instances retain their existing
+sharing policy. The UI must preserve the recorded scope and identity.
 
-## 3. Implementation conventions (external behaviour only)
+Consume P3 replay records using scenario+task identity, original span IDs/parents and
+source/line hashes. Retain original state, distinguish raw from effective reviewed
+quality and show absent relationships/measurements as unknown. Do not infer parent
+edges, zero durations, successful quality or runtime liveness from missing data.
 
-1. **`publish` persists before delivering.** A crash must not lose messages, and replay depends on
-   them.
-2. **Subscriber callbacks must not block the bus.** Give each callback its own task; a slow
-   subscriber should be dropped with a warning rather than stalling everyone.
-3. **`history` returns ascending by time.**
-4. **`ask` must be cancellable.** When a task is aborted, a pending approval has to be withdrawn
-   instead of waiting forever.
-5. **The UI must not leave background tasks behind**, otherwise the terminal refuses to exit.
-6. **The UI does not make business decisions.** Approval policy lives in the orchestration layer;
-   the interface shows the question and returns the answer.
+A viewer may use a timeline, table or tree. It must keep human questions/permissions,
+agent completion, machine acceptance and quality decisions distinguishable. P3 export
+availability is not evidence that the actual P2 viewer loaded or accepted that schema.
 
----
+## Acceptance and delivery
 
-## 4. Acceptance
+Retain meaningful channel/HumanIO regressions. Actual checks should cover DM privacy,
+group delivery, project/conversation filtering, restart history, original-ID question
+recovery, explicit rejection, cancellation and consumer schema handling. Record the
+environment, command, result and known limits when executed.
 
-Provided: `tests/test_channel_contract.py`. Point `make_bus` in that file at your implementation;
-green means done:
+Current changed interfaces and recovery code still require regression execution and
+real consumer sign-off. A minimal UI, passing framework fixture or saved export alone
+does not establish teacher task quality. P2 does not own prompts, tool execution,
+approval policy or performance scoring.
 
-- two fake agents exchange a DM and a third agent **never sees it**
-- a group message reaches every member
-- `history()` still returns the past after a process restart (an in-memory queue fails this, which
-  is why SQLite or JSONL is suggested)
-- a pending `HumanIO.ask()` can be cancelled
-- the CLI can display an `ask_human` message and accept yes/no
-
----
-
-## 5. Yours to decide
-
-- Rich / Textual / plain `print`, whatever you prefer
-- whether to build the Gradio view, and what it looks like
-- the replay presentation (timeline / tree / table / step by step)
-- SQLite or JSONL for messages, and the table design
-- panel layout and colours
-
----
-
-## 6. Out of scope
-
-- **no prompt assembly** (context belongs to P0)
-- no decisions, no tool calls, no LLM calls
-- no metrics, no evaluation
-- no approval policy (which operations need approval is P0's policy table)
-
----
-
-## 7. The highest-value extra
-
-`ui/replay.py`: read one task's full trace from the trace store and replay it — who dispatched what,
-which tool each agent called, where it waited for a human, how long it all took.
-
-Running this during the demo beats an architecture diagram ten times over, and it costs almost no
-extra work: P3 already stores the data, you only render it.
+Use [delivery requirements](../DELIVERY.en.md), [shared interfaces](../INTERFACES.en.md)
+and [P3 evidence responsibility](P3-data-and-evaluation.en.md) as the handoff references.

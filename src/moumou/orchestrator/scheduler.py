@@ -52,9 +52,17 @@ class Scheduler:
 
             self.repo.promote()
         finally:
-            for task in self._running.values():
-                task.cancel()
-            self._running.clear()
+            remaining = tuple(self._running.values())
+            for task in remaining:
+                if not task.done() and not task.cancelling():
+                    task.cancel()
+            try:
+                if remaining:
+                    # The caller may close the database immediately after run()
+                    # returns. Let cooperative runner finally blocks finish first.
+                    await asyncio.gather(*remaining, return_exceptions=True)
+            finally:
+                self._running.clear()
 
     # -- internals -------------------------------------------------------
     def _fill_slots(self) -> None:

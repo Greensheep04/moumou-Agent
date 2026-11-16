@@ -1,24 +1,23 @@
-"""交互界面（P2）。
-
-CLI 负责把总线上的人和 Agent 对话、系统通知、以及 ``ask_human`` 审批卡片
-渲染到终端；``replay`` 负责把一次任务的 trace 从头到尾重放。
-
-这里用惰性导入：直接 ``python -m moumou.ui.cli`` / ``-m moumou.ui.replay``
-时不会因为包初始化提前导入子模块而产生 ``runpy`` 警告。
-"""
+"""Lazy P2 interface exports; importing this package does not load optional Rich."""
 
 from __future__ import annotations
 
-__all__ = ["run_cli", "replay"]
+__all__ = ["run_cli", "load_events", "load_replay", "replay", "replay_tree"]
 
 
 def __getattr__(name: str):
     if name == "run_cli":
         from .cli import run_cli
 
+        globals()[name] = run_cli
         return run_cli
-    if name == "replay":
-        from .replay import replay
+    if name in {"load_events", "load_replay", "replay", "replay_tree"}:
+        from importlib import import_module
 
-        return replay
+        module = import_module(".replay", __name__)
+        # Submodule loading sets package.replay to a module. Restore the public
+        # function exports together so subsequent lazy access is consistent.
+        for exported in ("load_events", "load_replay", "replay", "replay_tree"):
+            globals()[exported] = getattr(module, exported)
+        return globals()[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

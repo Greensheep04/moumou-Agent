@@ -2,7 +2,7 @@
 
 from .agent import MAX_ROLES_PER_PROJECT, AgentInstance, RoleRevisionDraft, RoleSpec
 from .context import ContextPolicy
-from .human import HumanIO, HumanRequest, HumanResponse
+from .human import HumanIO, HumanRequest, HumanResponse, ResumableHumanIO
 from .memory import MemoryRecord
 from .message import HUMAN_ID, Channel, Message, MessageKind, Scope
 from .plan import Plan, RoleDraft, SubtaskSpec
@@ -53,6 +53,7 @@ __all__ = [
     "Message",
     "MessageKind",
     "Plan",
+    "ResumableHumanIO",
     "RoleDraft",
     "RoleRevisionDraft",
     "RoleSpec",

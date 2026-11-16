@@ -1,185 +1,125 @@
-# Moumou Coding Agent
+# Moumou 多智能体协作系统
 
 [简体中文](README.md) · [English](README.en.md)
 
-> Moumou 是一个 Coding Agent。把任务交给它，它会自己拆解、分配给子代理，并行推进，
-> 每个子任务都验收通过之后，才把最终结果交付给你。
+Moumou 将人类提出的任务交给一组协作智能体执行。智能体可以自主委派工作，在各自私有工作区中调用工具，遇到歧义或需要授权的操作时询问人类，并保留经验用于后续任务。正式评测采用老师提供的连续团队会话。
 
-技术栈：Python 3.11+ · asyncio · SQLite · Pydantic v2 · DeepSeek API
+技术栈：Python 3.11+ · asyncio · SQLite · Pydantic v2 · 学校 DeepSeek / HKGAI API。文档交付使用 Markdown 或纯文本。
 
----
+## 从这里开始
 
-## 项目状态
+| 需要做什么 | 对应说明 |
+| --- | --- |
+| 安装依赖、配置运行环境 | [环境配置](docs/SETUP.md) |
+| 运行老师题目、理解结果 | [评测流程](docs/EVAL.md) |
+| 准备最终提交与证据 | [交付清单](docs/DELIVERY.md) |
+| 理解路由、记忆与隔离 | [系统架构](docs/ARCHITECTURE.md) |
+| 对接其他模块 | [接口说明](docs/INTERFACES.md) · [团队职责](docs/roles/TASKS.md) |
+| 查看已实现内容与待验收事项 | [项目状态](docs/STATUS.md) |
 
-| 模块 | 负责人 | 状态 |
-| --- | --- | --- |
-| 数据契约 · 任务状态机 · 调度 · 自主委派 | P0 | ✅ |
-| 人类介入（审批 / 提问 / 审阅） | P0 | ✅ |
-| 机器验收（命令 · pytest · 文件 · JSON） | P0 | ✅ |
-| 执行日志（JSONL，可回放） | P0 | ✅ |
-| 上下文组装 | P0 | 🚧 基础版 |
-| 记忆与经验进化 | P0 | ⬜ |
-| 执行沙箱 · Git / GitHub · 联网搜索 | P1 | ⬜ |
-| 消息总线 · 命令行界面 | P2 | 🚧 参考实现 |
-| 持久化存储 · 评测题库 · 指标报告 | P3 | 🚧 部分 |
+当前开发版本已编写问答恢复、执行记录、证据保存和离线复核等新增实现，其新增回归测试尚未执行。智能体 `DONE`、框架测试通过和老师题目质量验收是不同结果，不能据此宣称六个老师目标全部通过。
 
-图例：✅ 完成　🚧 进行中　⬜ 未开始
+## 安装与配置
 
-各成员的具体任务、验收方式和里程碑见 **[项目状态详细版](docs/STATUS.md)**。
+在仓库根目录激活 Python 3.11+ 环境。正式目标环境为原生 Windows，使用 Conda `nlp`：
 
-## 核心能力
-
-- **自主拆解**：不是固定流水线，模型自己判断该不该拆、拆几个、谁来做
-- **无预置角色模板**：由模型自己判定并构建合适的 AI 智能体，高效完成工作
-- **支持智能体并行处理任务**，提高工作效率
-- **沙箱隔离**：每个智能体一个独立工作区，互不可见，保证项目安全性
-- **人类介入**：高风险动作（删文件、推代码、装依赖）停下来等人批准
-- **主动提问**：遇到需求歧义时直接问，而不是猜
-- **执行中可引导**：支持在执行过程中，人工通过对话引导方向、改变方向
-
-## 快速开始
-
-```bash
-git clone https://github.com/Greensheep04/moumou-Agent.git
-cd moumou-Agent
-
-# 1. 环境（Python 3.11+）
-make install
-
-# 2. 不需要 API key 就能跑
-make test          # 127 个测试
-make demo          # 完整链路演示，用假模型，秒级完成
-make demo-memory   # 记忆闭环：任务失败 → 反思 → 下一次复用
-
-# 3. 需要真模型（先配 key，见下一节）
-make smoke    # 验证 key 和模型名
-make eval     # 跑评测集
+```powershell
+conda activate nlp
+python -m pip install -e ".[dev]"
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-依赖安装、`.env` 配置与验证步骤详见 **[环境配置文档](docs/SETUP.md)**。
-
-## 配置 API Key（每人配自己的）
-
-key 请勿提交到仓库。`.env` 已在 `.gitignore` 中，仓库只保留模板。
-
-```bash
-cp .env.example .env
-# 编辑 .env，把你的 key 填到 DEEPSEEK_API_KEY=
-```
-
-去 <https://platform.deepseek.com/api_keys> 申请。默认参数一般不用改：
+在本地 `.env` 中填入课程提供的配置：
 
 ```ini
-DEEPSEEK_API_KEY=你的key
-DEEPSEEK_MODEL=deepseek-flash          # DeepSeek-V4.1-Flash-1017 的稳定 ID
-DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_API_KEY=your-course-key
+DEEPSEEK_MODEL=your-course-model
+DEEPSEEK_BASE_URL=your-compatible-course-endpoint
+TAVILY_API_KEY=your-search-key
 ```
 
-验证：
+模型配置支持课程指定的 DeepSeek / HKGAI 接口；当前联网检索使用 Tavily。真实 `.env` 和密钥必须排除在 Git 之外，只提交配置模板。文件式人类回复、环境细节和可选冒烟命令见[环境配置](docs/SETUP.md)。
 
-```bash
-make smoke
+## 运行老师评测协议
+
+```powershell
+python -m moumou --plan
+python -m moumou
 ```
 
-它会做三件事：发一次普通对话、发一次带 function calling 的请求、列出框架注册的工具。
-三项都过说明 key 和模型名都没问题。正常输出：
+`--plan` 只检查题源身份，不调用模型。第二条命令开始真实执行，并等待真实的人类回答和质量决定。`python -m moumou.eval.cli` 使用同一个正式入口。
 
-```
-[1] plain chat  1.57s   content: 'pong'    tokens: 38 in / 14 out
-[2] tool call   1.13s   tool: echo  args={'text': 'hi'}
-[3] agent advertises 8 tools: ['ask_human', 'delete_file', ...]
-```
+[老师原题](eval/tasks/README.md)包含三个团队，每组四个指定角色、两个顺序任务。Task 2 复用同组身份、角色私有工作区、已交付文件和记忆，不同组拥有独立状态。每组两个任务和四个角色共享初始六次 Tavily 新检索额度；缓存命中单独统计，追加额度必须获得明确的人类授权。学校模型调用额度与搜索计量分开。
 
-## 怎么接进来
+保留的十五个[自建补充题](eval/supplementary/README.md)使用相同 Markdown 格式，优先级低于老师题库：
 
-只需要实现其中一个端口即可，其余部分无需改动。完整的签名、输入输出字段与实现约定见
-**[接口说明](docs/INTERFACES.md)**。
-
-| 你 | 要实现 | 放哪 | 验收命令 |
-| --- | --- | --- | --- |
-| **P1** | `Tool`、`WorkspaceProvider` | `src/moumou/tools/`、`src/moumou/sandbox/` | `pytest tests/test_tool_contract.py` |
-| **P2** | `Channel`、`HumanIO`（真人版） | `src/moumou/bus/`、`src/moumou/ui/` | `pytest tests/test_channel_contract.py` |
-| **P3** | `TraceStore`、`MemoryStore`、`HumanIO`（脚本版） | `src/moumou/store/`、`src/moumou/eval/` | `make eval` |
-
-三点约定：
-
-1. `src/moumou/contracts/` 目前处于冻结状态，如需调整建议先同步，避免三份实现同时返工
-2. 各模块的实现放在各自目录下，`orchestrator/` 由编排层维护
-3. 契约测试通过即可视为完成
-
-上手建议（第一天）：
-
-- **P1**：把 `tools/builtin.py` 的路径检查抽成独立的 `LocalJail`，让契约测试里那三个
-  `../etc/passwd` 用例依然绿，再补 `git` / `git_push` / `web_search`
-- **P2**：实现一个持久化的 `Channel`，把 `test_channel_contract.py` 里的 `make_bus`
-  指过去，然后做 CLI
-- **P3**：把 `trace.jsonl` 导进 SQLite，然后把题库从 3 道补到 15 道
-
-## 目录结构
-
-```
-src/moumou/
-  contracts/     数据契约与端口协议（冻结，改动前先看契约测试）
-  orchestrator/  编排核心：状态机 · 调度 · 委派 · 审批闸门 · 验收
-  trace/         执行日志（JSONL）
-  context/       上下文组装
-  tools/         工具实现                 ← P1 扩展
-  bus/           持久化消息总线（SQLite）  ← P2
-  agents/        人类成员代理（HumanIO）   ← P2
-  ui/            CLI / Trace 回放         ← P2
-  adapters/      各端口的参考实现         ← P1/P2/P3 替换
-  eval/          题库加载 · 评测运行器     ← P3 扩展
-  demo/          可运行演示
-eval/tasks/      题库（YAML）             ← P3 编写
-docs/            文档（见下）
-tests/           测试，含三份接口契约测试
-runs/            运行时产物（不进仓库）
+```powershell
+python -m moumou.eval.cli --tasks eval/supplementary
 ```
 
-## P2 命令行与回放
+补充题成绩与老师题分开。每次执行使用新的本地 `runs/test/<id>/` 目录，保留完整对话、实际人类交互、任务结果、trace、数据库和产物。CLI 不会自动覆盖或续跑已有输出目录。
 
-无需 API Key 即可体验交互与通信层：
+## 查看结果与运行框架检查
 
-```bash
-.venv/bin/python -m moumou.ui.cli                      # 交互式 CLI（群聊/私聊/审批/提问）
-.venv/bin/python -m moumou.demo.skeleton               # 生成一次任务的 trace
-.venv/bin/python -m moumou.ui.replay runs/demo/trace.jsonl   # 回放 trace 时间轴
+```powershell
+# 从已有证据重建报告，不调用模型，也不重新执行任务。
+python -m moumou.eval.report --run runs/test/EXISTING_SESSION
+
+# 框架回归，与真实任务评测分开。
+python -m pytest -q
 ```
 
-详见 [P2 交付文档](docs/delivery/P2_DELIVERY.md)。
+这些是复现命令，不代表新增测试结果。安装了 Make 时，`make unit-test` 运行 pytest；`make test` 和 `make eval` 运行老师协议。原生 Windows 无需安装 Make。离线复核、分析和回放导出见[环境配置](docs/SETUP.md)与[评测流程](docs/EVAL.md)。
 
-## 文档
+`tests/` 包含代码功能、接口和回归检查，也检查题库加载器与评测框架本身；它不同于 `eval/tasks/` 的老师题库和 `eval/supplementary/` 的低优先级补充题。框架测试全绿不能证明老师六目标通过。有意义的回归源码与功能代码一起保留，生成的测试输出只保存在本地。
 
-| 文档 | 给谁看 | 内容 |
+## P2 交互界面（兼容候选，尚未验证）
+
+安装可选界面依赖后，可以连接正式评测的文件交互端口：
+
+```powershell
+python -m pip install -e ".[dev,p2]"
+# 终端一：沿用正式老师入口，输出目录必须是新目录。
+python -m moumou --human files --out runs/test/P2_SESSION
+# 终端二：连接同一运行目录，展示并回答实际待答请求。
+python -m moumou.ui.cli --run runs/test/P2_SESSION
+```
+
+P2 只展示和暂存实际人类答复；审批、答复消费、问答恢复、搜索额度及质量记录仍由 P3 处理。
+它不会另建题库或替换现有 P1 工具。`--demo` 是独立脚本演示，不等于老师任务验收。
+详见 [P2 接入说明](docs/delivery/P2_DELIVERY.md)。这些命令和新回归目前均未执行。
+
+## 模块对接边界
+
+| 模块 | 负责内容 | 验收需要的证据 |
 | --- | --- | --- |
-| [环境配置](docs/SETUP.md) | **新加入的人，先看这个** | 依赖、`.env`、验证步骤、常用命令 |
-| [接口说明](docs/INTERFACES.md) | **接入模块的人，先看这个** | 6 个端口的签名、输入输出格式、实现约定 |
-| [项目状态](docs/STATUS.md) | 所有人 | 各模块进度、各成员任务、里程碑 |
-| [架构说明](docs/ARCHITECTURE.md) | 想理解设计的人 | 机制原理、流程图、已知边界 |
-| [评测说明](docs/EVAL.md) | P3 | 题库格式、指标口径、怎么跑 |
-| [常见问题](docs/FAQ.md) | 所有人 | 环境、key、git、测试的坑 |
-| [任务书](docs/roles/) | P1 / P2 / P3 | 各自的一份详细分工 |
-| [更新日志](CHANGELOG.md) | 所有人 | 每个里程碑做了什么 |
+| P0 编排 | 任务状态、路由、委派、上下文、审批与记忆演化 | 契约/回归结果和真实集成行为 |
+| P1 执行 | 工具、工作区边界、明确产物交接、原生进程处理与搜索 | 工具契约、环境与真实操作证据 |
+| P2 交互 | 人类/私聊/群聊通道、交互展示与回放消费端 | 通道契约和实际消费端/界面检查 |
+| P3 数据与评测 | trace/记忆持久化、题源、真实 HumanIO 评测、指标与报告 | 框架结果、已保存交付及质量决定 |
 
-## 一句话架构
+共享契约变更需要与消费模块协调，API 与中英文文档保持一致，报告中保留失败和未知结果。通过某个契约测试只说明该测试覆盖的范围，不能作为系统全面验收。正式 runner 的 Git 暂存/提交操作需要审批；底层通用 Engine 的默认策略单独说明。
 
-```mermaid
-flowchart LR
-    CLI["CLI / Gradio<br/>P2"] --> BUS["Channel<br/>P2"]
-    CLI --> HUMAN["HumanIO<br/>P2 · P3"]
-    ENG["Engine<br/>P0"] --> SCH["Scheduler<br/>P0"]
-    SCH --> RUN["TaskRunner<br/>P0"]
-    RUN --> GATE["Gate<br/>审批 · 日志 · 超时"]
-    GATE --> TOOLS["Tool<br/>P1"]
-    TOOLS --> WS["Workspace<br/>P1"]
-    GATE --> HUMAN
-    RUN --> REPO[("TaskRepo<br/>SQLite")]
-    RUN --> TRACE[("TraceStore<br/>P3")]
+## 仓库目录
+
+```text
+src/moumou/
+  contracts/      共享数据模型与接口协议
+  orchestrator/   状态、调度、委派、审批与验收
+  context/        上下文准入、压缩与结论板
+  memory/         经验存储、检索、反思与演化
+  trace/          JSONL 日志及 SQLite 投影
+  tools/          文件、Python、shell、Git 与搜索工具
+  sandbox/        工作区与原生执行边界
+  adapters/       参考模型、HumanIO、通道与工作区实现
+  eval/           正式会话、证据保存、报告、复核与回放
+  demo/           确定性的框架演示
+
+eval/tasks/       老师原始 Markdown 题源
+eval/supplementary/ 同协议的低优先级补充题
+tests/            有意义的框架与集成回归
+docs/             架构、接口、运行与交付说明
+runs/             本地运行证据，排除在 Git 之外
 ```
 
-**方框是编排核心，圆角框是外部实现。** 核心只通过 6 个端口调用外部代码——
-换掉任何实现，其他人不用改一行。
-
----
-
-> 环境与配置文件说明：[环境配置文档](docs/SETUP.md)（[English](docs/SETUP.en.md)）
+本次交付维护中英文运行与 P3 接口说明。旧变更记录保留当时里程碑，当前正式协议以现行说明为准。模块详细说明见 [docs/roles](docs/roles/)，上下文机制见[上下文与记忆](docs/CONTEXT-MEMORY.md)，故障排查见[常见问题](docs/FAQ.md)。[中文交付清单](docs/DELIVERY.md)与[英文交付清单](docs/DELIVERY.en.md)列出最终提交要求。

@@ -10,9 +10,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+p2 = ["rich>=13.7"]
 dev = [
-    "pytest>=8",
-    "pytest-asyncio>=0.23",
+    "pytest>=8.2",
+    "pytest-asyncio>=0.24",
     "ruff>=0.6",
 ]
 
@@ -27,6 +28,7 @@ packages = ["src/moumou"]
 pythonpath = ["src"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 100
