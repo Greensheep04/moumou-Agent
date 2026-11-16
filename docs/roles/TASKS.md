@@ -1,51 +1,60 @@
-# 团队集成与交付
+# 现在该做什么
 
 [简体中文](TASKS.md) · [English](TASKS.en.md)
 
-本页将模块分工对应到当前集成与交付工作。实现细节见各角色说明和[接口文档](../INTERFACES.md)。
+> 给三个人的一页说明。细节在各自的详细任务书里，这里只说**从哪开始**。
 
-## 运行环境与题源约定
+## 一、先跑起来（10 分钟）
 
-使用已激活的 Python 3.11+ 环境；原生 Windows 交付使用 Conda `nlp`。通过 `python -m pip install -e ".[dev]"` 安装项目，在忽略的 `.env` 中配置课程 DeepSeek / HKGAI 参数，再按照[环境配置](../SETUP.md)操作。不要提交真实凭据或运行数据。
+```bash
+git clone https://github.com/Greensheep04/moumou-Agent.git
+cd moumou-Agent
+make install
+cp .env.example .env      # 填自己的 DeepSeek key
+make test                 # 142 个测试，不需要 key
+```
 
-| 入口 | 用途 |
-| --- | --- |
-| `python -m moumou --plan` | 检查原始题源，不调用模型 |
-| `python -m moumou` | 老师会话，使用真实 HumanIO 和质量复核 |
-| `python -m moumou.eval.cli --tasks eval/supplementary` | 显式运行低优先级补充评测 |
-| `python -m pytest -q` / `make unit-test` | 框架回归，与模型评测分开 |
-| `python -m moumou.eval.report --run RUN_DIRECTORY` | 从保存结果重建报告，不重新运行任务 |
+## 二、你负责什么
 
-默认 `eval/tasks` 包含老师三个团队、六个目标，保留其原文及哈希。保留的十五题补充库使用相同 Markdown 协议和单独分母。本页命令用于复现，不代表新增验证结果。
-
-## 责任与交接
-
-| 边界 | 提供内容 | 集成验收 |
+| 你 | 第一个 PR 应该是 | 验收命令 |
 | --- | --- | --- |
-| P0 编排 | 状态、路由、委派、上下文、审批、验收与演化 | 共享模型一致，实际覆盖失败、恢复和取消语义 |
-| P1 执行 | 工具契约、工作区隔离、明确声明的产物、Git/搜索与原生执行 | 工具遵守工作区和审批边界，消费者获得明确声明的文件 |
-| P2 交互 | 私聊/群聊通道、实际人类交互和回放展示 | 真实通道/UI 消费者保留身份、请求、决定和待答状态 |
-| P3 数据与评测 | trace/记忆持久化、题源、连续团队会话、指标和离线证据工具 | 存储记录和报告保留完整计划、实际质量决定、来源和未知覆盖 |
+| **P1 执行层** | 把路径检查抽成独立的 `LocalJail`，再补 `git` / `git_push` / `web_search` 三个工具 | `pytest tests/test_tool_contract.py -q` |
+| **P2 交互层** | 一个持久化的 `Channel`（SQLite 或 JSONL），把契约测试里的 `make_bus` 指向它 | `pytest tests/test_channel_contract.py -q` |
+| **P3 数据层** | 把 `trace.jsonl` 导进 SQLite，让 `make eval` 能跑起来 | `make eval` |
 
-P3 集成需要确认以下当前边界：
+接口、字段和行为约定看 [接口说明](../INTERFACES.md)，不用自己猜。
 
-- 任务结果是结构化对象，包含 `summary`、`files`、`notes` 和 `blockers`。文件通过明确产物集成跨越私有工作区边界。
-- 人类交互保留原请求 ID 和 project/conversation/task/role 范围。恢复已答信息不授权后续工具操作。
-- `parent_id` 表示任务图关系，`parent_span` 表示 trace 层级。历史缺失的 span 父关系保持缺失。
-- 正式团队在两个任务之间使用稳定角色身份和 project-role 记忆；通用任务实例保留已说明的共享角色策略。
-- 回放中的任务身份包含场景和任务 ID。待答、已暂存和已消费的人类响应是不同观测。
-- 已提供带来源的回放导出；导出存在不等于 P2 消费签收，仍需 P0/P1/P2 实际确认。
+## 三、最近变了什么
 
-修改 `src/moumou/contracts/` 需要与受影响的消费模块协调，并更新文档和测试。本地实现变更不证明所有消费者均已完成集成。
+子代理这块最近改动比较多，如果你手上有旧文档会对不上：
 
-## 完成标准与证据
+| 变化 | 影响你吗 |
+| --- | --- |
+| 主代理有了独立提示词 | 不影响 |
+| 子代理交活改成 `submit_result`（结构化字段） | 不影响 |
+| 子任务失败会唤醒父任务；重派的子任务 id 带轮次前缀 | 不影响 |
+| 角色可以被评审修改，带版本号 | 如果读 `roles` 表，注意 `version` / `updated_at` |
+| **`TaskNode.result` 现在是结构体，不再是字符串** | **如果读任务结果，要按字段取** |
 
-最新 P3 恢复、trace、快照、复核和回放变更具备回归代码，但尚未执行。历史框架结果属于其记录的源码版本，不验证新的开发树，也不能替代老师六目标完成。
+细节见 [子代理机制](../SUBAGENTS.md)。
 
-[交付清单](../DELIVERY.md)包含仓库、架构、正式性能报告、真实协作提交历史和展示材料的要求。保留真实失败、未发布目标和未知质量，不将脚本替身或智能体 `DONE` 写为任务验收通过。
+## 四、测试怎么跑
 
-## 协作与 Git
+| 命令 | 耗时 | 说明 |
+| --- | --- | --- |
+| `make test` | ~2 秒 | 全部 142 个 |
+| `pytest tests/test_tool_contract.py -q` | ~1 秒 | P1 的验收 |
+| `pytest tests/test_channel_contract.py -q` | <1 秒 | P2 的验收 |
+| `make eval` | 每题几秒 | 需要 key，P3 的验收 |
 
-每次新任务先 fetch 远端 `main`，合并前检查差异。使用分配的开发分支，P3 使用 `dev-P3`；不要覆盖其他成员的工作，也不要在未理解双方变更时解决冲突。P3 每次提交先确认简洁英文信息和准确文件范围，再暂存/提交；合并和推送分别确定授权范围。本地规划、私有证据和生成的运行文件不进入提交。
+**契约测试是"换了实现也必须全绿"的。** 要改 `src/moumou/contracts/` 之前，先在群里说一声。
 
-契约或集成失败时，记录源码版本、准确命令、环境、实际输出和复现步骤。可通过[常见问题](../FAQ.md)、[状态](../STATUS.md)和角色说明查找相关内容。
+## 五、开分支
+
+一人一条长期分支：`feat/p1-sandbox`、`feat/p2-cli`、`feat/p3-eval`。
+合并前先 rebase 到 main，保持历史线性。
+
+## 六、卡住了怎么办
+
+先看 [常见问题](../FAQ.md)。还是没有答案，把你的分支和复现步骤发出来，别自己憋着——
+契约层是共享的，你憋出来的绕过方案以后要还。

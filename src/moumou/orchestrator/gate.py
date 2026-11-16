@@ -18,7 +18,6 @@ from moumou.contracts import (
     DEFAULT_APPROVAL,
     AgentInstance,
     HumanRequest,
-    HumanResponse,
     TaskNode,
     ToolContext,
     ToolResult,
@@ -52,12 +51,9 @@ class Gate:
             return ToolResult(ok=False, error=f"unknown tool: {call.name}")
 
         if self.policy.needs_approval(tool.action_class):
-            try:
-                answer = await self._ask_human(call, tool, node, agent)
-            except (ValueError, TypeError) as exc:
-                return ToolResult(ok=False, error="invalid_human_approval", stderr=str(exc))
-            if answer.decision != "approve":
-                return ToolResult(ok=False, error="rejected_by_human", stderr=answer.text or "")
+            verdict = await self._ask_human(call, tool, node, agent)
+            if verdict != "approve":
+                return ToolResult(ok=False, error="rejected_by_human")
 
         ctx = ToolContext(agent_id=agent.id, task_id=node.id, workspace=workspace)
         with self.trace.span(
@@ -79,7 +75,7 @@ class Gate:
         self.repo.add_artifacts(node.id, result.artifacts)
         return result
 
-    async def _ask_human(self, call, tool, node: TaskNode, agent: AgentInstance) -> HumanResponse:
+    async def _ask_human(self, call, tool, node: TaskNode, agent: AgentInstance) -> str:
         self.repo.transition(node.id, "WAITING_HUMAN", f"approve:{tool.name}")
         request = HumanRequest(
             task_id=node.id,
@@ -90,24 +86,14 @@ class Gate:
             action_class=tool.action_class,
             payload=call.args,
             options=["approve", "reject"],
-            project_id=node.project_id, conversation_id=node.conversation_id, role=node.role,
         )
         with self.trace.span(
             task_id=node.id, kind="approval", name=tool.name, agent_id=agent.id
         ) as span:
-            try:
-                answer = HumanResponse.model_validate(await self.human.ask(request))
-                if answer.request_id != request.id:
-                    raise ValueError("approval response request_id mismatch")
-                if answer.decision not in {"approve", "reject"}:
-                    raise ValueError("approval response requires an explicit decision")
-            except (ValueError, TypeError):
-                self.repo.transition(node.id, "RUNNING", "human:invalid")
-                raise
+            answer = await self.human.ask(request)
             span.payload["decision"] = answer.decision
             span.payload["note"] = answer.text
-            span.payload["request_id"] = request.id
 
         decision = answer.decision or "reject"
         self.repo.transition(node.id, "RUNNING", f"human:{decision}")
-        return answer
+        return decision

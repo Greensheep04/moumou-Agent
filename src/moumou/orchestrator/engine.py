@@ -42,10 +42,6 @@ class Settings(BaseModel):
     max_slots: int = 4
     max_rounds: int = 500
     approval: dict[str, bool] = Field(default_factory=dict)
-    require_subtask_acceptance: bool = Field(
-        default=False,
-        description="Reject delegated subtasks without machine acceptance checks; opt-in.",
-    )
 
     context_window: int = 1_000_000
     max_output_tokens: int = 384_000
@@ -91,11 +87,7 @@ class Engine:
         self.db = Database(root / "moumou.db")
         self.repo = SqliteTaskRepo(self.db)
         self.roles = SqliteRoleRegistry(self.db)
-        try:
-            self.trace = Recorder(root / "trace.jsonl", sqlite_path=root / "trace.db")
-        except BaseException:
-            self.db.close()
-            raise
+        self.trace = Recorder(root / "trace.jsonl")
 
         self.bus = bus or InMemoryBus()
         self.human = human or AutoApproveHuman()
@@ -108,10 +100,7 @@ class Engine:
         self.gate = Gate(
             self.repo, self.tools, self.human, self.trace, ApprovalPolicy(self.settings.approval)
         )
-        self.delegation = Delegation(
-            self.repo, self.roles, self.trace, self.tools.names(),
-            require_subtask_acceptance=self.settings.require_subtask_acceptance,
-        )
+        self.delegation = Delegation(self.repo, self.roles, self.trace, self.tools.names())
         self.acceptance = AcceptanceChecker(self.trace)
         self.policy = ContextPolicy(
             context_window=self.settings.context_window,

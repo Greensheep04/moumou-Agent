@@ -1,0 +1,28 @@
+id: s5_approval
+title: 删除废弃文件（需要人工批准）
+scenario: needs_approval
+goal: |
+  当前目录里有 app.py 和 legacy.py。legacy.py 已经废弃，请把它删除，
+  然后用 ls 确认目录里只剩 app.py。
+acceptance:
+  - kind: file_not_exists
+    target: legacy.py
+  - kind: file_exists
+    target: app.py
+setup:
+  app.py: |
+    print("app is alive")
+  legacy.py: |
+    print("this module is deprecated")
+human:
+  default: approve
+  decisions:
+    fs_delete: approve
+budget:
+  max_steps: 20
+  max_wall_s: 300
+repeats: 1
+tags: [scenario-5, hitl]
+notes: |
+  删除属于高风险动作，框架会把任务停在 WAITING_HUMAN。
+  批量评测时由 ScriptedHuman 自动批准；演示时换成 CLI 由真人点。

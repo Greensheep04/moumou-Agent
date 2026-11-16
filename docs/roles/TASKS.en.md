@@ -1,79 +1,66 @@
-# Team Integration and Delivery
+# What to do now
 
 [简体中文](TASKS.md) · [English](TASKS.en.md)
 
-This page maps module ownership to the current integration and delivery work.
-Implementation details live in the role briefs and [interface specification](../INTERFACES.en.md).
+> One page for the three of you. The detail lives in your own brief; this only says
+> **where to start**.
 
-## Runtime and source conventions
+> The Chinese [TASKS.md](TASKS.md) is the authoritative version. This file is a translation.
 
-Use an activated Python 3.11+ environment; native Windows delivery uses Conda
-`nlp`. Install the project with `python -m pip install -e ".[dev]"`, configure the
-course DeepSeek/HKGAI values in ignored `.env`, then follow [setup](../SETUP.en.md).
-Do not commit actual credentials or runtime data.
+## 1. Get it running (10 minutes)
 
-| Entry | Purpose |
-| --- | --- |
-| `python -m moumou --plan` | Inspect the original task sources without model calls |
-| `python -m moumou` | Instructor conversations with real HumanIO and quality review |
-| `python -m moumou.eval.cli --tasks eval/supplementary` | Explicit lower-priority supplementary evaluation |
-| `python -m pytest -q` / `make unit-test` | Framework regressions, separate from model evaluation |
-| `python -m moumou.eval.report --run RUN_DIRECTORY` | Reconstruct a saved report without rerunning tasks |
+```bash
+git clone https://github.com/Greensheep04/moumou-Agent.git
+cd moumou-Agent
+make install
+cp .env.example .env      # put your own DeepSeek key in it
+make test                 # 142 tests, no key needed
+```
 
-The default `eval/tasks` contains three instructor groups and six goals. Keep its
-original texts and hashes. The retained fifteen-task supplementary bank uses the
-same Markdown protocol and a separate denominator. Commands here are reproduction
-instructions, not new verification results.
+## 2. What you own
 
-## Ownership and handoff
-
-| Boundary | Provides | Integration acceptance |
+| You | Your first PR should be | Acceptance |
 | --- | --- | --- |
-| P0 orchestration | States, routing, delegation, context, approval, acceptance and evolution | Shared models remain coherent; failure, recovery and cancellation semantics are exercised |
-| P1 execution | Tool contracts, workspace isolation, explicit declared artifacts, Git/search and native execution | Tools respect the workspace and approval boundary; consumers receive the declared files |
-| P2 interaction | Private/group channels, actual human interaction and replay presentation | Real channel/UI consumers preserve identities, requests, decisions and pending state |
-| P3 data and evaluation | Trace/memory persistence, task sources, continuing team sessions, metrics and offline evidence tools | Stored records and reports preserve the full plan, actual quality decisions, provenance and unknown coverage |
+| **P1 execution** | extract the path checks into a standalone `LocalJail`, then add `git`, `git_push` and `web_search` | `pytest tests/test_tool_contract.py -q` |
+| **P2 interaction** | a persistent `Channel` (SQLite or JSONL), pointed at by `make_bus` in the contract test | `pytest tests/test_channel_contract.py -q` |
+| **P3 data** | import `trace.jsonl` into SQLite so `make eval` runs | `make eval` |
 
-For P3 integration, confirm these current boundaries:
+Signatures, fields and conventions are in [the interface spec](../INTERFACES.en.md). Nothing
+needs guessing.
 
-- A task result is structured: `summary`, `files`, `notes` and `blockers`. Files
-  cross private workspace boundaries through explicit artifact integration.
-- Human exchanges use their original request IDs and project/conversation/task/role
-  scope. Answer restoration does not authorize a later tool operation.
-- `parent_id` is the task graph relationship; `parent_span` is the trace hierarchy.
-  A missing historical span parent must remain missing.
-- Formal team members use stable role identities and project-role memory across
-  their two tasks. Generic task instances retain the documented shared-role policy.
-- Replay task identities include the scenario and task ID. Pending, staged and
-  consumed human responses are different observations.
-- A source-linked replay export is available; its existence is not P2 consumer
-  sign-off. Actual P0/P1/P2 confirmation is still required.
+## 3. What changed recently
 
-Changes to `src/moumou/contracts/` require coordination with affected consumers and
-matching documentation/tests. Local implementation changes do not prove that all
-consumers have integrated them.
+The sub-agent area moved a lot lately, so older notes may not match:
 
-## Completion and evidence
+| Change | Does it affect you? |
+| --- | --- |
+| The lead agent has its own prompt | no |
+| Sub-agents report through `submit_result` (structured fields) | no |
+| A dead child wakes its parent; re-dispatched children carry a round prefix | no |
+| Roles can be revised, and carry a version | yes, if you read the `roles` table: `version` / `updated_at` |
+| **`TaskNode.result` is a structure now, not a string** | **yes, if you read task results: take the fields** |
 
-The latest P3 recovery, trace, snapshot, review and replay changes have authored
-regressions that have not been executed. Historical framework results belong to
-their recorded source version. They do not verify the new tree or complete the
-teacher's six goals.
+Details are in [the sub-agent document](../SUBAGENTS.en.md).
 
-Follow the [delivery checklist](../DELIVERY.en.md) for the repository, architecture,
-formal performance report, genuine collaborative commit history and presentation
-materials. Preserve real failures, unposted goals and unknown quality; do not turn
-scripted fixtures or agent `DONE` into task acceptance.
+## 4. Running the tests
 
-## Collaboration and Git
+| Command | Time | What it is |
+| --- | --- | --- |
+| `make test` | ~2s | all 142 |
+| `pytest tests/test_tool_contract.py -q` | ~1s | P1's acceptance |
+| `pytest tests/test_channel_contract.py -q` | <1s | P2's acceptance |
+| `make eval` | seconds per task | needs a key; P3's acceptance |
 
-Fetch remote `main` before a new task and inspect changes before merging. Use the
-assigned development branch (`dev-P3` for P3); do not overwrite another member's work
-or resolve a conflict without understanding both changes. For P3 commits, confirm
-the concise English message and exact paths before staging/committing. Merge and
-push require their own scope. Keep local planning, private evidence and generated
-run files outside the submission.
+**The contract suites must stay green after you swap in your implementation.** If you need to
+change anything under `src/moumou/contracts/`, raise it in the group first.
 
-If a contract or integration fails, record the source version, exact command,
-environment, observed output and reproduction steps. Use the
-[FAQ](../FAQ.en.md), [status](../STATUS.en.md) and role briefs for navigation.
+## 5. Branching
+
+One long-lived branch each: `feat/p1-sandbox`, `feat/p2-cli`, `feat/p3-eval`.
+Rebase onto main before merging so the history stays linear.
+
+## 6. If you get stuck
+
+Start with [the FAQ](../FAQ.en.md). If that does not answer it, post your branch and the steps to
+reproduce — do not sit on it. The contract layer is shared, and a workaround invented in private is
+a debt someone has to repay later.

@@ -11,16 +11,22 @@ through your channel.
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 import pytest
 
-from moumou.adapters import InMemoryBus
+from moumou.bus import SqliteBus
 from moumou.contracts import Channel, Message, Scope
 
 
 @pytest.fixture
 def make_bus():
-    """Swap this for your implementation: ``return SqliteBus(...)``."""
-    return lambda: InMemoryBus()
+    """Point the P0 contract test at the P2 persistent bus.
+
+    A fresh temp directory per instance keeps every test isolated.
+    """
+    return lambda: SqliteBus(db_path=Path(tempfile.mkdtemp()) / "bus.db")
 
 
 def msg(conv: str = "c1", sender: str = "a", recipients=None, kind: str = "chat", text="hi"):
