@@ -97,7 +97,8 @@ def test_memory_uses_saved_state_and_hash_checked_candidates_without_live_databa
                                  "created_at": "2026-11-15T02:00:00+00:00",
                                  "last_used_at": None, "lesson_sha256": "a" * 64}]}],
         "observations": [TraceEvent(task_id="t1", kind="memory", name="memory_prompt_observed",
-                                    payload={"memory_ids": ["old-memory"]}).model_dump(mode="json")],
+                                    payload={"memory_ids": ["old-memory"]}).model_dump(
+                                        mode="json")],
     }
     path.write_text(json.dumps(task), encoding="utf-8")
     snapshot = {"schema_version": 1, "task_id": "t1", "role": "lead",

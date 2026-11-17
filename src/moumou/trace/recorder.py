@@ -86,7 +86,9 @@ class Recorder:
     ) -> Iterator[TraceEvent]:
         """Time a block. The yielded event is mutable so callers can enrich it."""
         parent = self._active_span.get()
-        inherited_agent = parent.agent_id if parent is not None and parent.task_id == task_id else None
+        inherited_agent = (
+            parent.agent_id if parent is not None and parent.task_id == task_id else None
+        )
         ev = TraceEvent(
             task_id=task_id,
             parent_span=parent_span if parent_span is not None else (
@@ -123,7 +125,9 @@ class Recorder:
         """A zero-duration marker span (steering received, role created, ...)."""
         now = datetime.now(UTC)
         parent = self._active_span.get()
-        inherited_agent = parent.agent_id if parent is not None and parent.task_id == task_id else None
+        inherited_agent = (
+            parent.agent_id if parent is not None and parent.task_id == task_id else None
+        )
         ev = TraceEvent(
             task_id=task_id, kind=kind, name=name, t0=now, t1=now, status="ok",
             agent_id=agent_id if agent_id is not None else inherited_agent,

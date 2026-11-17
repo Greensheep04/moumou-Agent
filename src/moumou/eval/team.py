@@ -25,6 +25,7 @@ from moumou.eval.cases import Scenario
 from moumou.human_history import render_human_exchanges
 from moumou.orchestrator.delegation import Delegation, DelegationError
 from moumou.prompts import FRAMEWORK_RULES
+from moumou.sandbox.local import LocalJail
 
 _TEAM_ATTR = "_evaluation_team"
 _HISTORY_FILE = ".evaluation/prior-dialogue.txt"
@@ -76,13 +77,24 @@ class StableRoleWorkspace:
         source, target = Path(src).resolve(), Path(dst).resolve()
         if source not in self.paths.values() or target not in self.paths.values():
             return IntegrateResult(ok=False, error="integration is outside this instructor team")
-        if source == target:
+        try:
             for relative in artifacts:
-                if not (source / relative).resolve().is_relative_to(source):
-                    return IntegrateResult(ok=False, error="artifact escapes its role workspace")
+                LocalJail(source).resolve_artifact(relative)
+                LocalJail(target).resolve_artifact(relative)
+        except (OSError, ValueError, RuntimeError) as exc:
+            return IntegrateResult(ok=False, error=str(exc))
+        if source == target:
             # The same agent already owns these bytes; do not copy a file onto itself.
             return IntegrateResult(ok=True)
         return self.provider.integrate(source, target, artifacts)
+
+    def register_private_evidence(self, workspace, relative):
+        path = Path(workspace).resolve()
+        if path not in self.paths.values():
+            raise PermissionError("private evidence is outside this instructor team")
+        register = getattr(self.provider, "register_private_evidence", None)
+        if callable(register):
+            register(path, relative)
 
 
 class FixedTeamDelegation(Delegation):
@@ -104,11 +116,12 @@ class FixedTeamDelegation(Delegation):
 class TeamContextBuilder(ContextBuilder):
     """Pin the original instructor role; use factual prior handoffs, not invented summaries."""
 
-    def __init__(self, *args, scenario, workspaces=None, **kwargs):
+    def __init__(self, *args, scenario, workspaces=None, register_private_evidence=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.scenario = scenario
         self.prior_context = {}
         self.workspaces = dict(workspaces or {})
+        self.register_private_evidence = register_private_evidence
 
     @staticmethod
     def _json(value):
@@ -200,6 +213,8 @@ class TeamContextBuilder(ContextBuilder):
             else:
                 with target.open("xb") as stream:
                     stream.write(raw)
+            if self.register_private_evidence is not None:
+                self.register_private_evidence(workspace, relative.as_posix())
             references.append(
                 f"Full auxiliary context: {relative.as_posix()}; sha256={digest}; bytes={len(raw)}"
             )
@@ -382,6 +397,7 @@ def configure_team(engine, scenario: Scenario, previous_dialogue_path=None) -> T
     context = TeamContextBuilder(
         engine.policy, engine.budget, board=engine.board, scenario=scenario,
         workspaces=workspace.paths,
+        register_private_evidence=workspace.register_private_evidence,
     )
     delegation = FixedTeamDelegation(
         engine.repo, engine.roles, engine.trace, engine.tools.names(), allowed_roles=identities,
@@ -461,7 +477,12 @@ def _previous_context(engine, state, previous):
             if target.is_symlink() or not target.resolve().is_relative_to(workspace):
                 raise PermissionError("prior dialogue copy escapes the role workspace")
             target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists() and state.context.register_private_evidence is not None:
+                # Reject tracked/aliased evidence before replacing any old bytes.
+                state.context.register_private_evidence(workspace, _HISTORY_FILE)
             target.write_bytes(raw)
+            if state.context.register_private_evidence is not None:
+                state.context.register_private_evidence(workspace, _HISTORY_FILE)
         state.prior_dialogue_sha256 = digest
         context["dialogue_archive"] = {
             "role_private_path": _HISTORY_FILE, "sha256": digest, "bytes": len(raw),

@@ -308,7 +308,10 @@ def _print_evidence(console, view):
                 )
             table.add_row(
                 _cell(scenario["scenario_id"]),
-                _cell(f"{record.get('phase', 'unknown')} / {record.get('root_task_id', 'unknown')}"),
+                _cell(
+                    f"{record.get('phase', 'unknown')} / "
+                    f"{record.get('root_task_id', 'unknown')}"
+                ),
                 _cell(record.get("root_status")),
                 _cell(record.get("quality_status")),
                 _cell(quality.get("quality_status")),
@@ -335,7 +338,8 @@ def _print_summary(console, view):
     if view.duplicate_records:
         console.print(Text(f"相同身份/内容的重复记录 {view.duplicate_records} 条，仅显示一次。"))
     console.print(Text(
-        "单个 span 耗时和 trace tokens 仅展示原记录；不据事件跨度重算整场耗时、模型计费或任务质量。",
+        "单个 span 耗时和 trace tokens 仅展示原记录；"
+        "不据事件跨度重算整场耗时、模型计费或任务质量。",
     ))
 
 
@@ -391,7 +395,8 @@ def replay_tree(source, task_id: str, console: Console | None = None, *,
     roots = [item for item in view.items
              if item.event.parent_span is None or item.event.parent_span not in by_id]
     console.print(Panel(Text(
-        f"任务 {task_id} 的原始 span 树；scenario={scenario_id or view.scenario_ids or 'single source'}",
+        f"任务 {task_id} 的原始 span 树；"
+        f"scenario={scenario_id or view.scenario_ids or 'single source'}",
     ), border_style="cyan"))
     rendered = set()
 
@@ -421,7 +426,9 @@ def replay_tree(source, task_id: str, console: Console | None = None, *,
         walk(root)
     for item in view.items:
         if item.event.span_id not in rendered:
-            console.print(Text("循环/无自然根分量：保留原 parent，以下仅遍历一次。", style="yellow"))
+            console.print(Text(
+                "循环/无自然根分量：保留原 parent，以下仅遍历一次。", style="yellow",
+            ))
             walk(item)
     _print_summary(console, view)
 

@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import re
 import subprocess
 import threading
 import uuid
@@ -129,6 +130,11 @@ class GitWorkspaces:
     def release(self, path):
         with self._lock:
             managed = self._managed(path)
+            evidence = managed / ".evaluation"
+            if evidence.exists() or evidence.is_symlink():
+                # Git can remove ignored files with a clean worktree. Evidence
+                # registered below must not disappear as a cleanup side effect.
+                raise ValueError("workspace contains private evidence; retain it before release")
             # Keep branches and delivery history as evidence; reject dirty trees.
             common = Path(
                 self.git(
@@ -136,6 +142,47 @@ class GitWorkspaces:
                 ).stdout.strip()
             )
             self.git(common.parent, "worktree", "remove", str(managed))
+
+    def register_private_evidence(self, workspace, relative):
+        """Exclude one validated P3 evidence file, never the whole private directory.
+
+        This optional framework hook preserves the normal Git dirty-tree check.
+        Rules live only in this managed repository's info/exclude, not project
+        .gitignore or global configuration. Tracked evidence is not auto-untracked.
+        """
+        with self._lock:
+            managed = self._managed(workspace)
+            if not isinstance(relative, str) or not re.fullmatch(
+                r"\.evaluation/(?:context/[0-9a-f]{32}\.json|prior-dialogue\.txt)", relative,
+            ):
+                raise ValueError("unsupported private evidence path")
+            target = LocalJail(managed).resolve(relative)
+            if target != managed / relative or not target.is_file():
+                raise ValueError("private evidence must be an existing file without path aliases")
+            if relative.startswith(".evaluation/context/"):
+                digest = hashlib.sha256(target.read_bytes()).hexdigest()
+                if target.stem != digest[:32]:
+                    raise ValueError("private context evidence digest does not match its filename")
+            if self.git(managed, "ls-files", "--", relative).stdout.strip():
+                raise ValueError(
+                    "private evidence is tracked; explicit repository repair is required"
+                )
+            common = Path(self.git(
+                managed, "rev-parse", "--path-format=absolute", "--git-common-dir",
+            ).stdout.strip()).resolve()
+            exclude = common / "info" / "exclude"
+            if exclude.resolve() != exclude or (exclude.exists() and not exclude.is_file()):
+                raise PermissionError(
+                    "private evidence exclude path is not a regular metadata file"
+                )
+            exclude.parent.mkdir(parents=True, exist_ok=True)
+            original = exclude.read_bytes() if exclude.exists() else b""
+            rule = ("/" + relative).encode("ascii")
+            if rule not in original.splitlines():
+                with exclude.open("ab") as stream:
+                    if original and not original.endswith(b"\n"):
+                        stream.write(b"\n")
+                    stream.write(rule + b"\n")
 
     def integrate(self, src, dst, artifacts):
         with self._lock:
@@ -192,9 +239,9 @@ class GitWorkspaces:
         for rel in artifacts:
             if Path(rel).is_absolute():
                 raise PermissionError("artifact must be relative")
-            path = source_jail.resolve(rel, mutable=True)
+            path = source_jail.resolve_artifact(rel)
             normalized = source_jail.relative(path)
-            dest_jail.resolve(normalized, mutable=True)
+            dest_jail.resolve_artifact(normalized)
             if path.is_dir():
                 raise ValueError("artifacts must name files, not directories")
             if path.is_file():

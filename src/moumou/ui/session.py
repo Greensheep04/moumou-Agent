@@ -321,8 +321,10 @@ class FileSession:
                 os.link(temporary, target)
             except FileExistsError:
                 state = self._state(item)
-                return StageResult(item.request_id,
-                                   state if state != "pending" else "no_longer_pending", str(target))
+                return StageResult(
+                    item.request_id,
+                    state if state != "pending" else "no_longer_pending", str(target),
+                )
             except OSError as exc:
                 raise OSError(
                     "atomic no-clobber response publication is unavailable on this filesystem; "

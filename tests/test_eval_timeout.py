@@ -306,17 +306,44 @@ async def test_job_attachment_failure_never_runs_uncontained_code(tmp_path, monk
 
 @WINDOWS
 async def test_cancel_before_resume_reaps_the_real_suspended_worker(tmp_path, monkeypatch):
+    real = supervisor.subprocess
+    processes = []
+
+    def start(*args, **kwargs):
+        process = real.Popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
     def pending_cancel(self, pid):
         raise asyncio.CancelledError
 
+    # Hold the original process handle until the assertions finish. A PID alone
+    # may identify a different process after the worker handle has been released.
+    proxy = SimpleNamespace(**vars(real))
+    proxy.Popen = start
+    monkeypatch.setattr(supervisor, "subprocess", proxy)
     monkeypatch.setattr(supervisor._JobControl, "resume", pending_cancel)
-    with pytest.raises(asyncio.CancelledError):
-        await run_probes([fixture("cancelled")], tmp_path)
-    saved, = load_results(tmp_path)
-    assert saved["status"] == "cancelled" and saved["cleanup_complete"] is True
-    assert not running(saved["worker_pid"])
-    assert not (Path(saved["run_dir"]) / "probe-pids.json").exists()
-    assert read_json(tmp_path / "manifest.json")["status"] == "interrupted"
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await run_probes([fixture("cancelled")], tmp_path)
+        saved, = load_results(tmp_path)
+        assert saved["status"] == "cancelled" and saved["cleanup_complete"] is True
+        assert len(processes) == 1
+        process, = processes
+        assert process.pid == saved["worker_pid"]
+        assert process.poll() is not None
+        assert process.returncode == saved["worker_exit_code"]
+        assert not running(saved["worker_pid"])
+        assert not (Path(saved["run_dir"]) / "probe-pids.json").exists()
+        assert read_json(tmp_path / "manifest.json")["status"] == "interrupted"
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                # A failed assertion must not leave this test's owned suspended
+                # worker behind. Terminate by the retained handle, not a PID.
+                process.kill()
+                process.wait(timeout=5)
+            process._handle.Close()
 
 
 @WINDOWS

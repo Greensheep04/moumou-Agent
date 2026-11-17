@@ -83,7 +83,8 @@ def test_invalid_answers_do_not_publish_any_file(tmp_path, damage):
 
 
 @pytest.mark.parametrize("kind", ["approval", "review"])
-def test_permission_or_quality_requires_explicit_decision_and_keeps_its_original_kind(tmp_path, kind):
+def test_permission_or_quality_requires_explicit_decision_and_keeps_its_original_kind(
+        tmp_path, kind):
     root, client, item = make_session(tmp_path, kind=kind, options=("approve", "reject"))
     with pytest.raises(ValueError, match="explicit"):
         client.stage_response(item, HumanResponse(request_id=item.request_id, text="looks fine"))
@@ -101,7 +102,9 @@ def test_permission_or_quality_requires_explicit_decision_and_keeps_its_original
 def test_existing_answer_is_never_overwritten(tmp_path, directory, state):
     root, client, item = make_session(tmp_path)
     existing = root / "scenario_1/human" / directory / (item.request_id + ".json")
-    write_json(existing, HumanResponse(request_id=item.request_id, text="first operator").model_dump())
+    write_json(
+        existing, HumanResponse(request_id=item.request_id, text="first operator").model_dump()
+    )
     before = existing.read_bytes()
     result = client.stage_response(item, HumanResponse(request_id=item.request_id, text="second"))
     assert result.state == state and existing.read_bytes() == before
@@ -222,7 +225,9 @@ def test_pending_disappearing_during_read_is_a_normal_consumption_race(tmp_path,
 
     monkeypatch.setattr(client, "_read", disappeared)
     assert client.pending() == []
-    assert client.stage_response(item, HumanResponse(request_id=item.request_id, text="answer")).state == (
+    assert client.stage_response(
+        item, HumanResponse(request_id=item.request_id, text="answer")
+    ).state == (
         "no_longer_pending"
     )
 

@@ -541,7 +541,7 @@ def _declared_artifacts(workspace: Path, files: list[str]) -> list[str]:
         for path in files:
             if Path(path).is_absolute() or PureWindowsPath(path).anchor:
                 raise ValueError(f"absolute or drive-qualified path is not allowed: {path!r}")
-            resolved = jail.resolve(path)
+            resolved = jail.resolve_artifact(path)
             if not resolved.is_file():
                 raise ValueError(f"declared path is not an existing file: {path!r}")
             declared.append(jail.relative(resolved))

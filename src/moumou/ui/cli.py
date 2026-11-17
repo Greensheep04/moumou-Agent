@@ -31,8 +31,9 @@ class Console:
             from rich.panel import Panel
             from rich.text import Text
         except ModuleNotFoundError as exc:
-            raise RuntimeError("Install the optional P2 interface: python -m pip install -e '.[p2]'") \
-                from exc
+            raise RuntimeError(
+                "Install the optional P2 interface: python -m pip install -e '.[p2]'"
+            ) from exc
         self.rich = console if console is not None else RichConsole()
         self._panel, self._text = Panel, Text
 
@@ -140,7 +141,9 @@ async def run_session(
                     displayed.clear()
                     console.banner(context.scenario_id, context.conversation_id,
                                    mode="正式文件会话 / " + context.phase)
-                    console.info("保存的整场状态: " + str(session.manifest().get("status", "unknown")))
+                    console.info(
+                        "保存的整场状态: " + str(session.manifest().get("status", "unknown"))
+                    )
                 for item in session.pending():
                     if item.context != context:
                         continue  # Let the next poll update the phase banner first.
@@ -271,9 +274,15 @@ async def run_cli(
                 if command == "/history":
                     rows = bus.history(scope, limit=50)
                     for index, msg in enumerate(rows, 1):
-                        if not msg.recipients or HUMAN_ID in msg.recipients or msg.sender == HUMAN_ID:
-                            console.history_event("demo message bus" if demo else "selected message bus",
-                                                  index, msg.model_dump(mode="json"))
+                        if (
+                            not msg.recipients
+                            or HUMAN_ID in msg.recipients
+                            or msg.sender == HUMAN_ID
+                        ):
+                            console.history_event(
+                                "demo message bus" if demo else "selected message bus",
+                                index, msg.model_dump(mode="json"),
+                            )
                 elif command == "/pending":
                     for request in requests.values():
                         console.request(request)
@@ -364,7 +373,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="P2 frontend for an existing P3 file session")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--run", type=Path, help="existing formal RUN launched with --human files")
-    modes.add_argument("--demo", action="store_true", help="explicit offline scripted P2 simulation")
+    modes.add_argument(
+        "--demo", action="store_true", help="explicit offline scripted P2 simulation"
+    )
     args = parser.parse_args(argv)
     if args.run is None and not args.demo:
         parser.print_help()

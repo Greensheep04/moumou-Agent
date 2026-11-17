@@ -453,6 +453,18 @@ their exact auxiliary payload remains recoverable in the role's private
 `.evaluation/context/<digest-prefix>.json`. New filenames use the first 32 digest hex
 characters; references and validation metadata retain the full SHA-256. A same-name
 archive with different content is rejected, and existing archives are not renamed.
+The team adapter calls the optional provider hook
+`register_private_evidence(workspace, relative_file)` after saving validated context
+archives or `.evaluation/prior-dialogue.txt`. GitWorkspaces adds only these exact
+file paths to its managed repository's `info/exclude`; it does not ignore the
+directory, edit project/global ignore settings, or change the dirty-destination
+check. Ordinary files, unregistered `.evaluation/` files and staged/tracked changes
+still block delivery. Tracked evidence requires explicit repair rather than automatic
+untracking; existing dialogue copies are checked before their bytes are replaced.
+Registered evidence remains readable and cannot be declared or integrated
+as an artifact. Releasing a worktree containing private evidence is refused to retain
+the otherwise ignored bytes. Providers without this optional hook retain their existing
+behavior, and the default workspace/bus selection is unchanged.
 If mandatory instructions cannot fit, it raises
 `ContextAdmissionError` before the LLM call instead of slicing the goal. Attribute missing
 instructions to the framework's transmitted context, not to model noncompliance.

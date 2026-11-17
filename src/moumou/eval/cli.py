@@ -176,7 +176,9 @@ async def run_suite(args, scenarios):
     from moumou.eval.human import ConsoleHuman, FileHuman, RecordingLLM
     from moumou.eval.search_budget import SearchBudgetTool
     from moumou.eval.session_evidence import (
-        capture_artifact_snapshot, capture_scenario_state, sanitize_evidence,
+        capture_artifact_snapshot,
+        capture_scenario_state,
+        sanitize_evidence,
     )
     from moumou.eval.team import configure_team, submit_teacher_task
     from moumou.orchestrator import Engine, Settings

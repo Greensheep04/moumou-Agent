@@ -47,7 +47,8 @@ def export_for(*scenario_ids):
             }]},
             "task_results": [{
                 "record": {"phase": "task_1", "root_task_id": "t1", "root_status": "DONE",
-                           "nodes": [node], "quality_status": "awaiting_human_or_independent_review",
+                           "nodes": [node],
+                           "quality_status": "awaiting_human_or_independent_review",
                            "verified_goal_success": None},
                 "effective_quality": {
                     "quality_status": "human_rejected", "verified_goal_success": False,

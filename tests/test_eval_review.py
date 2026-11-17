@@ -61,7 +61,9 @@ async def answer_review(root, decision, *, supersedes=None):
 
 
 @pytest.mark.parametrize("decision,success", [("approve", True), ("reject", False)])
-async def test_file_review_derives_quality_without_changing_raw_results(tmp_path, decision, success):
+async def test_file_review_derives_quality_without_changing_raw_results(
+    tmp_path, decision, success,
+):
     _, path, manifest = saved_case(tmp_path)
     before_result, before_manifest = path.read_bytes(), manifest.read_bytes()
     review_path, review = await answer_review(tmp_path, decision)
@@ -172,7 +174,9 @@ def test_arbitrary_review_json_without_human_port_evidence_is_not_accepted(tmp_p
         build_report(tmp_path)
 
 
-async def test_console_review_requires_explicit_input_and_records_optional_note(tmp_path, monkeypatch):
+async def test_console_review_requires_explicit_input_and_records_optional_note(
+    tmp_path, monkeypatch,
+):
     saved_case(tmp_path)
     replies = iter(["", "approve fixture reviewer note"])
     monkeypatch.setattr("builtins.input", lambda prompt: next(replies))

@@ -94,7 +94,8 @@ def capture_artifact_snapshot(scenario_dir, workspace, node, phase, *, secrets=(
         entries.append(entry)
         temporary = None
         try:
-            if not isinstance(relative, str) or Path(relative).is_absolute() or PureWindowsPath(relative).anchor:
+            if (not isinstance(relative, str) or Path(relative).is_absolute()
+                    or PureWindowsPath(relative).anchor):
                 raise ValueError("delivery path must be relative")
             parts = relative.replace("\\", "/").split("/")
             if ".." in parts:
@@ -138,7 +139,9 @@ def capture_artifact_snapshot(scenario_dir, workspace, node, phase, *, secrets=(
                 entry["state"] = "changed"
                 continue
             full_hash = digest.hexdigest()
-            suffix = source.suffix if re.fullmatch(r"\.[A-Za-z0-9]{1,10}", source.suffix) else ".data"
+            suffix = (
+                source.suffix if re.fullmatch(r"\.[A-Za-z0-9]{1,10}", source.suffix) else ".data"
+            )
             destination = directory / (full_hash[:32] + suffix)
             if destination.exists():
                 if destination.is_symlink() or _digest(destination) != full_hash:
@@ -231,7 +234,8 @@ def validate_artifact_snapshot(scenario_dir, reference, *, task=None):
     if (type(manifest.get("selected_count")) is not int
             or type(manifest.get("captured_count")) is not int
             or manifest.get("selected_count") != len(entries)
-            or manifest.get("captured_count") != captured or manifest.get("status") != expected_status):
+            or manifest.get("captured_count") != captured
+            or manifest.get("status") != expected_status):
         raise ValueError("artifact snapshot counts disagree with entries")
     for key in ("status", "selection", "selected_count", "captured_count", "captured_at"):
         if reference.get(key) != manifest.get(key):
@@ -246,8 +250,12 @@ def capture_memory_snapshot(engine, nodes):
     snapshot = {"schema_version": 1, "captured_at": _now(), "stage": "post_engine_run",
                 "identity_policy": "project_role", "status": "recorded",
                 "scopes": [], "observations": [], "errors": [],
-                "observation_policy": "Recorded stage events; absence does not establish no retrieval or use.",
-                "record_view": "Active records returned by MemoryStore.all; deletion counts are unknown."}
+                "observation_policy": (
+                    "Recorded stage events; absence does not establish no retrieval or use."
+                ),
+                "record_view": (
+                    "Active records returned by MemoryStore.all; deletion counts are unknown."
+                )}
     if not getattr(engine.settings, "memory_enabled", False):
         snapshot["status"] = "disabled"
         return snapshot
@@ -277,7 +285,8 @@ def capture_memory_snapshot(engine, nodes):
         try:
             snapshot["observations"].extend(event.model_dump(mode="json")
                                             for event in engine.trace.query(node.id)
-                                            if event.kind == "memory" and event.name in MEMORY_OBSERVATIONS)
+                                            if event.kind == "memory"
+                                            and event.name in MEMORY_OBSERVATIONS)
         except Exception as exc:
             snapshot["status"] = "partial"
             snapshot["errors"].append({"task_id": node.id, "error_type": type(exc).__name__})

@@ -13,7 +13,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from moumou.adapters import FakeLLM
+from moumou.contracts import TaskNode
 from moumou.eval import cli
+from moumou.orchestrator import Engine, Settings
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULES = ("moumou", "moumou.eval.cli", "moumou.eval.report",
@@ -120,22 +123,29 @@ def test_primary_and_evaluation_module_help_both_describe_instructor_scenarios()
         assert expected in result.stdout.lower()
 
 
-def test_second_task_metrics_exclude_first_task_and_do_not_certify_self_report():
+def test_second_task_metrics_exclude_first_task_and_do_not_certify_self_report(tmp_path):
     def node(identity, parent, status):
-        return SimpleNamespace(
-            id=identity, parent_id=parent, status=status, role="lead", acceptance=[], result=None
+        return TaskNode(
+            id=identity, parent_id=parent, status=status, role="lead", goal=identity,
+            project_id="scenario_1", conversation_id="instructor-group",
         )
+
+    def forbidden(*args):
+        raise AssertionError("recording saved metrics must not invoke a model")
 
     old = [node("t1", None, "DONE"), node("t1.1", "t1", "DONE")]
     current = node("t2", None, "DONE")
     selected = [current, node("t2.1", "t2", "DONE"), node("t2.2", "t2", "DEAD")]
-    repo = SimpleNamespace(all_tasks=lambda: old + selected, get=lambda identity: current)
-    trace = SimpleNamespace(
-        query=lambda identity: [
-            SimpleNamespace(kind="acceptance", name="verdict", payload={"ok": True})
-        ]
+    settings = Settings(
+        root=tmp_path / "session", project_id=current.project_id,
+        conversation_id=current.conversation_id, memory_enabled=False, role_review_enabled=False,
     )
-    result = cli._task_record(SimpleNamespace(repo=repo, trace=trace), current, 12.5, "task_2")
+    with Engine(FakeLLM(forbidden), settings=settings) as engine:
+        for item in old + selected:
+            engine.repo.add(item)
+        engine.trace.record(task_id=current.id, kind="acceptance", name="verdict", ok=True)
+        engine.trace.record(task_id="t1", kind="tool", name="old_failure", ok=False)
+        result = cli._task_record(engine, current, 12.5, "task_2")
     assert {row["id"] for row in result["nodes"]} == {"t2", "t2.1", "t2.2"}
     assert result["observed_subtasks"] == 2
     assert result["observed_subtasks_done"] == 1
@@ -143,6 +153,9 @@ def test_second_task_metrics_exclude_first_task_and_do_not_certify_self_report()
     assert result["agent_declared_complete"] is True
     assert result["root_machine_accepted"] is None
     assert result["verified_goal_success"] is None
+    assert result["memory_snapshot"]["status"] == "disabled"
+    assert result["failure_snapshot"]["status"] == "recorded"
+    assert result["failure_snapshot"]["observed_tool_failures"] == 0
 
 
 @pytest.mark.parametrize("module", MODULES)

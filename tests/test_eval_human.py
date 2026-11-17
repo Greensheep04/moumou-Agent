@@ -115,15 +115,32 @@ async def test_invalid_response_never_reaches_the_response_hook(tmp_path, kind, 
     assert not (tmp_path / "consumed" / "invalid.json").exists()
 
 
-async def test_empty_question_answer_is_real_text_and_phase_is_captured_at_request(tmp_path):
+@pytest.mark.parametrize("text", ["", "   "])
+async def test_empty_question_answer_is_rejected_before_consumption(tmp_path, text):
+    observed = []
+    human = FileHuman(tmp_path, poll_interval_s=0.001,
+                      on_response=lambda *args: observed.append(args))
+    req = request()
+    task, _ = await pending(human, req)
+    reply(human, req, text=text)
+    with pytest.raises(ValueError, match="non-empty"):
+        await asyncio.wait_for(task, 3)
+    assert observed == []
+    assert (tmp_path / "pending" / f"{req.id}.json").is_file()
+    assert not (tmp_path / "consumed" / f"{req.id}.json").exists()
+    assert human.summary()["answered_requests"] == 0
+    assert [row["event"] for row in rows(tmp_path / "human-events.jsonl")] == ["human_request"]
+
+
+async def test_question_answer_phase_is_captured_at_original_request(tmp_path):
     human = FileHuman(tmp_path, poll_interval_s=0.001)
     human.set_phase("task_1")
     req = request()
     task, _ = await pending(human, req)
     human.set_phase("task_2")
-    reply(human, req, text="")
+    reply(human, req, text="Keep the original booking history.")
     answer = await asyncio.wait_for(task, 3)
-    assert answer.text == ""
+    assert answer.text == "Keep the original booking history."
     assert rows(tmp_path / "human-events.jsonl")[-1]["phase"] == "task_1"
     assert set(human.summary()["by_phase"]) == {"task_1"}
 
@@ -320,10 +337,26 @@ async def test_console_human_has_no_blank_approval_default(tmp_path, monkeypatch
     assert "Enter approve or reject explicitly" in capsys.readouterr().out
 
 
-async def test_console_question_accepts_an_actual_empty_answer(tmp_path, monkeypatch):
-    monkeypatch.setattr("builtins.input", lambda _: "")
-    response = await asyncio.wait_for(ConsoleHuman(tmp_path).ask(request()), 3)
-    assert response.text == "" and response.decision is None
+async def test_console_question_reprompts_until_an_actual_nonempty_answer(
+    tmp_path, monkeypatch, capsys,
+):
+    inputs = iter(["", "   ", "Retain cancellation history."])
+    prompts = []
+
+    def actual_input(prompt):
+        prompts.append(prompt)
+        return next(inputs)
+
+    monkeypatch.setattr("builtins.input", actual_input)
+    human = ConsoleHuman(tmp_path)
+    response = await asyncio.wait_for(human.ask(request()), 3)
+    assert response.text == "Retain cancellation history." and response.decision is None
+    assert len(prompts) == 3
+    assert capsys.readouterr().out.count("Enter a non-empty answer") == 2
+    assert human.summary()["answered_requests"] == 1
+    assert [row["event"] for row in rows(tmp_path / "human-events.jsonl")] == [
+        "human_request", "human_response",
+    ]
 
 
 async def test_console_review_note_is_the_actual_human_feedback(tmp_path, monkeypatch):

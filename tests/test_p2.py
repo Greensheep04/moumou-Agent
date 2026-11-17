@@ -137,7 +137,9 @@ async def test_history_orders_timestamp_instants_and_keeps_conversation_boundari
         await bus.publish(message("later inserted first", ts=start + timedelta(seconds=1)))
         await bus.publish(message("earlier", ts=start))
         await bus.publish(message("other", conversation="other", ts=start))
-        assert [item.content for item in bus.history(Scope(project_id="p", conversation_id="c"))] == [
+        assert [
+            item.content for item in bus.history(Scope(project_id="p", conversation_id="c"))
+        ] == [
             "earlier", "later inserted first",
         ]
 
@@ -162,7 +164,9 @@ async def test_bound_bus_rejects_foreign_publish_before_persistence(tmp_path):
         with pytest.raises(ValueError, match="bound conversation"):
             bus.subscribe("human", lambda msg: None,
                           scope=Scope(project_id="p", conversation_id="other"))
-        assert [item.content for item in bus.history(Scope(project_id="p", conversation_id="c"))] == [
+        assert [
+            item.content for item in bus.history(Scope(project_id="p", conversation_id="c"))
+        ] == [
             "allowed",
         ]
 
@@ -335,7 +339,9 @@ async def test_decision_requires_explicit_allowed_decision_before_consumption(ki
 
 async def test_duplicate_request_id_never_replaces_a_pending_or_consumed_request():
     human = CliHuman()
-    req = HumanRequest(id="same-id", task_id="t1", agent_id="a", kind="question", summary="Original")
+    req = HumanRequest(
+        id="same-id", task_id="t1", agent_id="a", kind="question", summary="Original"
+    )
     asked = asyncio.create_task(human.ask(req))
     try:
         await asyncio.sleep(0)

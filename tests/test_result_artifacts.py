@@ -84,7 +84,7 @@ async def test_unchanged_role_file_is_persisted_and_delivered_to_consumer(tmp_pa
 
 @pytest.mark.parametrize("invalid_kind", [
     "missing", "directory", "absolute", "parent", "git", "blank",
-    "files_type", "entry_type",
+    "files_type", "entry_type", "evaluation",
 ])
 async def test_invalid_export_batch_is_atomic_and_can_be_corrected(tmp_path, invalid_kind):
     case = load_cases(ROOT / "eval/tasks")[0]
@@ -119,11 +119,16 @@ async def test_invalid_export_batch_is_atomic_and_can_be_corrected(tmp_path, inv
         (workspace / "directory").mkdir()
         (workspace / ".git").mkdir()
         (workspace / ".git/config").write_text("private metadata", encoding="utf-8")
+        (workspace / ".evaluation").mkdir()
+        (workspace / ".evaluation/prior-dialogue.txt").write_text(
+            "private evidence", encoding="utf-8",
+        )
         outside = workspace.parent / "outside.txt"
         outside.write_text("outside this agent", encoding="utf-8")
         paths = {
             "missing": "missing.txt", "directory": "directory", "absolute": str(safe.resolve()),
             "parent": "../outside.txt", "git": ".git/config", "blank": "",
+            "evaluation": ".evaluation/prior-dialogue.txt",
         }
         if invalid_kind == "files_type":
             invalid_files = "safe.txt"

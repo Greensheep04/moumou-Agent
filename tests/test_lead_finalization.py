@@ -1,5 +1,6 @@
 """Framework evidence helps the lead finish; parent checks remain authoritative."""
 
+import json
 from copy import deepcopy
 
 import pytest
@@ -77,15 +78,13 @@ def test_parent_receives_trusted_checks_and_completion_guidance():
 
 
 def test_acceptance_expectations_are_visible_to_the_model():
-    ctx = context(
-        [],
-        acceptance=[
-            Acceptance(kind="json_key", target="proof.json", expect="passed=true"),
-            Acceptance(kind="command", target="python3 app.py", expect="0"),
-        ],
-    )
-    brief = ctx.messages()[1]["content"]
-    assert "passed=true" in brief and 'expect="0"' in brief
+    criteria = [
+        Acceptance(kind="json_key", target="proof.json", expect="passed=true"),
+        Acceptance(kind="command", target="python3 app.py", expect="0"),
+    ]
+    brief = context([], acceptance=criteria).messages()[1]["content"]
+    visible = [json.loads(line[2:]) for line in brief.splitlines() if line.startswith("- {")]
+    assert visible == [criterion.model_dump(mode="json") for criterion in criteria]
 
 
 @pytest.mark.parametrize(

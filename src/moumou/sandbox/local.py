@@ -29,3 +29,11 @@ class LocalJail:
 
     def relative(self, path: Path) -> str:
         return path.relative_to(self.root).as_posix()
+
+    def resolve_artifact(self, path: str) -> Path:
+        """Resolve a deliverable without exporting framework-private evidence."""
+        candidate = self.resolve(path, mutable=True)
+        parts = (*PureWindowsPath(path).parts, *candidate.relative_to(self.root).parts)
+        if any(part.casefold() == ".evaluation" for part in parts):
+            raise PermissionError("framework_private_artifact")
+        return candidate

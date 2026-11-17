@@ -325,6 +325,14 @@ JSONL 与 SQLite 必须使用不同文件。`Recorder.close()` 关闭日志和�
 
 `TeamContextBuilder` 固定保留完整原角色、当前目标、全部 `Acceptance` 和同任务已答信息，不修改源对象。可选历史、依赖、结论和经验先受限，完整辅助内容保存在私有 `.evaluation/context/<digest-prefix>.json`，新文件名为 32 位前缀、引用为完整 SHA-256，同名不同内容拒绝，不重命名旧归档。必需内容超限时抛 `ContextAdmissionError`，不切断目标；框架遗漏指令不能直接归为模型不服从。
 
+团队适配器在保存并校验上下文归档或 `.evaluation/prior-dialogue.txt` 后，调用提供方的可选
+`register_private_evidence(workspace, relative_file)`。GitWorkspaces 只把这些具体文件路径加入
+受管仓库的 `info/exclude`，不忽略整个目录、不改项目或全局忽略设置，原脏目标检查保持不变。
+普通文件、未登记的 `.evaluation/` 文件以及已暂存/已跟踪的修改仍阻止交付；已跟踪证据要求显式修复，
+不会自动取消跟踪，已有对话副本在覆盖前先检查。证据仍可读取，但不能声明或集成为交付产物；
+包含私有证据的工作树拒绝 release，
+避免清理时删除已经被 Git 排除的证据。不实现此可选钩子的提供方保持原行为，默认工作区和总线不变。
+
 ### 人类与模型证据
 
 TaskRepo 按 project/conversation/task/role 记录原 request ID/正文、response 和时间戳。`record_human_request`、`record_human_response`、`human_exchanges` 支持同任务重新进入，不恢复缺少配对的 tool call。缺失或损坏记录明确失败，工具审批重新进行。Gate 拒绝说明进入当次 ToolResult 的 `stderr`；ID 错误或没有显式决定均不是有效审批。记录本身不能鉴别人类手工输入或已授权辅助操作的身份来源。

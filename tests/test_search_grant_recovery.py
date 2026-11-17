@@ -14,7 +14,10 @@ def test_same_approval_is_idempotent_across_new_tool_instances(tmp_path):
     assert first.grant(2, approval_id="human-question")['limit'] == 8
     reopened = SearchBudgetTool(directory, max_requests=6, namespace="scenario_2")
     assert reopened.grant(2, approval_id="human-question")['limit'] == 8
-    events = [json.loads(line) for line in reopened.events_path.read_text(encoding="utf-8").splitlines()]
+    events = [
+        json.loads(line)
+        for line in reopened.events_path.read_text(encoding="utf-8").splitlines()
+    ]
     assert sum(row["event"] == "budget_granted" for row in events) == 1
     assert reopened.grant(1, approval_id="another-human-question")['limit'] == 9
 
@@ -38,7 +41,9 @@ def test_ambiguous_legacy_duplicate_grants_require_explicit_reconciliation(tmp_p
     tool = SearchBudgetTool(tmp_path / "search", max_requests=6)
     tool.grant(2, approval_id="legacy-id")
     with sqlite3.connect(tool.database) as db:
-        row = db.execute("SELECT namespace,kind,payload FROM events WHERE kind='budget_granted'").fetchone()
+        row = db.execute(
+            "SELECT namespace,kind,payload FROM events WHERE kind='budget_granted'"
+        ).fetchone()
         db.execute("INSERT INTO events(namespace,kind,payload) VALUES(?,?,?)", row)
     with pytest.raises(ValueError, match="conflicts"):
         tool.grant(2, approval_id="legacy-id")

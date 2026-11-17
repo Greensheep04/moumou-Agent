@@ -26,6 +26,11 @@ task quality.
 The default Engine uses LocalDirs. The formal team adapter wraps its provider with
 stable private role directories across sequential tasks. GitWorkspaces is an available
 injected backend; its presence does not mean every formal run uses Git worktrees.
+When used with P3, the optional `register_private_evidence` hook records exact context
+and dialogue filenames in local Git metadata. It preserves ordinary dirty-worktree
+rejection, evidence readability and artifact isolation; it never stages or commits
+private files. Unregistered files remain visible to the existing cleanliness check.
+Worktrees containing private evidence are retained instead of silently removed.
 
 ## Registered capabilities
 

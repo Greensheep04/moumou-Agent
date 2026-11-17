@@ -322,7 +322,10 @@ def test_full_current_goal_criteria_role_and_answers_are_mandatory_not_truncated
                                   timeout_s=37, description="MANDATORY-CRITERION")],
     })
     record_answer(repo, node)
-    role = RoleSpec(name=node.role, title="Original role", description="ORIGINAL-ROLE-INSTRUCTIONS")
+    role = RoleSpec(
+        name=node.role, title="Original role", description="ORIGINAL-ROLE-INSTRUCTIONS",
+        project_id=node.project_id, created_by="human",
+    )
     builder = ContextBuilder(ContextPolicy(opening_budget_tokens=8000), TokenBudget())
     ctx = builder.build(node, role, human_exchanges=repo.human_exchanges(node),
                         board_notes=["optional old note " * 10000])
@@ -341,7 +344,10 @@ def test_full_current_goal_criteria_role_and_answers_are_mandatory_not_truncated
 def test_runtime_compaction_keeps_full_recorded_answer_in_the_pinned_opening(ledger):
     _, repo, node = ledger
     record_answer(repo, node)
-    role = RoleSpec(name=node.role, title="Worker", description="Preserve actual constraints")
+    role = RoleSpec(
+        name=node.role, title="Worker", description="Preserve actual constraints",
+        project_id=node.project_id, created_by="human",
+    )
     policy = ContextPolicy(
         context_window=10000, max_output_tokens=1000, opening_budget_tokens=8000,
         compact_trigger_tokens=2000, compact_target_tokens=1000,
@@ -398,8 +404,10 @@ async def test_rejected_tool_note_reaches_model_and_earlier_approval_is_not_reus
         assert run.repo.get(node.id).status == "DONE"
         assert executions == [node.id] and len(requests) == 2
         assert requests[0].id != requests[1].id
-        assert all(req.project_id == "p" and req.conversation_id == "group" and req.role == node.role
-                   for req in requests)
+        assert all(
+            req.project_id == "p" and req.conversation_id == "group" and req.role == node.role
+            for req in requests
+        )
         assert run.repo.human_exchanges(node) == []
 
 

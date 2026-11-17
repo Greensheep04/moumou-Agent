@@ -73,7 +73,9 @@ async def test_quit_and_unsupported_steer_never_answer_or_cancel_the_real_backen
 
 async def test_explicit_request_id_stages_answer_and_reports_transport_state(tmp_path):
     root, session, _ = make_session(tmp_path)
-    commands = iter(["/answer unknown old answer", "/answer original-question keep history", "/quit"])
+    commands = iter([
+        "/answer unknown old answer", "/answer original-question keep history", "/quit",
+    ])
     display = Display()
 
     async def input_fn(prompt):
@@ -151,7 +153,8 @@ async def test_windows_poll_input_cancels_without_waiting_on_an_executor_thread(
 
 
 @pytest.mark.parametrize("failure", ["input", "demo"])
-async def test_demo_cleanup_runs_even_when_input_or_demo_fails_with_pending_question(tmp_path, failure):
+async def test_demo_cleanup_runs_even_when_input_or_demo_fails_with_pending_question(
+        tmp_path, failure):
     from moumou.bus import SqliteBus
 
     bus = SqliteBus(db_path=tmp_path / "bus.db", project_id="p", conversation_id="c")

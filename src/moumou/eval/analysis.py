@@ -435,7 +435,8 @@ def _session_analysis(model):
                 ).items())),
                 "retrieval_call_count": None, "causal_benefit": "not_established",
                 "limits": [
-                    "A context archive contains candidates at build time, not proof of admission/use.",
+                    "A context archive contains candidates at build time, "
+                    "not proof of admission/use.",
                     "No live memory database is treated as an earlier phase snapshot.",
                     "Absent telemetry is unknown, not zero retrieval calls.",
                     "Sequential teacher tasks are not independent on/off experiment pairs.",
