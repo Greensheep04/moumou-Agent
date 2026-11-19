@@ -33,6 +33,14 @@ class SchoolStreamTimeout(TimeoutError):
     """The bounded overall attempt deadline expired."""
 
 
+class SchoolStreamHTTPError(SchoolStreamError):
+    """Only raised on HTTP headers, before any response body is consumed."""
+
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        super().__init__(f"School stream HTTP {status_code}")
+
+
 def _positive(value: object, name: str, *, integer: bool = False) -> None:
     if (type(value) not in ((int,) if integer else (int, float))
             or not math.isfinite(value) or value <= 0):
@@ -75,10 +83,30 @@ def _json(raw: str) -> object:
         raise SchoolStreamError("Invalid JSON in school stream") from error
 
 
+def _offered_tool_names(tools: object) -> frozenset[str]:
+    """Bind a required response to this request's unambiguous function names."""
+    if not isinstance(tools, list) or not tools:
+        raise SchoolStreamError("Required tool choice needs nonempty function schemas")
+    names = []
+    for tool in tools:
+        function = tool.get("function") if isinstance(tool, dict) else None
+        name = function.get("name") if isinstance(function, dict) else None
+        if (not isinstance(tool, dict) or tool.get("type") != "function"
+                or not isinstance(name, str)
+                or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:-]{0,127}", name)):
+            raise SchoolStreamError("Required tool choice has invalid function schemas")
+        names.append(name)
+    if len(names) != len(set(names)):
+        raise SchoolStreamError("Required tool choice has ambiguous function names")
+    return frozenset(names)
+
+
 class _Assembly:
     def __init__(self, client: SchoolStreamClient, clock: Callable[[], float]) -> None:
         self.client, self.clock = client, clock
         self.content = ""
+        self.content_chars_received = 0
+        self.content_bound_exceeded = False
         self.reasoning_chars = 0
         self.tools: dict[int, dict[str, str]] = {}
         self.finish: str | None = None
@@ -86,6 +114,7 @@ class _Assembly:
         self.usage: dict[str, int] = {}
         self.first_content_s: float | None = None
         self.first_tool_s: float | None = None
+        self.required_tool_choice_satisfied: bool | None = None
 
     def consume(self, value: object) -> None:
         if not isinstance(value, dict) or "error" in value:
@@ -119,11 +148,13 @@ class _Assembly:
         if content is not None:
             if not isinstance(content, str):
                 raise SchoolStreamError("Non-text assistant content")
-            self.content += content
-            if len(self.content) > self.client.max_content_chars:
-                raise SchoolStreamError("School content bound exceeded")
             if content and self.first_content_s is None:
                 self.first_content_s = self.clock()
+            self.content_chars_received += len(content)
+            if self.content_chars_received > self.client.max_content_chars:
+                self.content_bound_exceeded = True
+                raise SchoolStreamError("School content bound exceeded")
+            self.content += content
         reasoning = delta.get("reasoning_content") or delta.get("reasoning")
         if isinstance(reasoning, str):
             self.reasoning_chars += len(reasoning)
@@ -170,7 +201,7 @@ class _Assembly:
             if self.first_tool_s is None:
                 self.first_tool_s = self.clock()
 
-    def response(self) -> LLMResponse:
+    def response(self, required_names: frozenset[str] | None = None) -> LLMResponse:
         if self.finish is None:
             raise SchoolStreamError("School stream lacks terminal finish")
         calls = []
@@ -190,6 +221,12 @@ class _Assembly:
         if ((self.finish == "tool_calls") != bool(calls)
                 or not (self.content or calls)):
             raise SchoolStreamError("Finish reason does not match completed assistant output")
+        if required_names is not None:
+            self.required_tool_choice_satisfied = bool(calls) and all(
+                call["function"]["name"] in required_names for call in calls
+            )
+            if not self.required_tool_choice_satisfied:
+                raise SchoolStreamError("Required tool choice was not satisfied")
         # Only normalized, validated complete output reaches the unchanged parent parser.
         return self.client._parse({"model": self.model or self.client.model, "usage": self.usage,
                                    "choices": [{"message": {
@@ -258,10 +295,13 @@ class _SSE:
 class SchoolStreamClient(DeepSeekClient):
     """Explicit opt-in SSE transport, compatible with the existing LLM protocol.
 
-No default CLI registration, forced tool choice, stream_options, automatic JSON
-fallback, or retry exists. A second attempt needs both max_attempts=2 and explicit
+The default remains auto tool choice; required-when-tools is an explicit policy
+for requests carrying nonempty tool schemas. No automatic fallback or stream_options
+exists. A second attempt needs both max_attempts=2 and explicit
 retry_transport=True; only httpx.TransportError is eligible, never HTTP/protocol
-errors, output length, cancellation or the overall deadline.
+errors, output length, cancellation or the overall deadline. Separate explicit
+transient_http_retries allows only pre-body 502/503/504 retries with 5s/15s
+backoff inside one shared call deadline. These two retry policies cannot combine.
 Reasoning control is omitted unless reasoning_effort="none" is explicitly selected.
 """
 
@@ -270,6 +310,8 @@ Reasoning control is omitted unless reasoning_effort="none" is explicitly select
         model: str | None = None, timeout_s: float = 180.0, *, read_timeout_s: float = 60.0,
         max_attempts: int = 1, retry_transport: bool = False, completion_cap: int | None = None,
         reasoning_effort: str | None = None,
+        tool_choice_policy: str = "auto",
+        transient_http_retries: int = 0,
         max_stream_bytes: int = 8 * 1024 * 1024, max_event_bytes: int = 256 * 1024,
         max_events: int = 50000, max_content_chars: int = 2 * 1024 * 1024,
         max_argument_chars: int = 256 * 1024, max_tools: int = 32,
@@ -290,16 +332,26 @@ Reasoning control is omitted unless reasoning_effort="none" is explicitly select
             raise ValueError("A second attempt requires explicit transport retry policy")
         if completion_cap is not None:
             _positive(completion_cap, "completion_cap", integer=True)
+        if type(transient_http_retries) is not int or transient_http_retries not in (0, 1, 2):
+            raise ValueError("transient_http_retries must be an integer from 0 to 2")
+        if transient_http_retries and (max_attempts != 1 or retry_transport):
+            raise ValueError("HTTP retries cannot combine with transport retry policy")
         if reasoning_effort is not None and (
             type(reasoning_effort) is not str or reasoning_effort != "none"
         ):
             raise ValueError("reasoning_effort must be None or 'none'")
+        if type(tool_choice_policy) is not str or tool_choice_policy not in {
+            "auto", "required-when-tools",
+        }:
+            raise ValueError("tool_choice_policy must be auto or required-when-tools")
         if on_attempt is not None and not callable(on_attempt):
             raise ValueError("on_attempt must be callable")
         super().__init__(api_key, base_url, model, timeout_s, max_retries=1)
         self.read_timeout_s, self.max_attempts = read_timeout_s, max_attempts
         self.retry_transport, self.completion_cap = retry_transport, completion_cap
         self.reasoning_effort = reasoning_effort
+        self.tool_choice_policy = tool_choice_policy
+        self.transient_http_retries = transient_http_retries
         self.on_attempt, self.transport = on_attempt, transport
 
     def _http(self) -> httpx.AsyncClient:
@@ -315,12 +367,15 @@ Reasoning control is omitted unless reasoning_effort="none" is explicitly select
             raise SchoolStreamError("School API key is not configured")
         payload = {"model": self.model, "messages": messages, "temperature": 0.2, "stream": True}
         if tools:
-            payload.update(tools=tools, tool_choice="auto")
+            choice = "required" if self.tool_choice_policy == "required-when-tools" else "auto"
+            payload.update(tools=tools, tool_choice=choice)
         if self.completion_cap is not None:
             payload["max_tokens"] = self.completion_cap
         if self.reasoning_effort is not None:
             payload["reasoning_effort"] = self.reasoning_effort
         call_id = uuid4().hex
+        if self.transient_http_retries:
+            return await self._chat_transient_http(payload, call_id)
         for attempt in range(1, self.max_attempts + 1):
             try:
                 return await self._attempt(payload, call_id, attempt)
@@ -331,38 +386,162 @@ Reasoning control is omitted unless reasoning_effort="none" is explicitly select
                     ) from None
         raise AssertionError("Unreachable school attempt state")
 
-    async def _attempt(self, payload: dict, call_id: str, attempt: int) -> LLMResponse:
+    async def _chat_transient_http(self, payload: dict, call_id: str) -> LLMResponse:
+        """Retry only header failures; all mutable accounting belongs to this call."""
+        call_started = time.monotonic()
+        deadline = call_started + self.timeout_s
+        call_timeout = asyncio.timeout(self.timeout_s)
+        try:
+            async with call_timeout:
+                for attempt in range(1, self.transient_http_retries + 2):
+                    row: dict = {}
+                    try:
+                        result = await self._attempt(
+                            payload, call_id, attempt, deadline=deadline,
+                            diagnostic=row, emit=False, call_timeout=call_timeout,
+                        )
+                        if attempt > 1:
+                            # Success-only usage is not the complete call's bill. Keep
+                            # known attempt usage in the sidecar, never report zero.
+                            result = result.model_copy(update={
+                                "usage_present": False, "usage_raw": {},
+                            })
+                        return result
+                    except SchoolStreamHTTPError as error:
+                        eligible = (error.status_code in (502, 503, 504)
+                                    and row.get("decoded_bytes") == 0
+                                    and row.get("first_body_byte_s") is None
+                                    and row.get("event_count") == 0
+                                    and row.get("tool_count") == 0)
+                        row["http_retry_eligible"] = eligible
+                        if not eligible:
+                            row["http_retry_decision"] = "ineligible"
+                            raise
+                        if attempt > self.transient_http_retries:
+                            row["http_retry_decision"] = "retry_limit_reached"
+                            raise
+                        delay = (5.0, 15.0)[attempt - 1]
+                        if deadline - time.monotonic() <= delay:
+                            row["http_retry_decision"] = "insufficient_deadline"
+                            raise SchoolStreamTimeout(
+                                "No call deadline remains for HTTP retry"
+                            ) from None
+                        row.update(http_retry_decision="backoff_permitted",
+                                   http_retry_backoff_planned_s=delay)
+                        backoff_started = time.monotonic()
+                        try:
+                            await asyncio.sleep(delay)
+                        except BaseException as error:
+                            deadline_cancel = (isinstance(error, asyncio.CancelledError)
+                                               and call_timeout.expired())
+                            row.update(http_retry_decision="backoff_interrupted",
+                                       http_retry_backoff_completed=False,
+                                       http_retry_backoff_error_class=(
+                                           "SchoolStreamTimeout" if deadline_cancel
+                                           else type(error).__name__
+                                       ))
+                            raise
+                        else:
+                            row.update(http_retry_decision="backoff_completed",
+                                       http_retry_backoff_completed=True)
+                        finally:
+                            row["http_retry_backoff_elapsed_s"] = (
+                                time.monotonic() - backoff_started
+                            )
+                        if time.monotonic() >= deadline:
+                            row["http_retry_decision"] = "deadline_after_backoff"
+                            raise SchoolStreamTimeout(
+                                "School stream call deadline expired"
+                            ) from None
+                    except httpx.TransportError as error:
+                        # Opting into HTTP retries does not opt into transport retries.
+                        raise SchoolStreamError(
+                            f"School stream transport failed ({type(error).__name__})"
+                        ) from None
+                    finally:
+                        if row:
+                            row["call_elapsed_s"] = time.monotonic() - call_started
+                            row["call_deadline_expired"] = (
+                                call_timeout.expired() or time.monotonic() >= deadline
+                            )
+                            if self.on_attempt is not None:
+                                self.on_attempt(row)
+        except TimeoutError as error:
+            raise SchoolStreamTimeout("School stream call deadline expired") from error
+        raise AssertionError("Unreachable school HTTP retry state")
+
+    async def _attempt(
+        self, payload: dict, call_id: str, attempt: int, *, deadline: float | None = None,
+        diagnostic: dict | None = None, emit: bool = True,
+        call_timeout: asyncio.Timeout | None = None,
+    ) -> LLMResponse:
         started = time.monotonic()
 
         def clock() -> float:
             return time.monotonic() - started
 
         assembly = _Assembly(self, clock)
+        required_names = (_offered_tool_names(payload.get("tools"))
+                          if payload.get("tool_choice") == "required" else None)
         parser = _SSE(assembly, self)
         response = None
-        diagnostic = {"call_id": call_id, "attempt": attempt, "status": "failed",
+        diagnostic = {} if diagnostic is None else diagnostic
+        diagnostic.update({"call_id": call_id, "attempt": attempt, "status": "failed",
                       "configured_model": _identifier(self.model), "returned_model": None,
                       "requested_reasoning_effort": self.reasoning_effort,
+                      "configured_tool_choice_policy": self.tool_choice_policy,
+                      "requested_tool_choice": payload.get("tool_choice"),
+                      "offered_tool_count": (len(payload["tools"])
+                                             if isinstance(payload.get("tools"), list) else
+                                             0 if payload.get("tools") is None else None),
+                      "provider_tool_choice_compliance": None,
+                      "requested_completion_cap": self.completion_cap,
+                      "max_content_chars": self.max_content_chars,
+                      "max_argument_chars": self.max_argument_chars,
+                      "provider_output_limit_compliance": None,
                       "HTTP_status": None, "headers_s": None, "first_body_byte_s": None,
-                      "decoded_bytes": 0, "error_class": None, "partial_discarded": True}
-        close_budget = min(1.0, self.timeout_s / 5)
+                      "decoded_bytes": 0, "error_class": None, "partial_discarded": True,
+                      "configured_transient_http_retries": self.transient_http_retries,
+                      "legacy_max_attempts": self.max_attempts,
+                      "legacy_retry_transport": self.retry_transport,
+                      "max_http_attempts_per_call": (self.transient_http_retries + 1
+                                                     if self.transient_http_retries
+                                                     else self.max_attempts),
+                      "shared_call_deadline_s": (self.timeout_s if deadline is not None else None),
+                      "http_request_started": False, "http_retry_eligible": None,
+                      "http_retry_decision": None, "http_retry_backoff_planned_s": None,
+                      "http_retry_backoff_elapsed_s": None,
+                      "http_retry_backoff_completed": None,
+                      "http_retry_backoff_error_class": None,
+                      "call_deadline_expired": False})
+        remaining = self.timeout_s if deadline is None else deadline - time.monotonic()
+        close_budget = min(1.0, max(0.0, remaining) / 5)
         try:
             try:
-                async with asyncio.timeout(self.timeout_s - close_budget):
+                if remaining <= 0:
+                    raise SchoolStreamTimeout("School stream call deadline expired")
+                async with asyncio.timeout(remaining - close_budget):
                     request = self._http().build_request(
                         "POST", f"{self.base_url}/chat/completions", json=payload,
                         headers={"Authorization": f"Bearer {self.api_key}",
                                  "Content-Type": "application/json"},
                     )
+                    diagnostic["http_request_started"] = True
                     response = await self._http().send(request, stream=True)
                     diagnostic["headers_s"] = clock()
                     diagnostic["HTTP_status"] = response.status_code
+                    if deadline is not None and time.monotonic() >= deadline:
+                        raise SchoolStreamTimeout("School stream call deadline expired")
                     if response.status_code != 200:
+                        if self.transient_http_retries:
+                            raise SchoolStreamHTTPError(response.status_code)
                         raise SchoolStreamError(f"School stream HTTP {response.status_code}")
                     kind = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
                     if kind != "text/event-stream":
                         raise SchoolStreamError("School stream requires text/event-stream")
                     async for chunk in response.aiter_bytes():
+                        if deadline is not None and time.monotonic() >= deadline:
+                            raise SchoolStreamTimeout("School stream call deadline expired")
                         if chunk and diagnostic["first_body_byte_s"] is None:
                             diagnostic["first_body_byte_s"] = clock()
                         diagnostic["decoded_bytes"] += len(chunk)
@@ -374,37 +553,64 @@ Reasoning control is omitted unless reasoning_effort="none" is explicitly select
                     parser.feed(b"", final=True)
                     if not parser.done:
                         raise SchoolStreamError("School stream ended before DONE")
-                    result = assembly.response()
+                    if deadline is not None and time.monotonic() >= deadline:
+                        raise SchoolStreamTimeout("School stream call deadline expired")
+                    result = assembly.response(required_names)
             except TimeoutError as error:
                 raise SchoolStreamTimeout("School stream attempt deadline expired") from error
             diagnostic.update(status="completed", partial_discarded=False)
             return result
         except BaseException as error:
             cancelled = isinstance(error, asyncio.CancelledError)
-            diagnostic["status"] = "cancelled" if cancelled else "failed"
-            diagnostic["error_class"] = type(error).__name__
+            deadline_cancel = cancelled and call_timeout is not None and call_timeout.expired()
+            diagnostic["status"] = "cancelled" if cancelled and not deadline_cancel else "failed"
+            diagnostic["error_class"] = (
+                "SchoolStreamTimeout" if deadline_cancel else type(error).__name__
+            )
             raise
         finally:
             try:
                 if response is not None:
-                    remaining = min(close_budget, max(0.001, self.timeout_s - clock()))
-                    async with asyncio.timeout(remaining):
+                    close_remaining = (self.timeout_s - clock() if deadline is None
+                                       else deadline - time.monotonic())
+                    async with asyncio.timeout(min(close_budget, max(0.001, close_remaining))):
                         await response.aclose()
             except BaseException as error:
-                diagnostic.update(status="cancelled" if isinstance(error, asyncio.CancelledError)
+                cancelled = isinstance(error, asyncio.CancelledError)
+                deadline_cancel = (cancelled and call_timeout is not None
+                                   and call_timeout.expired())
+                diagnostic.update(status="cancelled" if cancelled and not deadline_cancel
                                   else "failed", partial_discarded=True,
-                                  error_class=type(error).__name__)
+                                  error_class=("SchoolStreamTimeout" if deadline_cancel
+                                               else type(error).__name__))
                 raise
             finally:
                 diagnostic.update(
+                    call_deadline_expired=(
+                        (call_timeout is not None and call_timeout.expired())
+                        or (deadline is not None and time.monotonic() >= deadline)
+                    ),
                     completion_s=clock(), returned_model=_identifier(assembly.model),
                     first_event_s=parser.first_event_s, first_content_s=assembly.first_content_s,
                     first_tool_s=assembly.first_tool_s, event_count=parser.events,
                     finish_reason=assembly.finish, done=parser.done,
                     content_chars=len(assembly.content), reasoning_chars=assembly.reasoning_chars,
+                    content_chars_received=assembly.content_chars_received,
+                    content_bound_exceeded=assembly.content_bound_exceeded,
+                    limit_triggered=("ordinary_content_characters"
+                                     if assembly.content_bound_exceeded else
+                                     "provider_length_finish" if assembly.finish == "length"
+                                     else None),
                     tool_count=len(assembly.tools), usage_raw=dict(assembly.usage),
+                    required_tool_choice_satisfied=assembly.required_tool_choice_satisfied,
                     usage_present=all(key in assembly.usage
                                       for key in ("prompt_tokens", "completion_tokens")),
+                    returned_call_usage_complete=(
+                        diagnostic["status"] == "completed"
+                        and not (self.transient_http_retries and attempt > 1)
+                        and all(key in assembly.usage
+                                for key in ("prompt_tokens", "completion_tokens"))
+                    ),
                 )
-                if self.on_attempt is not None:
+                if emit and self.on_attempt is not None:
                     self.on_attempt(diagnostic)

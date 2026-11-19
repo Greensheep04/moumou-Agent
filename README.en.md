@@ -22,6 +22,23 @@ explicitly requires HTML slides.
 | Integrate another module | [Interfaces](docs/INTERFACES.en.md) · [Team responsibilities](docs/roles/TASKS.en.md) |
 | Check verified versions and outstanding acceptance | [Performance and verification](docs/PERFORMANCE.en.md) |
 
+The working tree `79a0dbaa…`, validated on November 19, recorded 1779 passes,
+8 skips and zero Ruff diagnostics. Software, news and fund were each attempted; all
+three Task1 roots ended DEAD after pre-body HTTP502, and no Task2 ran. Formal files
+and new Tavily requests were zero; content quality remains unknown. Testing is
+paused at the user's request, and the cause of 502 is unconfirmed. See
+[performance](docs/PERFORMANCE.en.md) for execution identities, profiles and evidence.
+
+Earlier that day, `73e1c969…` recorded 1728 passes, 8 skips and zero Ruff diagnostics.
+Its software Task1 subsequently failed with HTTP502 and no formal files; Task2 did
+not run. That sealed record remains separate from the later three-scenario attempts.
+
+The earlier working tree validated on 2026-11-19, source `16981d95…`, recorded
+1668 passed, 8 skipped and zero Ruff diagnostics. Its assisted NewsTask1 trial
+ended agent-root DONE with ten formal files, but content qualifications and unknown
+human quality remain. This is not same-source acceptance of all six instructor
+goals. See the [versioned results](docs/PERFORMANCE.en.md).
+
 As of 2026-11-18, original published `085b12e`, research-reuse source `e59ee40c…`
 and assisted revisions on `6a830670…` retain separate evidence. Fund1 on 6a formally
 delivered four files but still needs content corrections. The revised news Task1
@@ -30,7 +47,7 @@ seven news Task1 child candidates support the core content on independent review
 they are still not a formal delivery. That news run never started Task2.
 Human-quality decisions remain unknown.
 
-Current source `be0d3f57…` completed full native Windows Conda `nlp` regression:
+Published baseline source `be0d3f57…` completed full native Windows Conda `nlp` regression:
 1613 passed, 8 skipped, 0 failures/errors and zero Ruff diagnostics. Pytest took
 180.15s (wrapper 180.562s), with unchanged source/tests. Failed-input recovery is
 limited to a parent's own children after all dependencies finish, retaining the
@@ -125,12 +142,21 @@ python -m moumou
 real execution and waits for real human answers and quality decisions.
 `python -m moumou.eval.cli` is the same formal entry.
 
-The default is `--llm-transport buffered`. Explicitly select `--llm-transport stream`
-for a separate streaming validation; it never automatically downgrades to buffered.
-An optional `--llm-reasoning-effort none` requires stream mode. Omitting it keeps
-the provider's default; its effect must be verified for the selected endpoint/model.
-After cleanup, stream mode writes metadata-only `stream-transport.json`; missing
-usage stays unknown. See [evaluation](docs/EVAL.en.md) for configuration and limits.
+The default is `--llm-transport buffered`. Explicit stream mode offers reasoning,
+output limits and `--llm-tool-choice required-when-tools`. The latter requests
+complete tool calls only when tools are offered, retaining plain tool-free calls
+and never downgrading after failure. `--require-declared-inputs` defaults to false.
+Independently selectable `--opening-context-tokens` controls the teacher opening
+quota, retaining 8000 when omitted without changing P1 defaults or EMA. See
+[evaluation](docs/EVAL.en.md) for `--llm-completion-cap`,
+`--llm-max-content-chars`, declarations, diagnostics and complete examples. These
+settings establish neither factual truth, permission nor instructor acceptance.
+
+Stream-only `--llm-transient-http-retries 0|1|2` explicitly selects HTTP retries,
+defaulting to zero. Nonzero values retry only pre-body 502/503/504 headers, using
+fixed 5s/15s waits within the original call deadline. Partial 200 responses and output
+checks are not bypassed; whole-call usage after retry may remain unknown. See
+[evaluation](docs/EVAL.en.md#bounded-transient-http-retries) for operation and accounting.
 
 The original [instructor bank](eval/tasks/README.md) has three groups, each with
 four supplied roles and two sequential tasks. Task 2 reuses its group's identities,

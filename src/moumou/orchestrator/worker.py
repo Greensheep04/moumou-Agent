@@ -101,6 +101,9 @@ class TaskRunner:
         ) as span:
             try:
                 try:
+                    input_validator = getattr(self.context, "validate_inputs", None)
+                    if callable(input_validator):
+                        input_validator(node, workspace)
                     deliveries = self._materialise_dependencies(node, workspace)
                     await self._loop(node, role, agent, workspace, deliveries)
                 except asyncio.CancelledError:

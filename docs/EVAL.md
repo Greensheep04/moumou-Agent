@@ -147,12 +147,48 @@ python -m moumou --llm-transport stream --llm-reasoning-effort none --out runs/t
 
 省略选项时为 `None`，请求不发送 `reasoning_effort` 字段；buffered 模式拒绝该选项。`test.json` 的 `model.reasoning_effort`、流式侧记录的 `reasoning_effort` 及每次尝试的 `requested_reasoning_effort` 保存请求设置，不保证提供方实际遵守。在同一学校端点及指定模型的一次固定请求诊断中，`none` 返回完整的 `read_source` 工具调用，但未执行工具；默认及 `thinking.type=disabled` 试验以 `finish_reason=length` 结束。这不是老师题结果，也不是 HTTP 504 的通用修复。
 
-CLI 的 `stream` 每次模型调用只尝试一次，不自动降级为 buffered，不强加单次 completion token 上限；原节点累计执行预算仍有效。只有完整且有效的 SSE 响应才交给 `RecordingLLM`，部分文本或工具调用不执行。每场景的 `stream-transport.json` 单独保存尝试、时间、完成状态和实际 usage；其调用 ID 独立于对话 ID，不能按顺序猜测对应关系或阶段。缺失 usage 不等于零，也不能拼成完整计费总量。Worker 重试与传输尝试分开解释；可选传输不证明长请求 HTTP 504 已解决，也不改写既有失败或老师成绩。字段细节见[接口说明](INTERFACES.md)。
+CLI 的 `stream` 默认每次模型调用只尝试一次；显式受限HTTP重试另见下文。不自动降级为 buffered，省略配置时不设单次 completion token 请求上限；原节点累计执行预算仍有效。只有完整且有效的 SSE 响应才交给 `RecordingLLM`，部分文本或工具调用不执行。每场景的 `stream-transport.json` 单独保存尝试、时间、完成状态和实际 usage；其调用 ID 独立于对话 ID，不能按顺序猜测对应关系或阶段。缺失 usage 不等于零，也不能拼成完整计费总量。Worker重试、旧transport重试与新HTTP重试分开解释；可选传输不证明长请求 HTTP 504 已解决，也不改写既有失败或老师成绩。字段细节见[接口说明](INTERFACES.md)。
 
-当前源码 `be0d3f57…` 完成原生 Windows Conda `nlp` 全量回归：1613 passed、8 skipped、0 failures/errors、Ruff 0 问题，pytest 180.15s（执行包装层 180.562s），源码与测试前后不变。父任务只可在全部依赖进入终态后审阅自己子任务的失败，并继续受 `MAX_WAKEUPS` 限制；失败传播循环至稳定状态，不豁免验收或质量检查。
+已发布基线源码 `be0d3f57…` 完成原生 Windows Conda `nlp` 全量回归：1613 passed、8 skipped、0 failures/errors、Ruff 0 问题，pytest 180.15s（执行包装层 180.562s），源码与测试前后不变。父任务只可在全部依赖进入终态后审阅自己子任务的失败，并继续受 `MAX_WAKEUPS` 限制；失败传播循环至稳定状态，不豁免验收或质量检查。
 
 新闻首题轮 `news-dependency-retest-01` 沿用中止基线的五份输入文件、原角色和目标及操作员反馈字节，采用显式 stream/none、复用六条公开记录且新 Tavily 配额为零，自然结束为根任务 DEAD、正式导出为零，耗时 4202.906s、质量保持 null。失败检查器的下游编辑没有启动，父任务得到恢复机会，直接验证了调度修复；但恢复计划仍遗漏必要文件依赖，替代编辑未能阅读实际新闻包。
 
 四次失败流式尝试均为 HTTP200、首响应在 1.1s 内开始，却持续生成约 219k–251k 个普通正文字符，没有工具调用、finish 或 DONE，最终触及本地时限；reasoning 字符为零。这是响应未完整结束，不证明无响应或网络迟延；传输 ID 不能自行映射为对话任务。45 条真实人答累计等待 3129.672s，等待可重叠，不能直接从交付墙钟中扣除。来源完整性及 784-span 回放检查通过，但 33 条文件凭证均未应用于零文件正式快照。候选仅供取证，时态、因果表述、审阅记录的日期区分和最终编辑审阅仍需纠正；本轮辅助单目标不构成标准六题成绩。
 
 历史检查点 `556d78fc…` 完成 1601 passed、8 skipped、0 failures/errors、Ruff 0 问题，pytest 178.56s（执行包装层 178.938s），源码与测试前后不变。该版包含推理选项和凭证交接，但不证明老师内容质量；较早检查点 `8bc0c2ca…` 的 1538 passed、8 skipped 另行保留。556d 原新闻首题辅助轮因记者耗尽 token 预算重试并暴露 P1 失败依赖调度问题，由操作员中止。原始 manifest 仍为 `running`，没有最终 Task1 结果、导出快照或流式侧记录；精确原始记录与独立停机证据分别保存，不能编造成自然收尾 DEAD 或经过验证的零文件导出。内容与质量保持未知，该中止轮及其框架检查点不与当前源码和新复测混算。
+
+## 显式输出限额与文件输入
+
+`--llm-completion-cap` 与 `--llm-max-content-chars` 仅用于显式 stream 模式。前者请求提供方 `max_tokens`，不保证其遵守；后者在本地限制普通内容的 Unicode 码点数，与默认262144字符的工具参数限额分开。省略时保留无 completion 请求上限及2097152字符的普通内容上限。无效参数或 buffered 组合在读取配置、创建输出前拒绝。超限、length结束或不完整响应均丢弃部分结果，不执行半截工具。
+
+```powershell
+python -m moumou --llm-transport stream --llm-reasoning-effort none --llm-completion-cap 16384 --llm-max-content-chars 32768 --require-declared-inputs --out runs/test/NEW_BOUNDED_SESSION
+```
+
+`--require-declared-inputs` 默认关闭，独立于传输模式。每个计划子任务必须声明 `inputs: [{producer, path}]` 或 `[]`；producer须是同计划、已列入deps的任务键。原生复制前检查同范围DONE生产者的声明文件，消费者首次调用模型前核对接收字节。首接收收据不证明理解、最终审阅或人工签收，框架也不推断遗漏的输入。见[显式输入接口](INTERFACES.md#显式文件输入)。
+
+较早工作树阶段 `16981d95…` 在原生Windows Conda `nlp` 完成1668 passed、8 skipped、Ruff0；该阶段资格与已发布BE0及后续源码、老师内容审阅分开，见[性能证据](PERFORMANCE.md)。
+
+## 显式开场配额与工具请求策略
+
+`--opening-context-tokens` 为正式团队单独选择开场的估算 token 配额，省略时仍为8000。显式值必须是500至2147483647的整数，且不超过配置的 `prompt_ceiling`；这是运行保护，不是提供方容量声明。团队适配器复制上下文策略，仅用于 `TeamContextBuilder`；通用P1策略、共享EMA校准和节点累计预算不变。完整角色、当前及祖先目标、验收和已答信息仍为必需内容，超过硬限仍明确拒绝，不删除要求或自动重置校准。该选项独立于传输模式。
+
+`--llm-tool-choice auto|required-when-tools` 只接受显式stream模式，省略时保留原auto行为。`required-when-tools` 仅在本次请求提供非空工具schema时发送 `tool_choice="required"`；无工具请求保留原plain格式，不发送 `tool_choice`。这是发请求前选择的策略分支，不是失败后降级。required响应必须包含参数为有效JSON对象、名称属于本次提供集合的完整工具调用，具有一致的 `tool_calls` 结束原因及DONE；不满足时失败并丢弃部分结果，不回退auto或执行半截工具。它不证明参数符合完整JSON Schema、事实正确、工具已执行或操作获批，实际执行仍经过Gate。
+
+可先只查看选择的配置，不调用模型：
+
+```powershell
+python -m moumou --plan --llm-transport stream --llm-reasoning-effort none --llm-completion-cap 16384 --llm-max-content-chars 32768 --require-declared-inputs --opening-context-tokens 32768 --llm-tool-choice required-when-tools
+```
+
+`opening_context_policy` 在计划和运行清单中保存请求值、有效值及prompt ceiling；stream策略和逐次实际请求另外留证，见[接口字段](INTERFACES.md#开场配额与工具请求策略)。较早 `73e1c969…` 的1728/8/Ruff0及软件失败属于独立阶段。11月19日验证源码 `79a0dbaa…` 已完成1779 passed、8 skipped、Ruff0；新 `resilient01` 三场景均实际尝试，三个首题在正文前HTTP502后DEAD，三个第二题未执行，正式交付与新Tavily均0，不能称六题内容通过。新闻实际导入6条公开记录，基金通过额外绑定身份的数据适配器导入真实6+4；这不代表模型已读来源，也不能靠单个 `--reuse-sources` 参数完整重现。本次测试已按用户请求暂停，后续不得自动重启已消费claim。分阶段身份、复现边界及未知质量见[性能报告](PERFORMANCE.md)。
+
+## 受限瞬时HTTP重试
+
+`--llm-transient-http-retries 0|1|2` 选择额外HTTP重试次数；省略为None且客户端有效值仍0，显式0也要求stream。值2最多启动3次HTTP请求。仅响应头为502/503/504、尚未读取任何正文/SSE事件/工具片段时可重试，先后固定等待5秒、15秒。等待及全部请求共享原 `timeout_s` 协作式截止时间（本轮180秒），不重置每次请求时限；余量不足时失败。其他HTTP状态、transport错误、200部分响应、协议/length/输出上限失败及取消都不会触发该策略，不降级为auto或buffered，不派发部分工具。
+
+```powershell
+python -m moumou --plan --llm-transport stream --llm-transient-http-retries 2
+```
+
+非零HTTP策略不能和Python旧 `max_attempts=2` 或 `retry_transport=True` 叠加；0保留旧路径及旧参数自身的约束。它与Worker重试不同，也不增加Tavily额度。计划、运行清单和sidecar记录选择、HTTP上限、真实发送尝试及退避结果，见[接口字段](INTERFACES.md#受限http重试与用量)。即使后一次请求成功，前面失败请求的用量仍未知，因此整调用返回 `usage_present=False`、`usage_raw={}`；成功attempt的已知usage留在sidecar。不能把最终成功请求或响应中保留的token数字当作整个调用账单，也不能把失败费用写为0。受限重试是显式容错配置，不是提供方可靠性或内容验收证明。

@@ -82,7 +82,7 @@ python -m moumou.eval.cli --tasks eval/tasks
 python -m moumou --scenario scenario_1 --human files --out runs/test/NEW_SESSION
 ```
 
-模型响应默认仍使用 buffered 客户端。在同一入口显式添加 `--llm-transport stream` 可选择学校 SSE 客户端；它只接受完整响应，另存尝试元数据，不自动降级到 buffered，也不自动重试 HTTP 失败。短请求检查不能证明长任务可靠性或内容事实正确。
+模型响应默认仍使用 buffered 客户端。在同一入口显式添加 `--llm-transport stream` 可选择学校 SSE 客户端；它只接受完整响应，另存尝试元数据，不自动降级到 buffered，默认不重试HTTP失败。受限HTTP重试需另行显式选择，见下文。短请求检查不能证明长任务可靠性或内容事实正确。
 
 学校流式客户端另支持显式推理设置：
 
@@ -92,7 +92,19 @@ python -m moumou --llm-transport stream --llm-reasoning-effort none --out runs/t
 
 省略 `--llm-reasoning-effort` 时值为 `None`，请求不发送该字段；buffered 模式拒绝此选项。运行清单、流式侧记录及尝试诊断保存的是请求设置，不证明提供方实际遵守。在同一学校端点及指定模型的一次固定请求中，`none` 返回了完整的 `read_source` 工具调用但未执行工具；默认及 `thinking.type=disabled` 试验以 `finish_reason=length` 结束。这项有限诊断不等于老师题通过，也不证明 HTTP 504 已全面解决。
 
-当前源码 `be0d3f57…` 完成原生 Windows Conda `nlp` 全量回归：1613 passed、8 skipped、0 failures/errors、Ruff 0 问题，源码与测试前后不变。该版新闻首题辅助复测沿用相同输入、使用 stream/none、复用六条公开记录且新 Tavily 配额为零，自然结束为 DEAD、正式导出为零、质量未知。实际观察到调度恢复，但审阅文件交接缺失、流式响应未完整结束和内容纠正问题仍在，框架检查不代表老师验收通过。
+流式模式还可显式选择 `--llm-completion-cap`（请求提供方 `max_tokens`）与 `--llm-max-content-chars`（本地普通内容码点上限）。两者省略时保留原默认值；buffered 模式拒绝显式输出限额。`--require-declared-inputs` 默认关闭，可独立于传输模式开启文件输入声明及首接收检查。可先只核对计划，不调用模型：
+
+```powershell
+python -m moumou --plan --llm-transport stream --llm-completion-cap 16384 --llm-max-content-chars 32768 --require-declared-inputs --opening-context-tokens 32768 --llm-tool-choice required-when-tools --llm-transient-http-retries 2
+```
+
+其中 `--opening-context-tokens` 独立于传输模式；显式值须为500至2147483647的整数且不超过prompt ceiling，省略仍为8000，只复制老师开场策略，保留P1默认与EMA。`--llm-tool-choice auto|required-when-tools` 仅stream可选；后者有工具时请求required，无工具时保留plain格式，失败不降级。无效配置在读密钥或创建输出前拒绝。这些选项不证明提供方遵守、文件被理解或内容合格；实际执行仍需新输出目录和真实 HumanIO。完整字段及边界见[评测流程](EVAL.md)。
+
+`--llm-transient-http-retries 0|1|2` 同样只允许stream，省略保持0次；设为2表示最多3次HTTP请求。仅正文前的502/503/504可在共享调用截止时间内等待5秒、15秒后重试；其他状态、transport错误、部分200响应、协议/长度/输出保护失败及取消不重试，不降级。多次请求与退避共享配置的 `timeout_s`（本轮180秒），不为每次请求重新获得180秒。重试后整调用用量保持未知，成功attempt的已知usage另留于sidecar，不把失败费用当作零。细节见[评测流程](EVAL.md#受限瞬时http重试)。
+
+11月19日验证源码 `79a0dbaa…` 已完成1779 passed、8 skipped、Ruff0的原生回归；新三场景实际尝试的三个首题均在正文前HTTP502后DEAD，第二题均未执行，正式交付及新Tavily均0。当前按用户请求暂停测试，以上命令只是复现说明，不会恢复已消费claim或旧失败会话。较早 `16981d95…` 单题与 `73e1c969…` 软件失败仍保留各自结果；配置、适配器及未知质量见[性能报告](PERFORMANCE.md)。
+
+已发布基线源码 `be0d3f57…` 完成原生 Windows Conda `nlp` 全量回归：1613 passed、8 skipped、0 failures/errors、Ruff 0 问题，源码与测试前后不变。该版新闻首题辅助复测沿用相同输入、使用 stream/none、复用六条公开记录且新 Tavily 配额为零，自然结束为 DEAD、正式导出为零、质量未知。实际观察到调度恢复，但审阅文件交接缺失、流式响应未完整结束和内容纠正问题仍在，框架检查不代表老师验收通过。
 
 历史检查点 `556d78fc…` 的 1601 passed、8 skipped 另行保留。其新闻首题辅助轮因记者耗尽 token 预算重试并暴露失败依赖调度问题，由操作员中止；原始 `running` 及缺失最终结果、导出和流式侧记录的事实均保留，内容质量未知，不与新复测混同。分版本结果及停机证据见[性能报告](PERFORMANCE.md)。
 

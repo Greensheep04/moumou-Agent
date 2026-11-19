@@ -108,7 +108,8 @@ python -m moumou --scenario scenario_1 --human files --out runs/test/NEW_SESSION
 Buffered model responses remain the default. The optional school SSE client can
 be selected explicitly using `--llm-transport stream` on the same entry point.
 It accepts only complete responses, records attempt metadata separately, and
-does not automatically fall back to buffered requests or retry HTTP failures.
+does not automatically fall back to buffered requests; HTTP retries default to
+zero and need a separate explicit selection below.
 Short transport checks do not establish long-task reliability or factual quality.
 
 The school stream client also accepts an explicit reasoning setting:
@@ -125,7 +126,45 @@ a complete `read_source` tool call without executing it; default and
 `thinking.type=disabled` trials ended with `finish_reason=length`. This limited
 diagnostic is neither an instructor-task pass nor a general HTTP 504 fix.
 
-Current source `be0d3f57…` completed full native Windows Conda `nlp` regression:
+Stream mode also supports explicit `--llm-completion-cap` (a provider `max_tokens`
+request) and `--llm-max-content-chars` (a local ordinary-content code-point limit).
+Omission preserves the existing defaults; buffered mode rejects explicit output
+limits. Independently selectable `--require-declared-inputs` enables file-input
+declarations and first-admission checks, defaulting to false. Inspect the plan
+first without model calls:
+
+```powershell
+python -m moumou --plan --llm-transport stream --llm-completion-cap 16384 --llm-max-content-chars 32768 --require-declared-inputs --opening-context-tokens 32768 --llm-tool-choice required-when-tools --llm-transient-http-retries 2
+```
+
+`--opening-context-tokens` is independent of transport. Explicit integers must be
+from 500 to 2147483647 and within the prompt ceiling; omission retains 8000. It copies
+teacher opening policy only, preserving P1 defaults and EMA.
+`--llm-tool-choice auto|required-when-tools` is stream-only; the latter requests
+required with offered tools and retains plain tool-free calls, without failure
+downgrade. Invalid configuration is rejected before keys or output creation.
+These options do not establish provider compliance, file understanding or content
+quality. Actual execution still needs a fresh directory and real HumanIO. See
+[evaluation](EVAL.en.md) for fields and boundaries.
+
+Stream-only `--llm-transient-http-retries 0|1|2` defaults to zero; 2 permits at most
+three HTTP requests. Only pre-body 502/503/504 can retry after fixed 5s/15s waits
+inside the shared call deadline. Other statuses, transport errors, partial 200,
+protocol/length/output-guard failures and cancellation do not retry or downgrade.
+Requests and backoff share configured `timeout_s` (180s in this round), rather than
+renewing 180s per request. Retried whole-call usage stays unknown; known successful
+attempt usage remains in the sidecar, without treating failed-request costs as zero.
+See [evaluation](EVAL.en.md#bounded-transient-http-retries) for details.
+
+The November 19 validated working tree `79a0dbaa…` completed native regression with 1779
+passes, 8 skips and zero Ruff findings. Its three actual scenario attempts ended
+Task1 DEAD after pre-body HTTP502; no Task2 ran, and formal files/new Tavily were
+zero. Testing is paused at the user's request. Commands above are reproduction
+guidance, not resumption of consumed claims or failed sessions. Earlier `16981d95…`
+single-goal and `73e1c969…` software-failure evidence stays separate. See
+[performance](PERFORMANCE.en.md) for profiles, adapters and unknown quality.
+
+Published baseline source `be0d3f57…` completed full native Windows Conda `nlp` regression:
 1613 passed, 8 skipped, no failures/errors and zero Ruff diagnostics, with stable
 source/tests. Its assisted NewsTask1 retest used unchanged inputs, explicit
 stream/none, six reused public records and no new Tavily allowance. It naturally

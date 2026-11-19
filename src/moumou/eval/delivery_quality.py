@@ -40,9 +40,11 @@ CONTENT_QUALITY_RULES = """Quality protocol:
   are different; do not claim full reading from a limited response.
 - Resolve byline and publication-link placeholders. Omit unprovided values or mark an unpublished
   draft; never invent a person, URL, publication decision or verified value.
-- Arrange peer review of final writer output with existing specialist roles and explicit file
-  dependencies. Preserve the reviewed version; changed claims need review. An unchecked summary
-  must not silently change a date, definition, denominator or conditional qualification.
+- The coordinator arranges specialist review of actual final file bytes through explicit
+  producer-to-reviewer dependencies. Writers return declared files to assigned downstream review;
+  do not recursively add review unless assigned to coordinate uncovered review work. Preserve
+  reviewed versions and qualifications; changed claims need review. A summary must not silently
+  change a date, definition, denominator or conditional qualification.
 - Derive checks from the requested outcome. Act within existing authorization; ask only about
   blocking ambiguity or new critical actions, not invented word/page quotas. Do not claim a
   minimum length, fixed report name or source count the requester never required.

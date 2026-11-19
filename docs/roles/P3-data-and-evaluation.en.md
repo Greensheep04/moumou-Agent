@@ -21,6 +21,7 @@ inputs separate from framework implementation tests.
 | `src/moumou/eval/source_evidence.py`, `src/moumou/tools/source.py`, `src/moumou/tools/source_quote.py` | Shared public evidence, immutable page versions and local lexical quote checks |
 | `src/moumou/tools/artifact_quote.py`, `src/moumou/tools/source_audit.py` and `src/moumou/eval/quote_delivery.py` | Actual-file quotations, recorded source access and final-export evidence binding |
 | `src/moumou/eval/quote_handoff.py` | Bounded native receipts for explicitly delivered direct-dependency files at the recipient's opening context |
+| `src/moumou/eval/input_handoff.py` | Optional declared-input contracts, pre-copy validation and first-admission byte checks; separate from final review |
 | `src/moumou/eval/school_stream.py` | Explicitly selected streaming client and separate attempt diagnostics, preserving the LLM response contract |
 | `src/moumou/eval/report.py` | Offline reconstruction for current and historical saved evidence |
 | `src/moumou/eval/analysis.py` and `replay.py` | Saved instructor failure/memory observations and a read-only source-linked P2 export |
@@ -121,7 +122,7 @@ are the shared definitions. Offline report generation does not resume an old ses
 or answer a pending review. Preserve forced-stop evidence even if the raw manifest
 still says running.
 
-Current source `be0d3f57…` passed full native Windows Conda `nlp` regression:
+Earlier published baseline source `be0d3f57…` passed full native Windows Conda `nlp` regression:
 1613 passed, 8 skipped, 0 failures/errors and zero Ruff diagnostics; pytest 180.15s
 (wrapper 180.562s), with stable source/tests. The failed-dependency repair only
 allows a parent to review its own children after all dependencies are terminal,
@@ -133,6 +134,9 @@ quality after 4202.906s. Scheduling recovery was directly observed, but the reco
 plan still omitted review-file dependencies. Four large ordinary-content streams
 missed complete finish at their deadlines; private candidates still need content
 corrections and actual editorial review. Integrity checks are not content acceptance.
+Use the [performance report](../PERFORMANCE.en.md) for the latest qualification,
+three-scenario API failures and paused testing, rather than reusing this historical
+baseline's conclusions.
 
 Historical checkpoint `556d78fc…` passed full native Windows Conda `nlp` regression:
 1601 passed, 8 skipped, 0 failures/errors and zero Ruff diagnostics; pytest

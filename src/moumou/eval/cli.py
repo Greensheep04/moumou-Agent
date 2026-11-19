@@ -28,6 +28,67 @@ class _QualityRejected(Exception):
     pass
 
 
+_LEGACY_STREAM_CONTENT_CHARS = 2 * 1024 * 1024
+
+
+def _stream_output_options(args, transport):
+    """Validate explicit bounds before reading keys or creating a session."""
+    requested = {
+        "completion_cap": getattr(args, "llm_completion_cap", None),
+        "max_content_chars": getattr(args, "llm_max_content_chars", None),
+    }
+    options = {}
+    for name, value in requested.items():
+        if value is None:
+            continue
+        # This is a configuration representation bound, not a provider token limit.
+        if type(value) is not int or not 0 < value <= 2**31 - 1:
+            raise ValueError(f"{name} must be a positive 32-bit integer")
+        options[name] = value
+    if options and transport != "stream":
+        raise ValueError("explicit output bounds require --llm-transport stream")
+    return options
+
+
+def _opening_context_options(args):
+    """The formal CLI uses default P1 limits unless an opening quota is selected."""
+    from moumou.eval.team import teacher_opening_policy
+
+    requested = getattr(args, "opening_context_tokens", None)
+    policy = teacher_opening_policy(requested)
+    return {
+        "requested_tokens": requested,
+        "effective_tokens": policy.opening_budget_tokens,
+        "prompt_ceiling_tokens": policy.prompt_ceiling,
+        "scope": "teacher opening context only; full required context remains mandatory",
+        "token_estimator_calibration": "preserved",
+    }
+
+
+def _stream_tool_choice_options(args, transport):
+    """A declared request policy, not a retry or provider capability assertion."""
+    policy = getattr(args, "llm_tool_choice", None)
+    if policy is None:
+        return {}
+    if type(policy) is not str or policy not in {"auto", "required-when-tools"}:
+        raise ValueError("tool choice must be auto or required-when-tools")
+    if transport != "stream":
+        raise ValueError("explicit tool choice requires --llm-transport stream")
+    return {"tool_choice_policy": policy}
+
+
+def _stream_http_retry_options(args, transport):
+    """Opt in before keys/output; omitted preserves old constructor shims."""
+    retries = getattr(args, "llm_transient_http_retries", None)
+    if retries is None:
+        return {}
+    if type(retries) is not int or retries not in (0, 1, 2):
+        raise ValueError("transient HTTP retries must be an integer from 0 to 2")
+    if transport != "stream":
+        raise ValueError("explicit HTTP retries require --llm-transport stream")
+    return {"transient_http_retries": retries}
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Run the instructor's continuous team scenarios")
     parser.add_argument("--tasks", default="eval/tasks", help="instructor Markdown directory")
@@ -41,6 +102,34 @@ def parse_args(argv=None):
     parser.add_argument(
         "--llm-reasoning-effort", choices=("none",), default=None,
         help="explicit school stream reasoning setting; omitted uses the provider default",
+    )
+    parser.add_argument(
+        "--llm-completion-cap", type=int, default=None,
+        help="explicit school stream max_tokens request; provider enforcement is not assumed",
+    )
+    parser.add_argument(
+        "--llm-max-content-chars", type=int, default=None,
+        help="local ordinary-content Unicode-codepoint bound, separate from tool arguments; "
+             "omitted retains the existing 2097152-character bound",
+    )
+    parser.add_argument(
+        "--llm-tool-choice", choices=("auto", "required-when-tools"), default=None,
+        help="explicit stream request policy; required-when-tools requests required only "
+             "when nonempty tool schemas are offered, preserving tool-free plain calls",
+    )
+    parser.add_argument(
+        "--llm-transient-http-retries", type=int, choices=(0, 1, 2), default=None,
+        help="explicit stream-only retries for pre-body HTTP 502/503/504; fixed 5s/15s "
+             "backoff shares the call deadline; omitted preserves zero HTTP retries",
+    )
+    parser.add_argument(
+        "--require-declared-inputs", action="store_true",
+        help="explicit teacher input manifests and first-admission file checks",
+    )
+    parser.add_argument(
+        "--opening-context-tokens", type=int, default=None,
+        help="explicit teacher-only opening quota, at least 500 and within the prompt "
+             "ceiling; omitted preserves the existing 8000-token opening budget",
     )
     parser.add_argument(
         "--quality-review",
@@ -76,6 +165,13 @@ def parse_args(argv=None):
     args = parser.parse_args(argv)
     if args.llm_reasoning_effort is not None and args.llm_transport != "stream":
         parser.error("--llm-reasoning-effort requires --llm-transport stream")
+    try:
+        _stream_output_options(args, args.llm_transport)
+        _opening_context_options(args)
+        _stream_tool_choice_options(args, args.llm_transport)
+        _stream_http_retry_options(args, args.llm_transport)
+    except ValueError as exc:
+        parser.error(str(exc))
     return args
 
 
@@ -215,6 +311,19 @@ async def run_suite(args, scenarios):
     if (reasoning_effort not in (None, "none")
             or (reasoning_effort is not None and llm_transport != "stream")):
         raise ValueError("explicit reasoning effort requires the school stream transport")
+    stream_output_options = _stream_output_options(args, llm_transport)
+    stream_tool_options = _stream_tool_choice_options(args, llm_transport)
+    stream_http_retry_options = _stream_http_retry_options(args, llm_transport)
+    transient_http_retries = stream_http_retry_options.get("transient_http_retries", 0)
+    tool_choice_policy = stream_tool_options.get("tool_choice_policy", "auto")
+    completion_cap = stream_output_options.get("completion_cap")
+    max_content_chars = stream_output_options.get(
+        "max_content_chars", _LEGACY_STREAM_CONTENT_CHARS,
+    )
+    require_inputs = getattr(args, "require_declared_inputs", False)
+    if type(require_inputs) is not bool:
+        raise ValueError("require_declared_inputs must be a boolean")
+    opening_context_options = _opening_context_options(args)
     settings = LLMSettings.from_env()
     settings.require_key()
     root = (Path(args.out) if args.out else Path("runs/test") / uuid4().hex[:10]).resolve()
@@ -251,11 +360,29 @@ async def run_suite(args, scenarios):
         "school_llm_policy": "quality first; token bound only guards runaway loops",
         "human_wait_in_node_budget": True,
         "automatic_quality_pass": False,
+        "input_handoff_policy": {
+            "required": require_inputs, "scope": "declared files at first admission",
+            "omitted_inputs_inferred": False, "final_file_review": None,
+        },
+        "opening_context_policy": opening_context_options,
         "quality_review_mode": args.quality_review,
     }
     if llm_transport == "stream":
-        manifest["model"].update(max_attempts=1, retry_transport=False, completion_cap=None,
-                                 reasoning_effort=reasoning_effort)
+        manifest["model"].update(
+            max_attempts=1 + transient_http_retries, retry_transport=False,
+            legacy_max_attempts=1,
+            transient_http_retries=transient_http_retries,
+            transient_http_retries_explicit=bool(stream_http_retry_options),
+            http_retry_statuses=[502, 503, 504],
+            http_retry_backoff_s=[5, 15][:transient_http_retries],
+            http_retry_shared_deadline_s=settings.timeout_s if transient_http_retries else None,
+            completion_cap=completion_cap,
+            max_content_chars=max_content_chars, reasoning_effort=reasoning_effort,
+            provider_output_limit_compliance=None,
+            tool_choice_policy=tool_choice_policy,
+            tool_choice_explicit=bool(stream_tool_options),
+            provider_tool_choice_compliance=None,
+        )
     atomic_json(root / "test.json", manifest)
     budget = Budget(
         max_steps=args.max_steps,
@@ -305,13 +432,29 @@ async def run_suite(args, scenarios):
                     "transport": "stream",
                     "saved_at": _now(),
                     "configured_model": redact(settings.model, settings),
-                    "max_attempts_per_call": 1,
+                    "max_attempts_per_call": 1 + transient_http_retries,
+                    "legacy_max_attempts": 1,
                     "retry_transport": False,
-                    "completion_cap": None,
+                    "transient_http_retries": transient_http_retries,
+                    "transient_http_retries_explicit": bool(stream_http_retry_options),
+                    "http_retry_statuses": [502, 503, 504],
+                    "http_retry_backoff_s": [5, 15][:transient_http_retries],
+                    "http_retry_shared_deadline_s": (
+                        settings.timeout_s if transient_http_retries else None
+                    ),
+                    "completion_cap": completion_cap,
+                    "max_content_chars": max_content_chars,
+                    "provider_output_limit_compliance": None,
+                    "tool_choice_policy": tool_choice_policy,
+                    "tool_choice_explicit": bool(stream_tool_options),
+                    "provider_tool_choice_compliance": None,
                     "reasoning_effort": reasoning_effort,
                     "stream_options_sent": False,
                     "call_count": len({row["call_id"] for row in attempts}),
                     "attempt_count": len(attempts),
+                    "http_request_attempt_count": sum(
+                        row.get("http_request_started") is True for row in attempts
+                    ),
                     "attempts": sanitize_evidence(attempts, secrets),
                     "notes": [
                         "Transport call IDs are independent of dialogue RecordingLLM call IDs; "
@@ -320,6 +463,21 @@ async def run_suite(args, scenarios):
                         "does not become measured zero or a complete billing total.",
                         "Only complete SSE responses enter RecordingLLM; this metadata sidecar "
                         "contains no prompts, content, arguments, authorization or full headers.",
+                        "completion_cap is a requested max_tokens value, not proof of provider "
+                        "enforcement. max_content_chars is a local ordinary-content bound; "
+                        "tool arguments retain their separate client bound. Any limit failure "
+                        "discards the response rather than declaring the task complete.",
+                        "required-when-tools requests required only for nonempty offered tool "
+                        "schemas; a tool-free request retains its native plain format. This "
+                        "is policy selection before a request, never a failure fallback. "
+                        "A completed required response must contain syntactically valid "
+                        "calls to offered tool names; this is not argument-schema validation, "
+                        "tool execution, factual truth or task-quality approval.",
+                        "HTTP retries apply only to 502/503/504 headers before any body/tool. "
+                        "Fixed backoff shares one call deadline; actual request starts and "
+                        "backoff outcomes are recorded per attempt. Other failures never "
+                        "trigger HTTP retries or auto fallback. A successful retried call "
+                        "retains attempt usage here but its complete billing total is unknown.",
                     ],
                 })
 
@@ -335,6 +493,9 @@ async def run_suite(args, scenarios):
                     retry_transport=False,
                     reasoning_effort=reasoning_effort,
                     on_attempt=transport_attempts.append,
+                    **stream_output_options,
+                    **stream_tool_options,
+                    **stream_http_retry_options,
                 )
             else:
                 delegate = DeepSeekClient(
@@ -394,7 +555,14 @@ async def run_suite(args, scenarios):
             previous = None
             scenario_ready = False
             try:
-                team = configure_team(engine, scenario, previous_dialogue_path=transcript)
+                team_options = {"previous_dialogue_path": transcript}
+                if require_inputs:
+                    team_options["require_declared_inputs"] = True
+                if opening_context_options["requested_tokens"] is not None:
+                    team_options["opening_budget_tokens"] = (
+                        opening_context_options["requested_tokens"]
+                    )
+                team = configure_team(engine, scenario, **team_options)
                 quote_verifier.bind_workspaces(team.workspaces.values())
                 artifact_verifier.bind_workspaces(team.workspaces.values())
                 source_audit.bind_workspaces(team.workspaces)
@@ -636,7 +804,23 @@ def main(argv=None):
                         "human": args.human,
                         "llm_transport": args.llm_transport,
                         "llm_reasoning_effort": args.llm_reasoning_effort,
+                        "llm_completion_cap": args.llm_completion_cap,
+                        "llm_max_content_chars": args.llm_max_content_chars,
+                        "llm_tool_choice": args.llm_tool_choice,
+                        "llm_transient_http_retries": args.llm_transient_http_retries,
+                        "llm_max_http_attempts_per_call": (
+                            1 + (args.llm_transient_http_retries or 0)
+                            if args.llm_transport == "stream" else None
+                        ),
+                        "llm_http_retry_backoff_s": (
+                            [5, 15][:(args.llm_transient_http_retries or 0)]
+                            if args.llm_transport == "stream" else None
+                        ),
                         "quality_review": args.quality_review,
+                        "require_declared_inputs": getattr(
+                            args, "require_declared_inputs", False,
+                        ),
+                        "opening_context_policy": _opening_context_options(args),
                         "search_requests_per_scenario": args.search_requests,
                         "planned_root_goals": sum(len(case.tasks) for case in scenarios),
                         "scenarios": [

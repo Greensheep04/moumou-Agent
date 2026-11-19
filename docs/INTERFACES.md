@@ -485,7 +485,7 @@ def human_exchanges(node, *, require_answered=True) -> list[dict]
 
 开场摘要包含有限的文件身份、核验计数及示例凭证 ID，最多 2000 字符和 8000 UTF-8 字节。完整、简略、空摘要依次通过上下文预算准入，不截断必需目标、祖先引用或同任务已答信息。历史缺失、被丢弃、损坏或省略时保持未知，不能据此认定生产者没有核验；此摘要与最终导出证据分别保存和解释。
 
-当前源码 `be0d3f57…` 包含此交接及下述推理选项，已完成原生 Windows Conda `nlp` 全量回归：1613 passed、8 skipped、0 failures/errors、Ruff 0 问题，源码与测试前后不变。父任务失败恢复仅限自己的子任务，须等全部依赖进入终态，保留 `MAX_WAKEUPS` 并将失败传播到稳定状态，验收和质量检查继续有效。实际新闻首题复测自然结束为 DEAD、正式导出为零、质量 null；失败检查器的下游编辑未启动，父任务得到恢复机会，但后续计划仍遗漏审阅文件依赖。33 条凭证均未应用于正式快照，来源完整性及回放通过不证明私有候选内容通过。
+已发布基线源码 `be0d3f57…` 包含此交接及下述推理选项，已完成原生 Windows Conda `nlp` 全量回归：1613 passed、8 skipped、0 failures/errors、Ruff 0 问题，源码与测试前后不变。父任务失败恢复仅限自己的子任务，须等全部依赖进入终态，保留 `MAX_WAKEUPS` 并将失败传播到稳定状态，验收和质量检查继续有效。实际新闻首题复测自然结束为 DEAD、正式导出为零、质量 null；失败检查器的下游编辑未启动，父任务得到恢复机会，但后续计划仍遗漏审阅文件依赖。33 条凭证均未应用于正式快照，来源完整性及回放通过不证明私有候选内容通过。
 
 较早 `556d78fc…`（1601 passed、8 skipped）及 `8bc0c2ca…` 的回归分别作为历史检查点保留。556d 新闻首题辅助轮因记者耗尽 token 预算重试并暴露失败依赖调度问题，由操作员中止；原始 `running` 与缺失最终结果、导出和流式侧记录的事实保持不变，内容质量未知，不与当前复测混同。接口回归不证明老师质量。
 
@@ -499,10 +499,42 @@ def human_exchanges(node, *, require_answered=True) -> list[dict]
 
 ### 可选学校 SSE 传输
 
-正式 CLI 的 `--llm-transport buffered|stream` 默认 `buffered`。显式 `stream` 使用 `eval.school_stream.SchoolStreamClient`，遵循既有异步 `chat(messages, tools)` 协议，固定 `max_attempts=1`、`retry_transport=False`、`completion_cap=None`，不发送 `stream_options`、不自动转回 buffered、不强加单次 completion-token 上限；流字节/事件等保护仍有效。累计节点预算不变。Python 类只有在显式同时配置第二次尝试和传输重试时才允许受限重试；CLI 未开放该策略，Worker 重试也不是同一次传输尝试。
+正式 CLI 的 `--llm-transport buffered|stream` 默认 `buffered`。显式 `stream` 使用 `eval.school_stream.SchoolStreamClient`，遵循既有异步 `chat(messages, tools)` 协议；客户端的旧策略保持 `max_attempts=1`、`retry_transport=False`，默认 `completion_cap=None`（显式CLI限额见下文），不发送 `stream_options`、不自动转回 buffered，默认不设单次 completion-token 请求上限。另行显式选择HTTP重试时，总HTTP请求上限可增加，见下文。流字节/事件保护与累计节点预算保留。Python旧transport重试仅在同时显式启用第二次尝试和 `retry_transport=True` 时可用，CLI未开放这项旧策略；它和新HTTP策略、Worker重试分别计量。
 
 `--llm-reasoning-effort none` 只允许与 `--llm-transport stream` 一起使用。Python 客户端接受 `reasoning_effort=None` 或 `"none"`；默认 `None` 不发送该字段，显式 `"none"` 才发送顶层 `reasoning_effort`。buffered 模式在读取配置或创建输出前拒绝该 CLI 选项。`test.json` 的 `model.reasoning_effort`、流式侧记录的 `reasoning_effort` 及尝试记录的 `requested_reasoning_effort` 保存请求设置，均不证明提供方遵守。
 
 在同一学校端点及指定模型的一次固定请求诊断中，`none` 返回完整 `read_source` 工具调用但未执行工具；默认及 `thinking.type=disabled` 试验以 `finish_reason=length` 结束。这项有限观察不等于老师题通过，也不证明 HTTP 504 已全面解决。
 
 流式客户端校验完整 SSE/UTF-8/工具参数和结束状态，丢弃不完整输出，不执行部分工具。每场景 `stream-transport.json` 保存独立 `call_id`、attempt、状态、时间、结束原因及 `usage_raw`/`usage_present`；不含提示词、正文、工具参数、授权或完整 headers。其 ID 不等于 `RecordingLLM` 对话 ID，不根据顺序拼阶段。usage 缺失/失败不计为实测零，不补完整计费总量。原始 HTTP 504 和未完成老师任务保持原记录；新增传输选项不是可靠性或内容通过声明。
+
+### 显式文件输入
+
+`configure_team(..., require_declared_inputs=True)` 安装当前Engine专用的计划schema和 `eval.input_handoff.DeclaredInputs`；省略时保留原行为。每个子任务须声明 `inputs: [{producer, path}]` 或 `[]`。producer必须是直接deps中的同计划任务键，同一不区分大小写的目标路径只能有一个生产者，不能以历史任务ID代替同计划键。原生DB的meta将契约绑定真实project/conversation/task/parent/role/goal。
+
+可选worker钩子在原生复制前，检查同范围DONE生产者 `result.files ∩ artifacts` 中的输入；首接收时在模型调用前核对实际字节。路径、别名与稳定快照检查保留1MiB单文件上限。显式来自另一个新生产者任务的版本可替换仍匹配先前原生接收记录的字节；未知或接收者已编辑的文件在复制前报冲突。原生全部产物复制和子到父整合语义不变。
+
+`declared_inputs_received` 的trace/meta收据保存 `contract_sha256` 及观察到的source_id/path/sha256/bytes，`final_file_review`、`human_quality`保持null。它只证明开场交付，不证明历史生产者文件永久不可变或最终审阅；有界任务/文件索引仍为可选上下文。该机制与quote_handoff仅读接收者文件的凭证摘要分开，两者均不推断遗漏输入或自动评判内容质量。
+
+仅stream可选的正整数参数 `--llm-completion-cap`、`--llm-max-content-chars` 贯通model.completion_cap/model.max_content_chars、流式侧记录和每次尝试，默认None/2097152。尝试包含requested_completion_cap、max_content_chars、max_argument_chars、content_chars_received、content_bound_exceeded、limit_triggered、partial_discarded；字符限额按Unicode码点计，不是字节。溢出片段在拼接前检查，因此收到和接纳数可不同；provider_output_limit_compliance保持null。input_handoff_policy单独记录显式输入选择。
+
+### 开场配额与工具请求策略
+
+`configure_team(..., opening_budget_tokens=None)` 省略时保持原策略；显式值由 `teacher_opening_policy` 校验为500至2147483647的整数，拒绝bool、错误类型和超过实际策略 `prompt_ceiling` 的值。它复制 `ContextPolicy` 并仅改变老师 `TeamContextBuilder` 的 `opening_budget_tokens`，不修改 `engine.policy`、压缩器或共享TokenBudget/EMA。CLI的 `--opening-context-tokens` 不要求stream，默认有效值仍为8000；必需内容不裁剪，超过准入限额仍失败。
+
+计划与 `test.json` 的 `opening_context_policy` 包含 `requested_tokens`（省略为null）、`effective_tokens`、`prompt_ceiling_tokens`、`scope` 和 `token_estimator_calibration="preserved"`。它们记录选择，不证明估算等于实际token数或模型正确使用了内容。
+
+CLI的 `--llm-tool-choice` 只允许stream中的 `auto` 或 `required-when-tools`，省略不向客户端传新增配置，保留auto。Python客户端接受 `tool_choice_policy="auto"` 默认值。`required-when-tools` 在非空offered工具schema请求中发送required；无工具时不发送tools/tool_choice，保留plain调用。该分支在请求前确定，失败不降级。required组装结果须有有效JSON对象参数、本次offered名称中的完整工具调用、`tool_calls` finish和DONE；不满足时拒绝且不派发部分调用。参数JSON Schema、业务正确性、工具执行和Gate审批仍是独立检查。
+
+计划的 `llm_tool_choice` 保存原CLI选择（省略为null）；stream的 `test.json.model` 与 `stream-transport.json` 保存 `tool_choice_policy`、`tool_choice_explicit`、`provider_tool_choice_compliance`。尝试另存 `configured_tool_choice_policy`、实际 `requested_tool_choice`、`offered_tool_count` 及 `required_tool_choice_satisfied`；无工具时实际choice为null，未评估的满足性保持null。提供方compliance仍为null，局部满足性也不能单独判成功，须结合 `status`、`done`、`finish_reason` 与 `partial_discarded`；结束后关闭失败仍可能使响应失败。
+
+### 受限HTTP重试与用量
+
+`SchoolStreamClient(..., transient_http_retries=0)` 默认保留旧路径；只接受精确整数0/1/2，拒绝bool和错误类型。非零值不能与旧 `max_attempts=2` 或 `retry_transport=True` 混用。CLI的 `--llm-transient-http-retries` 省略为None，不传新构造参数；显式0/1/2均只允许stream，在读密钥或创建输出前校验。
+
+启用后，仅502/503/504响应头错误，且 `decoded_bytes=0`、`first_body_byte_s=null`、`event_count=0`、`tool_count=0` 时可重试，最多 `1+transient_http_retries` 次请求，退避5秒／15秒。整个chat调用共用配置的 `timeout_s` 协作式deadline（本轮180秒），不会为每次HTTP请求重置计时；余量不足、截止或取消不会继续发请求。其他状态、transport错误、部分200/SSE、协议、length或输出保护失败均不触发HTTP重试，不降级，不执行部分工具。
+
+计划保存 `llm_transient_http_retries`、`llm_max_http_attempts_per_call`、`llm_http_retry_backoff_s`。stream的 `test.json.model` 与sidecar保存 `transient_http_retries`、`transient_http_retries_explicit`、`http_retry_statuses`、`http_retry_backoff_s`、`http_retry_shared_deadline_s`；旧构造值由 `legacy_max_attempts=1` 标明，而model的 `max_attempts`／sidecar的 `max_attempts_per_call` 表示总HTTP上限。`retry_transport=False` 不等于未启用独立的HTTP策略。
+
+每次尝试记录 `configured_transient_http_retries`、`legacy_max_attempts`、`legacy_retry_transport`、`max_http_attempts_per_call`、`shared_call_deadline_s`、`http_request_started`、`http_retry_eligible`、`http_retry_decision`，以及 `http_retry_backoff_planned_s`、`http_retry_backoff_elapsed_s`、`http_retry_backoff_completed`、`http_retry_backoff_error_class`、`call_deadline_expired`。启用路径另存 `call_elapsed_s`；sidecar的 `http_request_attempt_count` 只数 `http_request_started=true`，不代表提供方已收到或计费。退避中断与每次尝试状态分别保存，不能从一条尝试推断整个任务已完成。
+
+attempt的 `usage_present`／`usage_raw` 保留该响应的观测值；`returned_call_usage_complete` 描述是否足以覆盖返回的整调用。若第二或第三次请求才成功，返回的LLMResponse改为 `usage_present=False`、`usage_raw={}`，该attempt的 `returned_call_usage_complete` 为false，成功响应的已知usage仍留在sidecar。响应保留的数字token字段或最后成功行不是完整总量；前面失败请求的未知用量不写为0。原请求/对话ID、Worker重试和HTTP尝试仍是不同层，不凭数组顺序拼接身份或费用。

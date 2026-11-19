@@ -818,7 +818,7 @@ mandatory goals, lineage references or same-task human answers. Missing, dropped
 malformed or omitted history remains unknown; it never establishes that the
 producer performed no checks. This summary is separate from final-export evidence.
 
-Current source `be0d3f57…`, including this handoff and the reasoning option below,
+Published baseline source `be0d3f57…`, including this handoff and the reasoning option below,
 completed full native Windows Conda `nlp` regression: 1613 passed, 8 skipped,
 no failures/errors and zero Ruff diagnostics, with stable source/tests. Parent
 failure recovery covers only its own children after all dependencies are terminal,
@@ -869,12 +869,14 @@ HTTP billing; the search-budget journal remains authoritative for attempts.
 
 Formal CLI `--llm-transport buffered|stream` defaults to `buffered`. Explicit
 `stream` uses `eval.school_stream.SchoolStreamClient` with the existing async
-`chat(messages, tools)` protocol, fixed `max_attempts=1`, `retry_transport=False`
-and `completion_cap=None`. It sends no `stream_options`, never automatically
-downgrades to buffered and sets no completion-token cap; stream byte/event guards
-still apply. Cumulative node budgets remain. The Python class permits a limited second attempt only when
-both the second-attempt and transport-retry policies are explicitly enabled;
-the CLI does not expose that policy. Worker retries are separate attempts.
+`chat(messages, tools)` protocol. Its legacy client policy retains `max_attempts=1`
+and `retry_transport=False`, with default `completion_cap=None` (explicit limits
+below). It sends no `stream_options`, never downgrades to buffered and defaults to
+no completion-token cap. Separately selected HTTP retries can increase total HTTP
+request limits, as described below; byte/event guards and cumulative node budgets
+remain. Legacy Python transport retry requires both a second attempt and
+`retry_transport=True`; the CLI does not expose that legacy policy. It, HTTP
+retry and Worker retry are separate layers.
 
 `--llm-reasoning-effort none` is accepted only with `--llm-transport stream`.
 The Python client accepts `reasoning_effort=None` or `"none"`; the default `None`
@@ -898,3 +900,93 @@ IDs; do not infer phases from order. Missing/failed usage is not measured zero o
 a complete billing total. Original HTTP 504 failures and unfinished instructor
 tasks retain their saved status. This transport option is not a reliability or
 content-acceptance claim.
+
+### Explicit file inputs
+
+`configure_team(..., require_declared_inputs=True)` installs an Engine-private plan schema and `eval.input_handoff.DeclaredInputs`; omission preserves existing behavior. Each child declares `inputs: [{producer, path}]` or `[]`. Producers must be sibling keys in direct `deps`; each case-insensitive destination path has exactly one producer. Historical task IDs cannot substitute for sibling keys. Input metadata in native DB `meta` binds actual project/conversation/task/parent/role/goal identity.
+
+The optional worker hook checks scoped DONE producer paths in `result.files ∩ artifacts` before native copying; first admission then verifies actual received bytes before a model call. Snapshot/path/alias checks retain the 1MiB file limit. A version declared by a different new producer task may replace bytes still matching a prior native delivery; unknown or locally edited destination bytes cause a conflict before copying. Existing all-artifact/child-to-parent transfer semantics are unchanged.
+
+The `declared_inputs_received` trace/meta receipt contains `contract_sha256` and observed `source_id`, `path`, `sha256`, `bytes`; `final_file_review` and `human_quality` remain null. It proves opening-time delivery only, not immutable historical producer files or final review. The bounded task/file index remains optional context. This mechanism is separate from `quote_handoff`'s recipient-only receipt summary; neither can infer omitted inputs or certify semantic quality.
+
+Stream-only positive-integer options `--llm-completion-cap` and `--llm-max-content-chars` populate `model.completion_cap` / `model.max_content_chars`, the stream sidecar and attempt diagnostics. Defaults are None /2097152. Attempts record `requested_completion_cap`, `max_content_chars`, `max_argument_chars`, `content_chars_received`, `content_bound_exceeded`, `limit_triggered` and `partial_discarded`; character limits count Unicode code points, not bytes. Overflow is checked before appending a fragment; received and accepted counts may differ. `provider_output_limit_compliance` remains null. `input_handoff_policy` separately records explicit input selection.
+
+### Opening quota and tool-request policy
+
+`configure_team(..., opening_budget_tokens=None)` preserves the original policy
+when omitted. `teacher_opening_policy` validates explicit integers from 500
+to 2147483647, rejecting bools, wrong types and values above the actual policy's
+`prompt_ceiling`. It copies `ContextPolicy`, changing `opening_budget_tokens` for
+the teacher `TeamContextBuilder` only, without modifying `engine.policy`, the
+compactor or shared TokenBudget/EMA. CLI `--opening-context-tokens` does not require
+stream mode and retains an effective default 8000. Mandatory content is not
+truncated; unfit openings still fail admission.
+
+Plans and `test.json` record `opening_context_policy` with `requested_tokens`
+(null when omitted), `effective_tokens`, `prompt_ceiling_tokens`, `scope` and
+`token_estimator_calibration="preserved"`. These describe selection, not exact
+tokenizer counts or proof that the model used the content correctly.
+
+CLI `--llm-tool-choice` accepts `auto` or `required-when-tools` only in stream mode.
+Omission passes no new client option, preserving auto; the Python client defaults
+to `tool_choice_policy="auto"`. The `required-when-tools` policy sends required with nonempty
+offered tool schemas; tool-free calls omit tools/tool_choice and retain plain
+format. This branch is selected before the request, with no failure downgrade.
+Required assembly needs complete calls with valid JSON-object arguments, names
+from that request's offered set, `tool_calls` finish and DONE. Otherwise it rejects
+the response and dispatches no partial calls. Argument JSON Schema, business
+correctness, execution and Gate approval remain separate checks.
+
+Plan `llm_tool_choice` preserves the original CLI selection (null when omitted).
+Stream `test.json.model` and `stream-transport.json` record `tool_choice_policy`,
+`tool_choice_explicit` and `provider_tool_choice_compliance`. Attempts separately
+record `configured_tool_choice_policy`, actual `requested_tool_choice`,
+`offered_tool_count` and `required_tool_choice_satisfied`. Tool-free actual choice
+is null; unevaluated satisfaction remains null. Provider compliance remains null.
+The local satisfaction predicate alone is not success: combine `status`, `done`,
+`finish_reason` and `partial_discarded`, because response-close failure can still
+fail an otherwise assembled response.
+
+### Bounded HTTP retries and usage
+
+`SchoolStreamClient(..., transient_http_retries=0)` retains the legacy path by
+default. It accepts exact integers 0/1/2, rejecting bools and wrong types. Nonzero
+values cannot combine with legacy `max_attempts=2` or `retry_transport=True`.
+CLI `--llm-transient-http-retries` omission is None and passes no new constructor
+option. Explicit 0/1/2 require stream and are validated before keys/output creation.
+
+Only 502/503/504 header errors with `decoded_bytes=0`, `first_body_byte_s=null`,
+`event_count=0` and `tool_count=0` can retry, at most
+`1+transient_http_retries` requests with fixed 5s/15s waits. The whole chat call
+shares configured cooperative `timeout_s` (180s in this round); no request renews
+the allowance. Insufficient time, expiry or cancellation stops further requests.
+Other statuses, transport errors, partial 200/SSE, protocol, length or output-guard
+failures never trigger HTTP retry or downgrade, and no partial tools execute.
+
+Plans record `llm_transient_http_retries`, `llm_max_http_attempts_per_call` and
+`llm_http_retry_backoff_s`. Stream `test.json.model` and the sidecar preserve
+`transient_http_retries`, `transient_http_retries_explicit`, `http_retry_statuses`,
+`http_retry_backoff_s` and `http_retry_shared_deadline_s`. `legacy_max_attempts=1`
+identifies the old constructor value; model `max_attempts` and sidecar
+`max_attempts_per_call` describe the total HTTP limit. `retry_transport=False`
+does not mean the independent HTTP policy is disabled.
+
+Attempts record `configured_transient_http_retries`, `legacy_max_attempts`,
+`legacy_retry_transport`, `max_http_attempts_per_call`, `shared_call_deadline_s`,
+`http_request_started`, `http_retry_eligible`, `http_retry_decision`,
+`http_retry_backoff_planned_s`, `http_retry_backoff_elapsed_s`,
+`http_retry_backoff_completed`, `http_retry_backoff_error_class` and
+`call_deadline_expired`. The enabled path adds `call_elapsed_s`; sidecar
+`http_request_attempt_count` counts only `http_request_started=true`, not provider
+receipt or billing. Backoff interruption is recorded separately from attempt
+status; a single attempt does not establish task completion.
+
+Attempt `usage_present`/`usage_raw` retain that response's observed usage.
+`returned_call_usage_complete` describes coverage of the whole returned call.
+If only request two or three succeeds, returned LLMResponse uses
+`usage_present=False`, `usage_raw={}` and that attempt's
+`returned_call_usage_complete` is false, while known successful-attempt usage
+remains in the sidecar. Retained numeric token fields or the final success row are
+not a complete total; preceding unknown failure usage is not zero. Request/dialogue
+IDs, Worker retries and HTTP attempts remain distinct, without order-based identity
+or billing reconstruction.

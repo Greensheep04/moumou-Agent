@@ -330,18 +330,19 @@ returned a complete `read_source` tool call with `none`, without executing the
 tool; default and `thinking.type=disabled` trials ended with `finish_reason=length`.
 This is not an instructor-task result or a general HTTP 504 remedy.
 
-CLI `stream` makes one attempt per model call, never automatically downgrades to
-buffered and imposes no completion-token cap; the node's cumulative execution
+CLI `stream` defaults to one attempt per model call; explicit bounded HTTP retries
+are described below. It never automatically downgrades to
+buffered; by default no completion-token cap is requested; the node's cumulative execution
 budget still applies. Only a complete, valid SSE response reaches `RecordingLLM`;
 partial text or tool calls are not executed. Each scenario's `stream-transport.json`
 records attempts, timings, completion and observed usage separately. Its call IDs
 are independent of dialogue IDs: do not infer correspondence or phases from order.
-Missing usage is not zero or a complete billing total. Worker retries and transport
-attempts remain separate. Optional streaming does not establish that long-request
+Missing usage is not zero or a complete billing total. Worker retries, legacy
+transport retries and new HTTP attempts remain separate. Optional streaming does not establish that long-request
 HTTP 504 failures are solved, rewrite previous failures or create instructor scores.
 See the [interface contract](INTERFACES.en.md) for fields.
 
-Current source `be0d3f57…` completed full native Windows Conda `nlp` regression:
+Published baseline source `be0d3f57…` completed full native Windows Conda `nlp` regression:
 1613 passed, 8 skipped, 0 failures/errors and zero Ruff diagnostics; pytest 180.15s
 (wrapper 180.562s), with stable source/tests. A parent can review failure only for
 its own children after all dependencies are terminal, subject to `MAX_WAKEUPS`.
@@ -388,3 +389,87 @@ conditional-probability directions and population boundaries. It distinguishes a
 original speaker from the secondary page actually read, and limited support from
 missing evidence or disproof. These are review instructions, not an automatic
 semantic grader; their effect on a new teacher run remains unverified.
+
+## Explicit output limits and file inputs
+
+`--llm-completion-cap` and `--llm-max-content-chars` require explicit stream mode. The former requests provider `max_tokens` without assuming compliance; the latter bounds ordinary-content Unicode code points locally, separately from the 262144-character tool-argument limit. Omission retains no completion cap and the existing 2097152-character content bound. Invalid or buffered combinations fail before configuration/output creation. Limit failures, length finishes and incomplete responses discard partial output and execute no partial tools.
+
+```powershell
+python -m moumou --llm-transport stream --llm-reasoning-effort none --llm-completion-cap 16384 --llm-max-content-chars 32768 --require-declared-inputs --out runs/test/NEW_BOUNDED_SESSION
+```
+
+`--require-declared-inputs` defaults to false and is independent of transport. Each planned child explicitly supplies `inputs: [{producer, path}]` or `[]`; a producer must be a sibling key also listed in `deps`. Scoped completed producer files are checked before native copying, and received bytes are verified before the consumer's first model call. The first-admission receipt is not evidence of understanding, final review or human acceptance. Omitted requirements are not inferred. See the [input interface](INTERFACES.en.md#explicit-file-inputs).
+
+Earlier working-tree stage `16981d95…` qualified with 1668 passed, 8 skipped and Ruff0 on native Windows Conda `nlp`; that qualification is separate from published BE0, subsequent source and instructor content review. See [performance evidence](PERFORMANCE.en.md).
+
+## Explicit opening quota and tool-request policy
+
+`--opening-context-tokens` selects an estimated-token opening quota for the formal
+team, retaining 8000 when omitted. An explicit value must be an integer from 500
+to 2147483647 and no greater than the configured `prompt_ceiling`; this is a runtime
+guard, not a provider-capacity statement. The team adapter copies the context
+policy for `TeamContextBuilder` only. Generic P1 policy, shared EMA calibration
+and cumulative node budgets are unchanged. Full roles, current and ancestor goals,
+acceptance and answered facts remain mandatory; an unfit opening is rejected,
+without deleting requirements or resetting calibration. This option is independent
+of transport.
+
+`--llm-tool-choice auto|required-when-tools` requires explicit stream mode;
+omission retains the original auto behavior. `required-when-tools` sends
+`tool_choice="required"` only with nonempty tool schemas in that request. Tool-free
+requests retain their native plain format without a `tool_choice` field. This is
+policy selection before a request, never a failure fallback. A required response
+must contain complete calls with valid JSON-object arguments and names from that
+request's offered set, a consistent `tool_calls` finish and DONE. Otherwise it
+fails, discards partial output and never falls back to auto or executes partial
+tools. It does not establish full argument JSON Schema validity, factual truth,
+tool execution or permission; actual execution still passes through Gate.
+
+Inspect the selected configuration without model calls first:
+
+```powershell
+python -m moumou --plan --llm-transport stream --llm-reasoning-effort none --llm-completion-cap 16384 --llm-max-content-chars 32768 --require-declared-inputs --opening-context-tokens 32768 --llm-tool-choice required-when-tools
+```
+
+`opening_context_policy` records requested/effective values and the prompt ceiling
+in plans and manifests. Stream policy and actual per-attempt choices are separately
+recorded; see the [interface fields](INTERFACES.en.md#opening-quota-and-tool-request-policy).
+The 1728/8, zero-Ruff qualification and software failure on `73e1c969…` remain a
+separate earlier stage. The November 19 working tree `79a0dbaa…` qualified with 1779
+passes, 8 skips and zero Ruff findings. All three new `resilient01` scenarios were
+attempted: Task1 roots ended DEAD after pre-body HTTP502, no Task2 ran, and formal
+files/new Tavily requests were zero. This is not six-goal content acceptance.
+News actually imported six public records; fund imported the authentic 6+4 through
+an additionally identity-bound data adapter. Import is not model reading or full
+single-argument `--reuse-sources` reproduction. Testing is paused at the user's
+request; consumed claims must not restart automatically. See
+[performance](PERFORMANCE.en.md) for stage identities, reproduction limits and
+unknown quality.
+
+## Bounded transient HTTP retries
+
+`--llm-transient-http-retries 0|1|2` selects additional HTTP retries. Omission is
+None with an effective client value 0; even explicit 0 requires stream. Value 2 permits
+at most three HTTP request starts. Only 502/503/504 headers before any body, SSE
+event or tool fragment are eligible, using fixed 5s then 15s backoff. Requests and
+backoff share the original cooperative `timeout_s` deadline (180s in this round),
+without renewing each request's allowance; insufficient time fails. Other HTTP
+statuses, transport errors, partial 200 responses, protocol/length/output-bound
+failures and cancellation never trigger this policy. It does not downgrade to auto
+or buffered, or dispatch partial tools.
+
+```powershell
+python -m moumou --plan --llm-transport stream --llm-transient-http-retries 2
+```
+
+Nonzero HTTP retry policy cannot combine with legacy Python `max_attempts=2` or
+`retry_transport=True`. Zero retains the old path and its existing parameter
+constraints. This is separate from Worker retry and adds no Tavily allowance.
+Plans, manifests and the sidecar preserve selection, HTTP limits, actual request
+starts and backoff outcomes; see the [interface fields](INTERFACES.en.md#bounded-http-retries-and-usage).
+Even if a later request succeeds, preceding failed-request usage is unknown, so
+the whole call returns `usage_present=False` and `usage_raw={}`. The successful
+attempt's known usage remains in the sidecar. Do not treat the final successful
+request or retained numeric token fields as a complete call bill, or failed costs
+as zero. Explicit retry is fault tolerance, not provider reliability or content
+acceptance.

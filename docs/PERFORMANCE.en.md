@@ -2,7 +2,7 @@
 
 [简体中文](PERFORMANCE.md) · [English](PERFORMANCE.en.md)
 
-As of 2026-11-18, real instructor sessions, explicitly assisted revisions and
+As of 2026-11-19, real instructor sessions, explicitly assisted revisions and
 independent content reviews exist, but **final-candidate acceptance is incomplete**.
 Original runs, research reuse, operator-assisted revisions, forensic candidates and
 latest framework checks are separate evidence, not one same-source, same-assistance six-goal score.
@@ -19,7 +19,10 @@ latest framework checks are separate evidence, not one same-source, same-assista
 | Earlier combined source `8f7f8d23…` | 1354 passed, 8 skipped, 0 failed; pytest 163.10s; zero Ruff diagnostics; source/tests stable across checks | Combined regression and the assisted runs below have separate evidence; this is not content acceptance |
 | Historical quality integration `8bc0c2ca…` | Native Windows Conda `nlp`: 1538 passed, 8 skipped, 0 failures/errors; zero Ruff diagnostics; source/tests unchanged; pytest 179.14s, wrapper 179.734s | Includes real-engine offline CLI contracts; subsequent source and teacher-task/content acceptance remain separate |
 | Historical checkpoint `556d78fc…` | Native Windows Conda `nlp`: 1601 passed, 8 skipped, 0 failures/errors; zero Ruff diagnostics; pytest 178.56s, wrapper 178.938s; source/tests unchanged across checks | Includes native-receipt handoff, verification guidance and explicit reasoning profile; its NewsTask1 trial was operator-stopped, with unknown content quality |
-| Current failed-dependency fix `be0d3f57…` | Native Windows Conda `nlp`: 1613 passed, 8 skipped, 0 failures/errors; zero Ruff diagnostics; pytest 180.15s, wrapper 180.562s; source/tests unchanged across checks; full02 exited 0 | Scheduling recovery was directly observed; the assisted NewsTask1 retest naturally ended DEAD with zero formal exports and null quality |
+| Published failed-dependency baseline `be0d3f57…` | Native Windows Conda `nlp`: 1613 passed, 8 skipped, 0 failures/errors; zero Ruff diagnostics; pytest 180.15s, wrapper 180.562s; source/tests unchanged across checks; full02 exited 0 | Scheduling recovery was directly observed; the assisted NewsTask1 retest naturally ended DEAD with zero formal exports and null quality |
+| November 19 uncommitted working tree `16981d95…` | Native Windows Conda `nlp`: 1668 passed, 8 skipped, 0 failures/errors; zero Ruff diagnostics; pytest 204.76s, wrapper 205.093s; source/tests unchanged across checks; full02 exited 0 | Explicit output guards and file-input handoff; assisted NewsTask1 root DONE with ten formal files and null human quality, not same-source six-goal acceptance |
+| Later November 19 working tree `73e1c969…` | Native Windows Conda `nlp`: 1728 passed, 8 skipped, 0 failures/errors; zero Ruff diagnostics; pytest 213.17s, wrapper 213.531s; source/tests unchanged across checks; full02 exited 0 | Software Task1 root DEAD after pre-body HTTP 502 errors; zero formal exports, Task2 not executed. News/fund not started. This is not six-goal acceptance. |
+| Subsequent November 19 working tree `79a0dbaa…` | Native Windows Conda `nlp`: 1779 passed, 8 skipped, 0 failures/errors; zero Ruff diagnostics; pytest 209.22s, wrapper 209.594s; source/tests unchanged; full02 exited 0 | All three original scenarios attempted: three Task1 roots DEAD after pre-body HTTP 502; three Task2 goals not executed; no formal exports. Content quality remains unknown. |
 
 The 905 result belongs to published
 [e35e820](https://github.com/Greensheep04/moumou-Agent/commit/e35e8204a3ff2d1b798e1b055bd3cc9706f0a6e9).
@@ -37,10 +40,18 @@ The historical quality-integration source is
 `8bc0c2cafba6e0122068ca4deb944dfe1cef301479cf93b5ec94a18755a4c72a`;
 the earlier checkpoint verified by full regression is
 `556d78fc624333a2b408568bc83a636c2e820dc0a9d1a3aaeecf34b2bb7840c6`;
-the current failed-dependency fix verified by full regression is
+the published failed-dependency baseline verified by full regression is
 `be0d3f57cdbfe71ac92b5655defbaca2f7fe68e4828b53182d9ce0e43456e81b`.
-These development stages still record Git HEAD `085b12e` with uncommitted changes;
-the commit field alone does not identify executed source.
+Those earlier development executions recorded Git HEAD `085b12e` with uncommitted
+changes; later publication does not rewrite their historical execution identity.
+The working tree validated on November 19 was uncommitted source
+`16981d95be32be69e273b751c65fa4af6c0d332ff852e714e92a48f38424742e`
+at Git HEAD `1e134e5`. The commit field alone does not identify executed source.
+The later validation that day also used an uncommitted working tree:
+`73e1c969557bd89d6ec96a17295226eac764af23506b64e2fd1e70f0f3dd735f`.
+Its 212 source/test/config files were frozen with IDENTITY SHA-256
+`c5849b034e66c3e50fc1b13974d3c27da45f473f82c21a9af1ba7c48c28fdd57`.
+This qualification does not rewrite the earlier stages.
 
 The first full attempt on the dependency repair recorded the same 1613 pytest
 passes but failed Ruff with one E501 line-length finding. After a line-wrap-only
@@ -174,6 +185,172 @@ saved source metadata/version and retains that binding. The quote stage recorded
 tool-binding check recorded 1 passed, 28 deselected. Do not add these counts into a
 new full-suite or content score. A match establishes text presence under its stated
 mode, not truth, attribution, research independence or quality approval.
+
+## November 19: output guards and declared-input working tree
+
+Working source `16981d95…` completed the full native Windows Conda `nlp` regression
+listed above. The first full attempt on `20325a0f…` also recorded 1668 pytest passes,
+8 skips and no failures/errors, but ten Ruff findings made the overall result exit 1.
+After correction, full02 exited 0. The first failure is preserved, not counted as a
+wholly passing attempt. Output limits and input declarations are explicit options;
+default buffered transport and generic P1 policy remain unchanged. See
+[evaluation](EVAL.en.md) for use.
+
+The original-NewsTask1 assisted trial `news-quality-controls-retest-01` used that
+working source, the original four roles and task, and labelled operator guidance.
+Its explicit profile was stream/none, requested completion cap 16384, ordinary-content
+bound 32768 and declared-input checking. It neither restarted an old failure nor
+executed original continuous Task2 or all six goals. The root naturally ended
+agent-DONE with ten formal files in 2160.953s delivery wall time; three of six
+subtasks were DONE and three DEAD. Backend and Rich UI both exited 0, and native
+process observation found no remaining writers. Human quality and verified goal
+success remain null.
+
+The original reporter first encountered a connection interruption. At native retry,
+dynamic calibration raised the same mandatory opening estimate from 7190 to 8027,
+exceeding the fixed 8000 allowance. The original checker and editor did not run
+prematurely; the chief automatically created a recovery chain. Its checker and
+editor received and checked the declared article/review files before model calls,
+and all three recovery-role tasks completed. One checker ordinary-content response
+hit the local bound after 31.813s; partial output was discarded, and a native retry
+recovered. These observations exercise handoff and output guards, while opening
+allowance, connection failures and model deviation from tool execution remain
+limitations. They prove neither a general HTTP504 fix nor provider compliance with
+the requested completion cap.
+
+The 128 model calls include two errors with unknown usage. Known input/output
+subtotals are 4,622,804 and 71,085 tokens; complete totals remain null. Twenty-four
+actual tool approvals accumulated 1617.581s waiting; this is not independent wall
+time to subtract from delivery or report as a net execution time. Six original
+public records were imported, with zero new Tavily requests or grants. All 30 source
+reads succeeded: 9 fresh and 21 cached. Zero new searches does not mean no internet
+access. Rich replay preserved 599 spans; integrity or rendering checks do not
+establish content quality.
+
+Cold audit independently recomputed 41 quotation receipts applicable to formal file
+versions; 16 remained unapplied. These do not establish whole-article quotation
+coverage. Quotation-coverage, factual-grade and human-quality fields remain null.
+The completed independent content report counted 929 main-body words after removing
+headings and the draft note, versus 1032 in the whole file. Adaptation body counts
+after metadata/draft-note removal were 165/107/283. The core programme facts and
+attribution of at least three named people are supported, but this is not a quality
+PASS or independent reporting; the body-only counting definition must stay explicit.
+
+Three content follow-ups remain. `final_review.md` describes five pages cited by
+the main article, while the article uses four and the package retains five; clarify
+the counting scope. Anchor announcement wording to its original date, without
+calling an original quotation fabricated solely for retaining future tense.
+`verification_report.md` includes trimmed, ellipsized and punctuation-omitting
+excerpts in a table described as exact article quotations; label these as slices.
+The independent inventory contains 25 top-level double-quoted units, including
+course names, labels and a title, not 25 speech quotations. Nineteen full units
+match literally; six differ in terminal comma/period placement while their
+substantive wording occurs in the appropriate sources. Selected-slice matches do
+not make every full quotation byte-identical, and these punctuation differences
+are not confirmed substantive misinformation.
+
+The coordinator's reading-scope statement is also too broad:
+`coordinator_verification_note.md` says nine files were "read in full", but the
+chief's observed `read_file` pages of `verification_report.md` cover only bytes
+0–16384, leaving 3014 bytes of its 19398-byte file outside those responses. Its
+whole-file hash scripts return hashes, not the full text to the model. The editor
+independently read the file completely in three pages, so the verified same-version
+article/checker/editor chain still holds. Do not claim full coordinator review of
+all formal files or infer understanding from this record.
+
+Actual HumanIO processed individual technical permissions without filling quality
+fields. The operator twice mistook JSON display escaping for script escaping in
+approval notes, then parsed the actual arguments and explicitly withdrew both
+warnings in a later real approval. The original errors and correction are retained.
+This is therefore an assisted validation, not a blind test. Different profiles,
+recovery paths and human waits do not support causal performance claims from two
+wall-clock observations. Other instructor goals still require continuous execution
+and independent content acceptance on the same final source.
+
+## Subsequent November 19: bounded HTTP retry and three closed failed attempts
+
+Source `79a0dbaa765eb5268c38d99425c2db786d197ee02b03c2ffbb5db9ade5f23fd6`
+adds explicit, default-off retries for pre-body HTTP 502/503/504 within the already
+approved CLI/client/test paths. With two extra retries, each call permits at most
+three requests and actual 5s/15s waits under the shared 180s cooperative deadline.
+It neither retries partial/protocol errors nor changes the native worker retry
+policy. The targeted run passed 209 checks; full01 passed 1779 tests but failed
+one Ruff line-length check. After wrapping that line, full02 qualified as above.
+All 212 frozen source/test/config files still matched after the teacher attempts.
+
+The original software, news and fund scenarios were then invoked separately on
+this same source, each preserving its native two-task session. All three Task1
+roots naturally ended DEAD: each had three model calls, nine HTTP attempts, all
+502 before body/events/tools. Across the three scenarios there were 27 HTTP
+attempts, zero executed tools and no formal exports. Task2 did not execute in any
+scenario; missing Task2 results are not converted into content failures or
+standalone substitutes. Backend exits were all 1; the three attached P2 UIs exited
+0 and native writers were confirmed absent. Raw archives contain respectively
+16/20/20 files (342,329/527,950/615,543 bytes), with original/copy/original hashes
+unchanged. Failed-request usage and human quality remain null; known-token zero
+is not measured zero billing. The cause of the 502 responses is not established.
+
+There were no new Tavily requests or extra synthetic API probes. News actually
+imported six existing public records; fund actually imported the disclosed six
+plus four through two authentic native seed receipts and the scoped data adapter
+described below. This source used `run_teacher_resilient_acceptance_20261119.py`,
+SHA-256 `66d521504d71a32c1093342bf5ff3691bcc0d9d7e5cf0acf922da3861830f4a8`;
+the earlier `a528…` runner belongs to the separate `73e1c969…` protocol. The fund
+receipt explicitly records `single_source_cli_reproduction=false`: this bound
+two-source data adapter is required for full reproduction, rather than one
+ordinary `--reuse-sources` CLI argument. Registration is not evidence that the
+model read these sources.
+This round has zero agent-completed goals out of six planned, with three API
+failures and three unexecuted goals. It does not establish six-goal content
+acceptance. Further content validation depends on usable school API responses.
+
+## Earlier November 19: same-frozen-source six-goal validation plan
+
+Working tree `73e1c969…` adds an explicit teacher opening quota and a request policy
+selected by offered tools. After 115 targeted checks passed, the first full run
+recorded 1728 passes, 8 skips and no failures/errors, but one new-test import-order
+finding failed Ruff and the overall run exited 1. After that import and test
+description corrections, full02 qualified with the 1728/8, zero-Ruff result above.
+The first failure is retained; targeted counts are not added to the full suite.
+The default opening remains 8000, generic P1 policy and shared EMA are unchanged,
+and required-when-tools does not replace argument schema, Gate or quality checks.
+
+The user authorized the original three scenarios on this same frozen source,
+each with a real continuous Task1→Task2, giving six root goals. Each keeps its four
+original roles, actual Task1 results, private workspaces, memory and real HumanIO;
+old private products or human answers are not imported. The selected profile is
+stream/none, requested completion cap 16384, ordinary-content bound 32768, declared
+inputs, opening quota 32768 and required-when-tools, with zero new Tavily and no
+extra capability probe. This source's software run has now naturally closed with
+exit 1: Task1 root and Release are DEAD after six pre-body HTTP 502 failures,
+following 50 completed stream attempts. Dev and QA completed; QA's 33 passing
+checks do not replace the missing formal delivery. Formal exports are zero and
+Task2 was not executed. The UI exited 0 and native writers were confirmed absent;
+92 raw files (4,991,821 bytes) were sealed unchanged. News and fund have not
+started. Failed-request usage and human quality remain unknown. Neither the plan
+nor regression establishes six-goal acceptance.
+
+Public-source reproduction needs separate disclosure. News is planned to reuse
+the original news run's six public records. Fund is planned to reuse the original
+six from `fund-live-01` and the existing four from `fund2-primary-revision-01`.
+This is not ten records in one cache or four new searches in this round. A scoped
+data-initialization adapter in the local one-shot runner calls native
+`reuse_public_sources` twice, limited to that fund store, then restores the original
+function. It replaces neither Engine, LLM, roles nor continuous Task1→Task2 flow.
+Original IDs, timestamps, source manifest/cache hashes and separate import receipts
+are preserved. The fund manifest will record
+`kind="explicit_public_source_reuse_set"` and actual `source_runs`, without
+inventing a single `source_run`.
+
+That adapter is part of an additionally bound harness identity, not a new
+multi-source repository CLI argument. At preparation, runner
+`run_teacher_final_acceptance_20261119.py` had SHA-256
+`a52847006eef7b40d714e3451f73c435c4097ceb72d8ddbc2fa8550737f20d98`.
+The source fingerprint excludes it; launch binding separately checks its bytes and
+source set. Full reproduction needs the matching runner, binding and public-source
+evidence, rather than a plain single-source `--reuse-sources` command. Not-yet-started
+fund imports are not recorded as completed, and available records do not establish
+that the model read or used them, or that they are independent sources.
 
 ## Configuration, assistance and research scope
 

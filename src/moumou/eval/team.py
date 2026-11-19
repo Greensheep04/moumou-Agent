@@ -25,9 +25,10 @@ from moumou.context.lineage import (
     assignment_reference_records,
     render_assignment_references,
 )
-from moumou.contracts import AgentInstance, Budget, IntegrateResult, TaskNode
+from moumou.contracts import AgentInstance, Budget, ContextPolicy, IntegrateResult, Plan, TaskNode
 from moumou.eval.cases import Scenario
 from moumou.eval.delivery_quality import CONTENT_QUALITY_RULES, validate_delivery
+from moumou.eval.input_handoff import DeclaredInputs, install_input_schema
 from moumou.eval.quote_handoff import summarize_dependency_checks
 from moumou.human_history import render_human_exchanges
 from moumou.orchestrator.delegation import Delegation, DelegationError
@@ -105,9 +106,10 @@ class StableRoleWorkspace:
 
 
 class FixedTeamDelegation(Delegation):
-    def __init__(self, *args, allowed_roles, **kwargs):
+    def __init__(self, *args, allowed_roles, input_policy=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.allowed_roles = frozenset(allowed_roles)
+        self.input_policy = input_policy
 
     def validate(self, parent, plan):
         unknown = {draft.name for draft in plan.roles} | {spec.role for spec in plan.subtasks}
@@ -119,13 +121,29 @@ class FixedTeamDelegation(Delegation):
             )
         super().validate(parent, plan)
 
+    def apply(self, parent, payload):
+        if self.input_policy is None:
+            return super().apply(parent, payload)
+        try:
+            plan = Plan.model_validate(payload)
+            self.validate(parent, plan)
+            contracts = self.input_policy.validate_plan(parent, payload, plan)
+        except (ValueError, TypeError, KeyError) as exc:
+            raise DelegationError("declared inputs: " + str(exc)) from exc
+        # Repository transitions own BEGIN/COMMIT; do not nest native apply in
+        # a SAVEPOINT. Store all contracts first, before any child is created.
+        self.input_policy.persist(contracts)
+        return super().apply(parent, payload)
+
 
 class TeamContextBuilder(ContextBuilder):
     """Pin the original instructor role; use factual prior handoffs, not invented summaries."""
 
-    def __init__(self, *args, scenario, workspaces=None, register_private_evidence=None, **kwargs):
+    def __init__(self, *args, scenario, workspaces=None, register_private_evidence=None,
+                 input_policy=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.scenario = scenario
+        self.input_policy = input_policy
         self.prior_context = {}
         self.workspaces = dict(workspaces or {})
         self.register_private_evidence = register_private_evidence
@@ -142,6 +160,11 @@ class TeamContextBuilder(ContextBuilder):
         if not callable(get_journal) or not callable(getattr(repo, "get", None)):
             raise ValueError("artifact receipts require the native journal and current repository")
         self._artifact_receipt_binding = (repo, get_journal)
+
+    def validate_inputs(self, node, workspace):
+        """Optional pre-materialization contract, inside the worker error boundary."""
+        if self.input_policy is not None:
+            self.input_policy.preflight(node, workspace)
 
     def validate_delivery(self, node, workspace, result):
         """Validate explicit final handoffs without assigning factual correctness."""
@@ -263,6 +286,8 @@ class TeamContextBuilder(ContextBuilder):
     def build(self, node, role, dep_reports=None, memory_hits=None, board_notes=None,
               human_exchanges=None, assignment_references=None):
         """Admit required instructions first; never truncate the current task to fit history."""
+        if self.input_policy is not None:
+            self.input_policy.verify_received(node, role)
         deps, hits = list(dep_reports or []), list(memory_hits or [])
         if board_notes is None and self.board is not None:
             scope = self.board.scope(node.project_id, node.conversation_id, role.name)
@@ -278,7 +303,8 @@ class TeamContextBuilder(ContextBuilder):
         )
         limit = min(self.policy.opening_budget_tokens, self.policy.prompt_ceiling)
 
-        def render(history_limit, dep_chars, note_chars, lesson_chars, receipt_text=""):
+        def render(history_limit, dep_chars, note_chars, lesson_chars, receipt_text="",
+                   input_index=""):
             selected_lessons = [self._preview(record.lesson, lesson_chars) for record in hits]
             selected_notes = [self._preview(str(note), note_chars) for note in notes]
             system, brief = self._render(
@@ -291,6 +317,8 @@ class TeamContextBuilder(ContextBuilder):
             )
             if receipt_text:
                 system += "\n\n" + receipt_text
+            if input_index:
+                system += "\n" + input_index
             return system, brief + assignment_text + recorded_answers
 
         def estimate(messages):
@@ -321,14 +349,23 @@ class TeamContextBuilder(ContextBuilder):
                 node, role, self.workspaces.get(role.name), repo=repo,
                 get_journal=get_journal, workspaces=self.workspaces,
             )
-        for receipt_text in dict.fromkeys(receipt_options):
-            for sizes in candidates:
-                system, brief = render(*sizes, receipt_text=receipt_text)
-                if estimate((system, brief)) <= limit:
-                    return AgentContext([
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": brief},
-                    ], pinned=2, memory_ids=[record.id for record in hits] if sizes[3] else [])
+        input_options = ("",)
+        if self.input_policy is not None:
+            input_options = (self.input_policy.task_index(node),
+                             "Native task index omitted by the context budget; "
+                             "prior inputs remain unknown.",
+                             "")
+        for input_index in dict.fromkeys(input_options):
+            for receipt_text in dict.fromkeys(receipt_options):
+                for sizes in candidates:
+                    system, brief = render(
+                        *sizes, receipt_text=receipt_text, input_index=input_index,
+                    )
+                    if estimate((system, brief)) <= limit:
+                        return AgentContext([
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": brief},
+                        ], pinned=2, memory_ids=[record.id for record in hits] if sizes[3] else [])
         # The final candidate equals the already-checked mandatory admission.
         raise ContextAdmissionError("mandatory context no longer fits its opening budget")
 
@@ -429,6 +466,13 @@ class TeamContextBuilder(ContextBuilder):
             "transitively; parent files and sibling role directories are not shared. "
             "For every consumer, include direct dependencies on all producers whose "
             "files it needs, or have an intermediary explicitly return those files. "
+            "Delegating a child does not transfer your workspace files. The coordinator "
+            "arranges final-file specialist review; writers return declared files for an "
+            "already assigned downstream reviewer, rather than recursively adding review. "
+            "If require_declared_inputs is enabled, every subtask explicitly supplies inputs: "
+            "[{producer: sibling_key, path: relative_file}] and lists that producer in deps. "
+            "Use inputs: [] only when no external file is required. Missing declared input "
+            "files block first admission; omitted declarations cannot be inferred from prose. "
             "Every submit_plan subtask must explicitly supply deps: use [] only for "
             "independent work, otherwise list the sibling producer keys. Mentioning "
             "an input filename in a goal does not create a dependency or file transfer. "
@@ -479,7 +523,23 @@ class TeamContextBuilder(ContextBuilder):
         return system, brief + evidence
 
 
-def configure_team(engine, scenario: Scenario, previous_dialogue_path=None) -> TeamState:
+def teacher_opening_policy(opening_budget_tokens=None, *, policy=None):
+    """Validate an explicit teacher-only quota without changing shared policy or EMA."""
+    policy = ContextPolicy() if policy is None else policy
+    if opening_budget_tokens is None:
+        return policy
+    if (type(opening_budget_tokens) is not int
+            or not 500 <= opening_budget_tokens <= 2**31 - 1):
+        raise ValueError("opening context tokens must be an integer from 500 to 2147483647")
+    if opening_budget_tokens > policy.prompt_ceiling:
+        raise ValueError("opening context tokens exceed the configured prompt ceiling")
+    return ContextPolicy.model_validate({
+        **policy.model_dump(), "opening_budget_tokens": opening_budget_tokens,
+    })
+
+
+def configure_team(engine, scenario: Scenario, previous_dialogue_path=None, *,
+                   require_declared_inputs=False, opening_budget_tokens=None) -> TeamState:
     """Install a fixed-team adapter once, before submitting any scenario task."""
     if getattr(engine, _TEAM_ATTR, None) is not None:
         raise ValueError("this Engine already has an instructor team")
@@ -487,18 +547,27 @@ def configure_team(engine, scenario: Scenario, previous_dialogue_path=None) -> T
         raise ValueError("configure an instructor team before creating any roles or tasks")
     if len(scenario.roles) != 4 or len({role.name for role in scenario.roles}) != 4:
         raise ValueError("an instructor scenario must define exactly four identities")
+    context_policy = teacher_opening_policy(opening_budget_tokens, policy=engine.policy)
     project, conversation = engine.settings.project_id, engine.settings.conversation_id
     identities = tuple(role.name for role in scenario.roles)
+    if type(require_declared_inputs) is not bool:
+        raise ValueError("require_declared_inputs must be a boolean")
     workspace = StableRoleWorkspace(engine.workspace, project, conversation, identities)
+    input_policy = None
+    if require_declared_inputs:
+        install_input_schema(engine)
+        input_policy = DeclaredInputs(engine.repo, workspace.paths, project, conversation,
+                                      engine.trace)
     tools = sorted(engine.tools.names())
     for role in scenario.roles:
         engine.roles.create(role.model_copy(update={"project_id": project, "tools": tools}))
     engine.roles.max_roles = 4
     engine.settings.role_review_enabled = False
     context = TeamContextBuilder(
-        engine.policy, engine.budget, board=engine.board, scenario=scenario,
+        context_policy, engine.budget, board=engine.board, scenario=scenario,
         workspaces=workspace.paths,
         register_private_evidence=workspace.register_private_evidence,
+        input_policy=input_policy,
     )
     context.source_tools_available = {"source_history", "read_source"} <= engine.tools.names()
     context.source_quote_available = "verify_source_quote" in engine.tools.names()
@@ -507,6 +576,7 @@ def configure_team(engine, scenario: Scenario, previous_dialogue_path=None) -> T
     delegation = FixedTeamDelegation(
         engine.repo, engine.roles, engine.trace, engine.tools.names(), allowed_roles=identities,
         require_subtask_acceptance=engine.settings.require_subtask_acceptance,
+        input_policy=input_policy,
     )
     engine.workspace = workspace
     engine.context, engine.runner.context = context, context
