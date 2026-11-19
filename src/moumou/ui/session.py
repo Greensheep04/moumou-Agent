@@ -13,11 +13,14 @@ import json
 import os
 import re
 import stat
+import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PureWindowsPath
 from tempfile import NamedTemporaryFile
+from typing import TypeVar
 
 from moumou.contracts import HumanRequest, HumanResponse
 
@@ -26,10 +29,20 @@ _SCENARIO = re.compile(r"scenario_[1-9][0-9]*")
 _PHASES = {"task_1", "task_2"}
 _JSON_LIMIT = 32 * 1024 * 1024
 _REQUEST_LIMIT = 1024 * 1024
+_READ_RETRY_DELAYS = (0.01, 0.03)
+_T = TypeVar("_T")
 
 
 class SessionNotReady(RuntimeError):
     """A saved index has not caught up with a normal backend transition yet."""
+
+
+class SessionReadError(OSError):
+    """A bounded read retry was exhausted; no transport state was inferred."""
+
+
+class _WindowsPathRace(OSError):
+    """resolve returned only an extended-prefix spelling; do not use that result."""
 
 
 class StaleRequest(ValueError):
@@ -128,7 +141,65 @@ class FileSession:
         self.root = absolute.resolve(strict=True)
         if self.root != absolute:
             raise ValueError("RUN must not be reached through a directory alias")
+        self.read_recoveries: deque[dict] = deque(maxlen=20)
         self.manifest()
+
+    def _validate_path(self, path: Path) -> Path:
+        try:
+            parts = path.relative_to(self.root).parts
+        except ValueError as exc:
+            raise ValueError("session evidence escapes RUN") from exc
+        checked = self.root
+        for part in parts:
+            checked = checked / part
+            if _is_alias(checked):
+                raise ValueError("session evidence cannot use file/directory aliases")
+        resolved = path.resolve()
+        if not resolved.is_relative_to(self.root) or resolved != path:
+            spelling = str(path)
+            extended = ("\\\\?\\UNC\\" + spelling[2:] if spelling.startswith("\\\\")
+                        else "\\\\?\\" + spelling)
+            if os.name == "nt" and str(resolved) == extended:
+                # ntpath may retain this spelling when its second metadata probe
+                # races a replacement/deletion. Never strip it and proceed: the
+                # next attempt must independently pass every ordinary check.
+                raise _WindowsPathRace(f"lexical={path!s}; resolved={resolved!s}")
+            raise ValueError(
+                f"session evidence escapes RUN or uses a path alias: {path!s} -> {resolved!s}"
+            )
+        return path
+
+    def _observe(self, path: Path, operation: str, read: Callable[[Path], _T]) -> _T:
+        """Retry only known read races, revalidating all boundaries each time."""
+        for attempt in range(len(_READ_RETRY_DELAYS) + 1):
+            try:
+                result = read(self._validate_path(path))
+            except (FileNotFoundError, PermissionError, _WindowsPathRace) as exc:
+                if attempt < len(_READ_RETRY_DELAYS):
+                    last_error = exc
+                    time.sleep(_READ_RETRY_DELAYS[attempt])
+                    continue
+                message = (
+                    f"session read failed: operation={operation}; "
+                    f"path={path.relative_to(self.root).as_posix()}; attempts={attempt + 1}; "
+                    f"error={type(exc).__name__}; errno={exc.errno}; "
+                    f"winerror={getattr(exc, 'winerror', None)}; {exc}; "
+                    "no state or decision inferred"
+                )
+                if isinstance(exc, FileNotFoundError):
+                    # Optional pending/response files may have been consumed.
+                    # Required metadata instead surfaces the bounded failure.
+                    raise FileNotFoundError(exc.errno, message, str(path)) from exc
+                raise SessionReadError(message) from exc
+            if attempt:
+                self.read_recoveries.append({
+                    "operation": operation, "path": path.relative_to(self.root).as_posix(),
+                    "attempts": attempt + 1, "error": type(last_error).__name__,
+                    "errno": last_error.errno, "winerror": getattr(last_error, "winerror", None),
+                    "detail": str(last_error),
+                })
+            return result
+        raise AssertionError("bounded session read loop did not return")
 
     def _path(self, *parts: str) -> Path:
         path = self.root
@@ -138,20 +209,24 @@ class FileSession:
                     or part.endswith((".", " ")) or PureWindowsPath(part).is_reserved()):
                 raise ValueError("unsafe session path component")
             path = path / part
-            if _is_alias(path):
-                raise ValueError("session evidence cannot use file/directory aliases")
-        resolved = path.resolve()
-        if not resolved.is_relative_to(self.root) or resolved != path:
-            raise ValueError("session evidence escapes RUN or uses a path alias")
-        return path
+        return self._observe(path, "validate path", lambda checked: checked)
+
+    def _exists(self, path: Path, *, directory=False) -> bool:
+        return self._observe(path, "inspect presence", lambda checked: (
+            checked.is_dir() if directory else checked.exists()
+        ))
 
     def _read(self, path: Path, limit: int = _JSON_LIMIT, *, inflight=False) -> tuple[dict, str]:
-        info = path.stat()  # Normal consumption races retain FileNotFoundError.
-        if not stat.S_ISREG(info.st_mode) or _is_alias(path) or info.st_size > limit:
-            raise ValueError("invalid or oversized session evidence file")
-        raw = path.read_bytes()
-        if len(raw) > limit:
-            raise ValueError("session evidence grew beyond its size bound")
+        def read(checked):
+            info = checked.stat()
+            if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+                raise ValueError("invalid or oversized session evidence file")
+            raw = checked.read_bytes()
+            if len(raw) > limit:
+                raise ValueError("session evidence grew beyond its size bound")
+            return raw
+
+        raw = self._observe(path, "read JSON", read)
         try:
             value = _decode(raw)
         except (json.JSONDecodeError, UnicodeError) as exc:
@@ -188,7 +263,7 @@ class FileSession:
     def current(self) -> SessionContext:
         manifest = self.manifest()
         active_path = self._path("active.json")
-        if not active_path.exists():
+        if not self._exists(active_path):
             raise SessionNotReady("active.json is not saved yet; waiting for backend metadata")
         active, _ = self._read(active_path, _REQUEST_LIMIT)
         scenario_id, phase = active.get("scenario_id"), active.get("phase")
@@ -205,9 +280,9 @@ class FileSession:
         for field, path in expected.items():
             raw = active.get(field)
             if (not isinstance(raw, str) or not Path(raw).is_absolute()
-                    or ".." in Path(raw).parts or Path(raw).absolute() != path
-                    or Path(raw).resolve() != path):
+                    or ".." in Path(raw).parts or Path(raw).absolute() != path):
                 raise ValueError(f"active.{field} disagrees with the selected RUN")
+            self._observe(Path(raw), f"validate active.{field}", lambda checked: checked)
         return SessionContext(scenario_id, phase)
 
     def _record(self, context: SessionContext, request_id: str) -> PendingRequest | None:
@@ -215,7 +290,7 @@ class FileSession:
             raise ValueError("unsafe original request ID")
         prefix = (context.scenario_id, "human")
         pending = self._path(*prefix, "pending", request_id + ".json")
-        if not pending.exists():
+        if not self._exists(pending):
             return None
         original, archive_hash = self._read(
             self._path(*prefix, "requests", request_id + ".json"), _REQUEST_LIMIT,
@@ -251,7 +326,7 @@ class FileSession:
                                  ("responses", "already_staged")):
             path = self._path(item.context.scenario_id, "human", directory,
                               item.request_id + ".json")
-            if path.exists():
+            if self._exists(path):
                 try:
                     response, _ = self._read(path, _REQUEST_LIMIT, inflight=True)
                 except FileNotFoundError:
@@ -263,10 +338,13 @@ class FileSession:
     def pending(self) -> list[PendingRequest]:
         context = self.current()
         directory = self._path(context.scenario_id, "human", "pending")
-        if not directory.is_dir():
+        if not self._exists(directory, directory=True):
             raise SessionNotReady("the active human queue has not been created yet")
         requests = []
-        for path in sorted(directory.iterdir()):
+        paths = self._observe(
+            directory, "list pending", lambda checked: sorted(checked.iterdir()),
+        )
+        for path in paths:
             if path.suffix != ".json":
                 continue
             item = self._record(context, path.stem)
@@ -299,7 +377,7 @@ class FileSession:
         if len(content) > _REQUEST_LIMIT:
             raise ValueError("response exceeds the existing backend transport size bound")
         directory = self._path(item.context.scenario_id, "human", "responses")
-        if not directory.is_dir():
+        if not self._exists(directory, directory=True):
             raise ValueError("the backend response directory is missing")
         target = self._path(item.context.scenario_id, "human", "responses",
                             item.request_id + ".json")
@@ -354,16 +432,12 @@ class FileSession:
             raise ValueError("history limit must be between 1 and 200")
         context = self.current()
         result = []
-        for parts in ((context.scenario_id, "dialogue.jsonl"),
-                      (context.scenario_id, "human", "human-events.jsonl"),
-                      (context.scenario_id, "trace.jsonl")):
-            path = self._path(*parts)
-            if not path.exists():
-                continue
-            if not path.is_file() or path.stat().st_size > 256 * 1024 * 1024:
+
+        def read(checked):
+            if not checked.is_file() or checked.stat().st_size > 256 * 1024 * 1024:
                 raise ValueError("history file is invalid or exceeds its UI read bound")
             rows = deque(maxlen=limit)
-            with path.open("rb") as stream:
+            with checked.open("rb") as stream:
                 for number, raw in enumerate(stream, 1):
                     if len(raw) > _JSON_LIMIT:
                         raise ValueError("history line exceeds its size bound")
@@ -377,6 +451,18 @@ class FileSession:
                                 break
                             raise
                         rows.append((number, record))
+            return rows
+
+        for parts in ((context.scenario_id, "dialogue.jsonl"),
+                      (context.scenario_id, "human", "human-events.jsonl"),
+                      (context.scenario_id, "trace.jsonl")):
+            path = self._path(*parts)
+            if not self._exists(path):
+                continue
+            try:
+                rows = self._observe(path, "read history", read)
+            except FileNotFoundError:
+                continue
             result.extend(HistoryEvent(path.relative_to(self.root).as_posix(), number, record)
                           for number, record in rows)
         return result

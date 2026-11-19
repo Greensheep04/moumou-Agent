@@ -1,6 +1,7 @@
 """Workspace-scoped UTF-8 file tools."""
 
 import asyncio
+import json
 import os
 import shutil
 
@@ -34,17 +35,85 @@ class FileTool:
 
 class ReadFileTool(FileTool):
     name = "read_file"
-    description = "Read a UTF-8 file within the workspace; output is limited."
+    description = (
+        "Read a workspace UTF-8 file; without offset/limit preserve the limited preview; "
+        "for complete content pass offset=0 and follow stderr JSON next_offset until eof=true "
+        "(UTF-8 byte offsets, at most 8192 content bytes per page, no added text)."
+    )
     action_class = "fs_read"
-    params_schema = _schema({"path": PATH}, ["path"])
+    params_schema = _schema(
+        {
+            "path": PATH,
+            "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "UTF-8 byte boundary to start at; default 0 in paged mode.",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_OUTPUT,
+                "description": (
+                    "Maximum content bytes per page, default 8192; must fit the next complete "
+                    "UTF-8 character. Returned next_offset is the continuation cursor."
+                ),
+            },
+        },
+        ["path"],
+    )
 
     def execute(self, args, jail):
+        paged = "offset" in args or "limit" in args
+        if paged:
+            offset, limit = args.get("offset", 0), args.get("limit", MAX_OUTPUT)
+            if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+                raise ValueError("offset must be a non-negative integer byte offset")
+            if (isinstance(limit, bool) or not isinstance(limit, int)
+                    or not 1 <= limit <= MAX_OUTPUT):
+                raise ValueError(f"limit must be an integer between 1 and {MAX_OUTPUT}")
         path = self.path(args, jail)
         if not path.is_file():
             raise ValueError(f"no such file: {args.get('path')}")
         with path.open("rb") as stream:
+            if paged:
+                return self._read_page(stream, offset, limit)
             text, truncated = clip_bytes(stream.read(MAX_OUTPUT + 1))
         return ToolResult(ok=True, stdout=text, truncated=truncated)
+
+    @staticmethod
+    def _read_page(stream, offset, limit):
+        size = stream.seek(0, os.SEEK_END)
+        if offset > size:
+            raise ValueError("offset exceeds file size")
+        stream.seek(offset)
+        raw = stream.read(limit + 1)
+        if raw and raw[0] & 0xC0 == 0x80:
+            raise ValueError("offset must be at a UTF-8 character boundary")
+        payload = raw[:limit]
+        try:
+            text = payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            if exc.reason != "unexpected end of data" or len(raw) <= limit:
+                raise ValueError("file page is not valid UTF-8") from exc
+            payload = payload[:exc.start]
+            if not payload:
+                raise ValueError("limit is too small for the next UTF-8 character") from exc
+            text = payload.decode("utf-8")
+        if os.fstat(stream.fileno()).st_size != size:
+            raise ValueError("file size changed during read; restart pagination")
+        next_offset = offset + len(payload)
+        eof = next_offset == size
+        metadata = {
+            "offset": offset,
+            "next_offset": next_offset,
+            "limit": limit,
+            "bytes_returned": len(payload),
+            "file_size": size,
+            "eof": eof,
+        }
+        return ToolResult(
+            ok=True, stdout=text, stderr=json.dumps(metadata, sort_keys=True), truncated=not eof,
+        )
 
 
 class WriteFileTool(FileTool):
@@ -118,7 +187,11 @@ class ListFilesTool(FileTool):
 
 class SearchFilesTool(FileTool):
     name = "search_files"
-    description = "Search literal text in UTF-8 files up to 1 MiB each."
+    description = (
+        "Search literal text in workspace UTF-8 files up to 1 MiB each; "
+        "stderr JSON reports examined files, skipped large paths and output limits. "
+        "Zero matches do not establish absence in skipped or unexamined content."
+    )
     action_class = "fs_read"
     params_schema = _schema({"path": PATH, "query": TEXT}, ["query"])
 
@@ -126,11 +199,32 @@ class SearchFilesTool(FileTool):
         query = args.get("query")
         if not isinstance(query, str) or not query:
             raise ValueError("query must be a non-empty string")
+        coverage = {
+            "scope": "paths visible through the workspace jail",
+            "max_file_bytes": 1024 * 1024,
+            "files_started": 0,
+            "observed_skipped_large_files": 0,
+            "skipped_large_paths": [],
+            "skipped_large_paths_truncated": False,
+            "walk_exhausted": False,
+        }
+        sample_bytes = 2
 
         def matches():
+            nonlocal sample_bytes
             for path in _walk(jail, self.path(args, jail)):
-                if path.stat().st_size > 1024 * 1024:
+                if path.stat().st_size > coverage["max_file_bytes"]:
+                    coverage["observed_skipped_large_files"] += 1
+                    relative = jail.relative(path)
+                    name_bytes = len(json.dumps(relative, ensure_ascii=False).encode("utf-8")) + 2
+                    if (len(coverage["skipped_large_paths"]) < 8
+                            and sample_bytes + name_bytes <= 2048):
+                        coverage["skipped_large_paths"].append(relative)
+                        sample_bytes += name_bytes
+                    else:
+                        coverage["skipped_large_paths_truncated"] = True
                     continue
+                coverage["files_started"] += 1
                 with path.open(encoding="utf-8", errors="replace") as stream:
                     for line, text in enumerate(stream, 1):
                         if query in text:
@@ -139,9 +233,20 @@ class SearchFilesTool(FileTool):
                                 "line": line,
                                 "text": text.rstrip("\r\n"),
                             }
+            coverage["walk_exhausted"] = True
 
         output, truncated = json_output(matches())
-        return ToolResult(ok=True, stdout=output, truncated=truncated)
+        coverage["output_truncated"] = truncated
+        coverage["note"] = (
+            "Counts cover visited policy-visible entries only; files_started counts opened scans. "
+            "walk_exhausted means iterator exhaustion, not proof that filtered or unreadable "
+            "entries were visited. Zero matches do not cover skipped files, an unfinished walk "
+            "or omitted entries. Use paged read_file for an exact path."
+        )
+        return ToolResult(
+            ok=True, stdout=output, stderr=json.dumps(coverage, ensure_ascii=False),
+            truncated=truncated,
+        )
 
 
 class DeleteFileTool(FileTool):

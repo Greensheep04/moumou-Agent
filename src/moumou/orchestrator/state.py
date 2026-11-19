@@ -441,26 +441,36 @@ class SqliteTaskRepo:
 
     # -- the one derived rule --------------------------------------------
     def promote(self) -> int:
-        """PENDING -> READY when deps are satisfied; -> DEAD when they never will be."""
+        """Resolve pending dependencies, including failure propagation, to a fixed point."""
         changed = 0
-        for node in self.by_status("PENDING"):
-            deps = [self.get(d) for d in node.deps]
-            if any(d is None for d in deps):
-                self.transition(node.id, "DEAD", "missing_dependency")
-            elif any(d.status == "DEAD" for d in deps):
-                # A dead child wakes the parent so it can re-dispatch, instead of
-                # taking the whole branch down with it.
-                if node.wakeups < MAX_WAKEUPS:
-                    self.bump_wakeups(node.id)
-                    self.transition(node.id, "READY", "upstream_failed_review")
+        while True:
+            promoted = 0
+            for node in self.by_status("PENDING"):
+                deps = [self.get(d) for d in node.deps]
+                if any(dep is None for dep in deps):
+                    self.transition(node.id, "DEAD", "missing_dependency")
                 else:
-                    self.transition(node.id, "DEAD", "upstream_failed")
-            elif all(d.status == "DONE" for d in deps):
-                self.transition(node.id, "READY", "deps_satisfied")
-            else:
-                continue
-            changed += 1
-        return changed
+                    failed = [dep for dep in deps if dep.status == "DEAD"]
+                    if failed:
+                        if any(dep.parent_id != node.id for dep in failed):
+                            # A consumer cannot repair another branch's failed input.
+                            self.transition(node.id, "DEAD", "upstream_failed")
+                        elif not all(dep.is_terminal for dep in deps):
+                            # Await siblings before reviewing their complete handoffs.
+                            continue
+                        elif node.wakeups < MAX_WAKEUPS:
+                            self.bump_wakeups(node.id)
+                            self.transition(node.id, "READY", "upstream_failed_review")
+                        else:
+                            self.transition(node.id, "DEAD", "upstream_failed")
+                    elif all(dep.status == "DONE" for dep in deps):
+                        self.transition(node.id, "READY", "deps_satisfied")
+                    else:
+                        continue
+                promoted += 1
+            changed += promoted
+            if not promoted:
+                return changed
 
 
 # -- roles -----------------------------------------------------------------

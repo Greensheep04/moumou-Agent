@@ -2,6 +2,7 @@
 
 import asyncio
 import re
+from pathlib import Path
 
 from moumou.contracts import ToolResult
 from moumou.sandbox.local import LocalJail
@@ -20,6 +21,36 @@ def ref_name(value):
     ):
         raise ValueError("invalid branch or remote name")
     return value
+
+
+async def _require_repository_root(jail, ctx):
+    """A LocalDirs child must never discover an enclosing project's repository.
+
+    A regular .git file is allowed for managed linked worktrees, but merely
+    having a marker is insufficient: Git's canonical worktree root must match.
+    The probe uses the same stripped environment and disabled hooks as actions.
+    """
+    boundary_error = "workspace must be the root of its own Git repository"
+    marker = jail.root / ".git"
+    if (marker.is_symlink() or (hasattr(marker, "is_junction") and marker.is_junction())
+            or not (marker.is_dir() or marker.is_file())):
+        raise ValueError(boundary_error)
+    probe = await run_command(
+        git_args(jail.root, "rev-parse", "--path-format=absolute", "--show-toplevel"),
+        jail.root, 5, ctx.env, strip_git_env=True,
+    )
+    if not probe.ok or probe.truncated:
+        raise ValueError(boundary_error)
+    try:
+        reported = Path(probe.stdout.rstrip("\r\n"))
+        if not reported.is_absolute():
+            raise ValueError(boundary_error)
+        actual = reported.resolve(strict=True)
+    except (OSError, ValueError):
+        raise ValueError(boundary_error) from None
+    if actual != jail.root:
+        # Never return the ancestor path, Git diagnostics, or parent data.
+        raise ValueError(boundary_error)
 
 
 class GitTool:
@@ -69,6 +100,7 @@ class GitTool:
                 cmd = ["merge", "--no-edit", "--no-gpg-sign", ref_name(args.get("branch"))]
             else:
                 raise ValueError("unsupported Git operation")
+            await _require_repository_root(jail, ctx)
             before = await asyncio.to_thread(snapshot, jail) if op == "merge" else {}
             result = await run_command(
                 git_args(jail.root, *cmd), jail.root, 30, ctx.env, strip_git_env=True
@@ -102,6 +134,7 @@ class GitPushTool:
             jail = LocalJail(ctx.workspace)
             remote = ref_name(args.get("remote", "origin"))
             branch = ref_name(args.get("branch"))
+            await _require_repository_root(jail, ctx)
             result = await run_command(
                 git_args(
                     jail.root,

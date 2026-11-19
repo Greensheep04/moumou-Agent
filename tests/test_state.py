@@ -73,7 +73,7 @@ def test_promote_unblocks_when_deps_are_done(repo):
 
 
 def test_promote_wakes_the_parent_when_a_child_dies(repo):
-    repo.add(node(id="a"))
+    repo.add(node(id="a", parent_id="b", depth=1))
     repo.add(node(id="b", deps=["a"]))
 
     repo.transition("a", "DEAD", "gave_up")
@@ -88,7 +88,7 @@ def test_promote_wakes_the_parent_when_a_child_dies(repo):
 def test_promote_gives_up_after_the_wakeup_budget(repo):
     from moumou.contracts import MAX_WAKEUPS
 
-    repo.add(node(id="a"))
+    repo.add(node(id="a", parent_id="b", depth=1))
     repo.add(node(id="b", deps=["a"], wakeups=MAX_WAKEUPS))
     repo.transition("a", "DEAD", "gave_up")
 
