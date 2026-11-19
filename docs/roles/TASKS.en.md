@@ -42,6 +42,14 @@ For P3 integration, confirm these current boundaries:
   scope. Answer restoration does not authorize a later tool operation.
 - `parent_id` is the task graph relationship; `parent_span` is the trace hierarchy.
   A missing historical span parent must remain missing.
+- Worker shares exact ancestor goals/hashes only through a valid same-repository,
+  same-project/conversation `parent_id` chain. Both builders pin them as mandatory.
+  Parent-private answers, approvals, memories and files are not inherited; prior-phase
+  dependencies are not ancestors.
+- Formal source tools share group public evidence. `verify_source_quote` binds once
+  to actual provider-returned role paths and reads one retained version without
+  HTTP/search. `true`, `false` and `null` are lexical states, not factual or quality
+  decisions; P2 presentation must preserve that distinction.
 - Formal team members use stable role identities and project-role memory across
   their two tasks. Generic task instances retain the documented shared-role policy.
 - Replay task identities include the scenario and task ID. Pending, staged and
@@ -55,10 +63,20 @@ consumers have integrated them.
 
 ## Completion and evidence
 
-The latest P3 recovery, trace, snapshot, review and replay changes have authored
-regressions that have not been executed. Historical framework results belong to
-their recorded source version. They do not verify the new tree or complete the
-teacher's six goals.
+P3 recovery, trace, snapshots, review and replay have versioned framework and real
+session evidence. Subsequent integration fixes are validated separately; execution
+identity and latest results are recorded in the [performance report](../PERFORMANCE.en.md).
+Historical framework results validate neither a changed tree nor six accepted
+instructor goals on one final version, and they do not provide member sign-off.
+
+At the November 18 14:52 cutoff, combined 8f regression is 1354/8/0 with clean Ruff and
+all validation model backends/Rich UIs stopped. Separate original-News2→supplementary-S2T1
+is DONE with three files; independent review supports core corrections with two editorial
+qualifications, leaving raw human quality null. Fund1 DONE/four files
+still needs content correction; preserve News/Fund2 DEAD/zero exports and the original
+continuous news Task2 that did not run. Private-candidate forensics and
+browser functionality are not formal delivery. Closed-set runs, contribution screenshots
+and teammate sign-off need their own evidence; see the performance report.
 
 Follow the [delivery checklist](../DELIVERY.en.md) for the repository, architecture,
 formal performance report, genuine collaborative commit history and presentation

@@ -321,7 +321,7 @@ JSONL 与 SQLite 必须使用不同文件。`Recorder.close()` 关闭日志和�
 
 `python -m moumou` 与 `python -m moumou.eval.cli` 是同一正式协议，`--tasks` 选择题源，不再有专属题库格式入口。`eval.team` 固定身份、连续私有角色工作区和同角色执行锁。Task 2 接收真实 Task 1 结果、交付文件和原对话归档，不虚构历史，也不是全新独立尝试。实际题数定义计划分母。
 
-只有直接依赖及显式 `artifacts` 传递文件；不会自动分享父目录和传递依赖链。子目标必须自包含。缺失输入应通过 `submit_plan` 请拥有者明确交付并声明依赖，或调用 `ask_human`；不能搜索父级、同级或其他运行目录绕过隔离。
+只有直接依赖及显式 `artifacts` 传递文件；不会自动分享父目录和传递依赖链。子目标应说明自身工作和输入，原祖先目标另作为范围化引用保留；这不共享父任务私有人答或文件。缺失输入应通过 `submit_plan` 请拥有者明确交付并声明依赖，或调用 `ask_human`；不能搜索父级、同级或其他运行目录绕过隔离。
 
 `TeamContextBuilder` 固定保留完整原角色、当前目标、全部 `Acceptance` 和同任务已答信息，不修改源对象。可选历史、依赖、结论和经验先受限，完整辅助内容保存在私有 `.evaluation/context/<digest-prefix>.json`，新文件名为 32 位前缀、引用为完整 SHA-256，同名不同内容拒绝，不重命名旧归档。必需内容超限时抛 `ContextAdmissionError`，不切断目标；框架遗漏指令不能直接归为模型不服从。
 
@@ -365,7 +365,7 @@ manifest、任务结果和对话不构成跨文件事务。强制终止可能遗
 
 ### 离线报告、复核和回放
 
-当前恢复、trace 和阶段证据功能有回归源码，但尚待执行。已发布 e35e820 的 905/8 是旧基线，不验证修改版本；实际任务质量和消费者签收仍需自己的证据。交付清单见[交付要求](DELIVERY.md)。
+恢复、trace 和阶段证据按实际源码版本分别验证，结果见[性能与验证报告](PERFORMANCE.md)。历史回归不能替后续版本背书，实际任务质量和消费者签收仍需自己的证据。交付清单见[交付要求](DELIVERY.md)。
 
 `eval.report.build_report(root)` 校验保存会话和权威单题结果；`generate_report(root, output=None)` 输出派生 `.md` / `.txt`，不需要模型密钥、不调用模型、不重跑测试或恢复任务。未决质量不转成成功。未被索引的任务结果或身份不一致会报完整性错误，不会悄悄计入或删除。历史 `midtest.json` 仅只读兼容，不是另一入口。
 
@@ -374,6 +374,14 @@ manifest、任务结果和对话不构成跨文件事务。强制终止可能遗
 最终复核发布使用 `reviews/.publish.lock`。锁已存在时须明确检查并处理并发/中断写入者，不自动删除旧锁或绕过当前末端校验；人工等待期间不占发布锁。
 
 `eval.analysis.build_analysis/generate_analysis` 支持老师格式和历史 groups。`eval.replay.build_replay/generate_replay` 输出全新派生 JSON，提供场景+任务身份、原节点/TraceEvent、来源/行哈希和人类事件索引，区分已答、待答、暂存答复。它们消费已存阶段证据，不读取 live memory.db 或可变工作区冒充旧快照；导出不代替 P2 签收。缺失父关系、状态、质量保持缺失/未知，外部停止记录不替换原 manifest。
+
+## 质量相关可选接口
+
+- `read_file`仅传`path`保持旧有8KB预览。显式`offset/limit`开启UTF8字节分页，`limit`为1..8192；`stdout`仅含正文，`stderr` JSON返回`offset/next_offset/file_size/bytes_returned/limit/eof`。必须跟随返回游标，不能自行按limit累加；不合法游标及无法容纳下一个完整字符的页会失败。
+- 正式评测注册`source_history`（`fs_read`）与`read_source`（`network`）。场景级`SourceEvidenceStore`只共享公开证据，不开放角色私有目录。来源/原文哈希只能证明捕获字节，不能证明事实；原检索时间与本次读取/返回时间分别保留。
+- `SearchBudgetTool(..., source_store=...)`可选记录公开检索，省略时保持既有行为，计次、缓存与人工追加规则不变。
+- `TaskRunner`在根提交验收前及发布前调用可选上下文hook `validate_delivery(node, workspace, result)`。老师上下文检查显式文档引用闭包；无hook的普通上下文保持旧契约。拒绝沿用可纠正文件反馈，不合成文件或质量批准。
+- `FileSession`只对读取时的消失/权限错误及精确Windows扩展前缀解析竞态做三次有界重试，每次重查路径。持续失败报告操作、路径及可获得的原生错误字段；真实alias/越界和未知校验错误仍立即拒绝。
 
 Replay 在把重新读取的任务和有效复核合并前检查报告中的规范 JSON `result_content_sha256`，另保留原始字节哈希；校验 TraceEvent 必需身份、类型、时间和状态，历史可选字段按原样保留。派生回放文件使用独占创建，不覆盖并发写入者已有证据。
 
@@ -415,6 +423,7 @@ def human_exchanges(node, *, require_answered=True) -> list[dict]
 | `AgentInstance` | `agent.py` | 运行身份及范围 |
 | `Message` / `Scope` | `message.py` | 消息与寻址 |
 | `Tool` / `ToolContext` / `ToolResult` | `tool.py` | 工具协议及输入输出 |
+| `HumanApprovalFeedback` | `tool.py` | 一次真实批准请求的范围化备注 |
 | `IntegrateResult` | `workspace.py` | 文件整合结果 |
 | `TraceEvent` | `trace.py` | 执行事件 |
 | `MemoryRecord` | `memory.py` | 长期经验 |
@@ -422,3 +431,78 @@ def human_exchanges(node, *, require_answered=True) -> list[dict]
 | `Plan` / `RoleDraft` / `SubtaskSpec` | `plan.py` | 模型提出的拆分计划 |
 
 字段变化后运行 `pytest tests/test_contracts.py` 和相关适配器回归。即使 schema 兼容，也仍需实际运行及消费者检查；测试文件存在不等于已经通过。
+
+## 显式交接、审批反馈与来源版本
+
+模型的 `submit_plan` 调用须在每个子任务中显式填写 `deps`：独立工作用 `[]`，需要文件的消费者列出生产者 key。遗漏在创建子任务/角色前收到可纠正的 `invalid_plan`；直接 Python `Plan`/`SubtaskSpec` 调用仍保留空数组默认值。文字里的文件名、导入来源的历史 task ID 不创建交接边；模型显式填写错误的空数组仍需要计划复核。
+
+`ToolResult.human_approval` 可选携带 `HumanApprovalFeedback`，绑定真实批准请求、工具调用、任务、角色与会话范围。Gate 清除工具伪造的批准元数据，上下文单独呈现真实 NOTE，保持原 stdout/stderr、错误和分页 JSON 不变。备注不是常设权限、新搜索额度、问题答复历史或人工质量批准；拒绝路径保持原语义。
+
+`search_files` 的 stdout 仍为有界 JSON 匹配列表。stderr JSON 提供 `files_started`、单文件上限、已观测的大文件跳过数及有界相对路径样本、`walk_exhausted` 和 `output_truncated`。计数仅覆盖已访问条目；迭代结束不证明不可读或过滤条目被覆盖，空匹配不证明被省略内容不存在。
+
+新 `SourceEvidenceStore` 将实际抓取的 raw/text 和规范化检索元数据按完整 SHA256 不可变保存，另用最新 URL 指针缓存。`raw_blob`、`text_blob`、`document_version`、`retention_status` 读取精确历史版本；未知 hash 不返回其它内容，损坏记录报错。新 GET 即使字节相同也有新的抓取身份，缓存/分页保留原身份与时间。旧库仅核验并回填当下还存在的一行，明确旧来源标记，不能恢复早已覆盖的历史。存下原文不等于事实已经核验。
+
+`read_source` 的 offset/limit 按提取文本字符计算，与 `read_file` 的字节分页不同；应分别跟随各自的 `next_offset`，核对返回的原文版本身份。
+
+### 范围化祖先目标接口
+
+`context.lineage.collect_assignment_references(repo, node)` 只用既有 `repo.get` 沿当前任务的 `parent_id` 链读取，返回从根到直接父任务的不可变 `AssignmentReference` 元组。记录只含 task/project/conversation/parent 身份、depth、role 和完整原 goal；序列化附来源标记及 UTF-8 `goal_sha256`。缺失父节点、跨范围、环、身份或深度不一致明确拒绝，不读取依赖、上一阶段、私有问答或文件来补链。根任务返回空元组。
+
+`ContextBuilder.build(..., assignment_references=None)` 和 `TeamContextBuilder.build` 支持该可选关键字，旧直接 Python 调用保持兼容。实际 Worker 为委派任务收集完整链并传入；自定义 builder 不支持该参数，或返回的固定开场未完整保留原引用时，在模型调用前失败。当前子目标、角色及验收不被改写。完整引用先计入必需预算，不能被可选内容裁剪或仅替换成归档链接；老师归档保存精确记录，只有引用时也生成归档。刷新、重入和压缩保留固定开场，trace 单列引用 ID 与哈希，表示准入而非模型实际采用。
+
+祖先原目标不是父任务完整上下文。父任务私有人答、审批、结果、记忆、结论和文件不会继承，也不增加搜索或操作权限。上一阶段即使在 Task 2 的 `deps` 中，也不是该根任务的祖先。目标之间的冲突保持可见，不自动改成新要求或人工决定。
+
+### 本地字面引文核对接口
+
+`tools.source_quote.VerifySourceQuoteTool(store, *, workspaces=None)` 注册为 `verify_source_quote`，操作类别为 `fs_read`。可信操作员可在构造时提供实际路径集合，或注册工具、完成 `configure_team` 后调用一次 `bind_workspaces(team.workspaces.values())`，然后才提交任务。绑定只接受精确、规范且无 alias 的角色路径；不猜目录前缀，适用于 LocalDirs 与受管 Git 工作树。未绑定、其它路径和重复绑定拒绝。模型参数不能修改绑定或选择来源库。
+
+参数仅为小写完整 SHA-256 `metadata_sha256`、非空 `quote` 和可选 `mode`（默认 `exact`，或 `collapse_whitespace`）。引文最多 4096 个 Unicode 码点且 UTF-8 不超过 16384 字节；自贴原文、path、namespace 等额外参数拒绝。工具调用当前库的 `document_version` 校验元数据、索引及 raw/text 哈希，要求来源已登记；不读取最新缓存指针，不发 HTTP、不搜索、不记录新的读取事件，也不消耗 Tavily 次数。
+
+| `status` | `ToolResult.ok` | `lexical_match` | 含义 |
+| --- | --- | --- | --- |
+| `matched` | `true` | `true` | 该精确版本存在字面匹配 |
+| `not_found` | `true` | `false` | 已检查该版本，未找到该字面串；不证明主张为假 |
+| `unknown` | `false` | `null` | 版本缺失、损坏、未登记或身份无法安全返回，不回退其它版本 |
+| `rejected` | `false` | `null` | 参数或工作区绑定不合法，未作为事实核对结果 |
+
+`exact` 保留每个码点；`collapse_whitespace` 仅把连续 Unicode 空白折叠为一个普通空格并去掉两端空格，不改数字、日期、大小写、标点或 Unicode 组合。`coordinates` 给出首次出现的零基半开 `[start,end)` 码点坐标，并明确是保存的提取文本还是空白归一后的派生文本，不是 HTML 字节偏移或出现次数。输出保留原来源/版本哈希、原抓取时间与本次 `checked_at`，含比较文本和引文哈希；相应比较文本摘录最多 360 字符，`contains_entire_match` 明示是否含完整匹配，总 JSON 不超过 16 KiB。
+
+字面 `true`、工具成功、事实正确和人工接受分别判断。来源文本仍不可信；引文存在不证明归属、日期/指标口径、完整性或交付质量。缺失证据保持未知，不能比较模型自贴的两段文字就声称核实来源。
+
+### 实际文件引文与交付绑定
+
+`tools.artifact_quote.VerifyArtifactQuoteTool(store, *, workspaces=None)` 注册 `verify_artifact_quote`（`fs_read`）。可信调用方在 `configure_team` 后一次性绑定 `team.workspaces.values()`；模型不能更换工作区或来源库。参数为 `metadata_sha256`、相对 `path`、Unicode 码点 `start`/`end`（零基半开区间），可选 `mode` 和 `expected_artifact_sha256`。不接受 `quote` 或伪造 receipt。只读当前角色自己的普通 UTF-8 文件，拒绝目录、私有凭证路径、alias/reparse point 和硬链接；文件最多 1 MiB，切片最多 4096 码点且 UTF-8 不超过 16384 字节。
+
+输出包含整文件 SHA-256、字节/字符数、实际切片哈希、码点及 UTF-8 字节坐标，并继承精确来源版本、比较哈希和字面三态。检查前后文件必须稳定；之后编辑会使旧整文件身份失效。JSON 最多 16 KiB，不返回正文。`audit_records()` 返回工具自有、深拷贝且最多 256 条的记录及 `dropped_records`；模型返回的文字不是该账本。未找到引文是有效的字面否定，不等于事实为假。
+
+`eval.quote_delivery.capture_artifact_quote_evidence(scenario_dir, snapshot_ref, task, journal, *, task_ids, secrets=())` 使用受信任的当前任务树和上述账本，校验不可变快照及最终整文件、切片和来源 receipt 结构。阶段文件 `task_N-artifact-quote-evidence.json` 一次写入，拒绝覆盖；`task_result.artifact_quote_evidence` 保存路径、SHA-256、状态和计数，先于人工质量请求。`matched`/`not_found` 仅用于仍对应最终字节的有效记录；前阶段或已变整文件列为 `unapplied`，缺失/损坏证据列为 `unknown` 或 unavailable。字节相同的子任务副本保留原 actor/task/path，标明仅内容身份，不推断主管读取。账本丢失使证据 incomplete；没有合法账本时计数为 null。`quotation_coverage`、`factually_correct` 和 `quality_pass` 始终 null。
+
+### 依赖凭证上下文
+
+可信 CLI 在绑定实际团队工作区后调用一次 `TeamContextBuilder.bind_artifact_receipts(repo, artifact_verifier.audit_records)`，模型不能替换仓库或账本 getter。`eval.quote_handoff.summarize_dependency_checks` 只使用当前仓库中同项目、同会话、状态为 `DONE` 的直接依赖。文件必须同时列入结构化 `result.files` 和已接收 `artifacts`；显式直接依赖可以是上一根任务，仅凭历史任务名称或传递关系不产生访问权。
+
+辅助模块只读取接收者自己工作区中已声明、已整合的 UTF-8 文件，将当前整文件及切片身份与工具自有凭证核对。它不打开生产者私有文件，不分享私有人答、审批、记忆、工具历史、来源正文或原始引文。文件身份相同不证明接收者阅读过；后续编辑使旧凭证不再适用，部分切片匹配不证明完整引文覆盖、事实正确或人工批准。
+
+开场摘要包含有限的文件身份、核验计数及示例凭证 ID，最多 2000 字符和 8000 UTF-8 字节。完整、简略、空摘要依次通过上下文预算准入，不截断必需目标、祖先引用或同任务已答信息。历史缺失、被丢弃、损坏或省略时保持未知，不能据此认定生产者没有核验；此摘要与最终导出证据分别保存和解释。
+
+当前源码 `be0d3f57…` 包含此交接及下述推理选项，已完成原生 Windows Conda `nlp` 全量回归：1613 passed、8 skipped、0 failures/errors、Ruff 0 问题，源码与测试前后不变。父任务失败恢复仅限自己的子任务，须等全部依赖进入终态，保留 `MAX_WAKEUPS` 并将失败传播到稳定状态，验收和质量检查继续有效。实际新闻首题复测自然结束为 DEAD、正式导出为零、质量 null；失败检查器的下游编辑未启动，父任务得到恢复机会，但后续计划仍遗漏审阅文件依赖。33 条凭证均未应用于正式快照，来源完整性及回放通过不证明私有候选内容通过。
+
+较早 `556d78fc…`（1601 passed、8 skipped）及 `8bc0c2ca…` 的回归分别作为历史检查点保留。556d 新闻首题辅助轮因记者耗尽 token 预算重试并暴露失败依赖调度问题，由操作员中止；原始 `running` 与缺失最终结果、导出和流式侧记录的事实保持不变，内容质量未知，不与当前复测混同。接口回归不证明老师质量。
+
+### 来源访问审计接口
+
+`tools.source_audit.SourceAccessAuditTool(store, *, workspaces=None)` 注册 `source_access_audit`（`fs_read`）。一次性 `bind_workspaces(team.workspaces)` 绑定实际 `agent_id -> workspace`，同时校验调用者 ID 与规范路径，适用于实际 LocalDirs 或受管 Git 路径。参数仅为可选 `agent_id`、`task_id`、`all_tasks`、`limit`（默认 10，最大 50）、`before_event_id`。默认当前 actor/task；`agent_id="*"` 显式选择同组已绑定角色，`all_tasks=true` 包括其当前及历史任务，不能同时指定 `task_id`。它不扩大私有人答、审批、记忆或工作区权限。
+
+`eval.source_audit_store.SourceAuditStore` 只对已存在的来源库使用 `mode=ro`、`query_only` 和有截止时间的短查询；不构造/迁移原 store，不通过可写 getter 回退。角色/任务过滤先于 LIMIT，事件 ID 游标可继续分页。SQL 不写数据库，但 SQLite 仍可能使用现有 WAL/SHM 协调，不能声称文件系统完全不变。精确版本缺失、损坏或无法归属的旧事件保持未知。
+
+报告包含当前窗口的成功/失败、fresh/cache、不同版本、已知首末记录时间和按精确提取文本版本合并的已服务区间。`counts_for_this_page` 和覆盖字段不代表完整历史或模型理解；使用 `pagination.next_before_event_id` 继续。输出上限 32 KiB，裁剪明确标记，单事件详情过大时保留事件身份和可续游标并返回 unknown，不静默丢弃。`factual_grade` 为 null；搜索 origin 不是 provider HTTP 计费，后者仍以预算账本为准。
+
+### 可选学校 SSE 传输
+
+正式 CLI 的 `--llm-transport buffered|stream` 默认 `buffered`。显式 `stream` 使用 `eval.school_stream.SchoolStreamClient`，遵循既有异步 `chat(messages, tools)` 协议，固定 `max_attempts=1`、`retry_transport=False`、`completion_cap=None`，不发送 `stream_options`、不自动转回 buffered、不强加单次 completion-token 上限；流字节/事件等保护仍有效。累计节点预算不变。Python 类只有在显式同时配置第二次尝试和传输重试时才允许受限重试；CLI 未开放该策略，Worker 重试也不是同一次传输尝试。
+
+`--llm-reasoning-effort none` 只允许与 `--llm-transport stream` 一起使用。Python 客户端接受 `reasoning_effort=None` 或 `"none"`；默认 `None` 不发送该字段，显式 `"none"` 才发送顶层 `reasoning_effort`。buffered 模式在读取配置或创建输出前拒绝该 CLI 选项。`test.json` 的 `model.reasoning_effort`、流式侧记录的 `reasoning_effort` 及尝试记录的 `requested_reasoning_effort` 保存请求设置，均不证明提供方遵守。
+
+在同一学校端点及指定模型的一次固定请求诊断中，`none` 返回完整 `read_source` 工具调用但未执行工具；默认及 `thinking.type=disabled` 试验以 `finish_reason=length` 结束。这项有限观察不等于老师题通过，也不证明 HTTP 504 已全面解决。
+
+流式客户端校验完整 SSE/UTF-8/工具参数和结束状态，丢弃不完整输出，不执行部分工具。每场景 `stream-transport.json` 保存独立 `call_id`、attempt、状态、时间、结束原因及 `usage_raw`/`usage_present`；不含提示词、正文、工具参数、授权或完整 headers。其 ID 不等于 `RecordingLLM` 对话 ID，不根据顺序拼阶段。usage 缺失/失败不计为实测零，不补完整计费总量。原始 HTTP 504 和未完成老师任务保持原记录；新增传输选项不是可靠性或内容通过声明。

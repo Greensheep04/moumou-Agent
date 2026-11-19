@@ -27,6 +27,20 @@ shell above, or let Conda activate it for the default instructor entry:
 conda run --no-capture-output -n nlp python -m moumou
 ```
 
+When using an additional Git worktree, the environment's editable installation
+may still point to another checkout. From the worktree root, bind imports for
+the current PowerShell session and inspect the loaded module before testing:
+
+```powershell
+$env:PYTHONPATH = Join-Path (Get-Location) "src"
+python -c "import moumou.eval.cli; print(moumou.eval.cli.__file__)"
+python -m moumou.eval.cli --plan
+```
+
+The printed path must belong to the intended checkout. This changes only the
+current process environment; it does not reinstall packages, alter the machine's
+Python settings, or require copying credentials between worktrees.
+
 ## Local credentials
 
 Copy the template if `.env` does not already exist, then edit the local file:
@@ -90,6 +104,41 @@ and a fresh directory under `runs/test/`. To select one team or use file input:
 ```powershell
 python -m moumou --scenario scenario_1 --human files --out runs/test/NEW_SESSION
 ```
+
+Buffered model responses remain the default. The optional school SSE client can
+be selected explicitly using `--llm-transport stream` on the same entry point.
+It accepts only complete responses, records attempt metadata separately, and
+does not automatically fall back to buffered requests or retry HTTP failures.
+Short transport checks do not establish long-task reliability or factual quality.
+
+The school stream client also accepts an explicit reasoning setting:
+
+```powershell
+python -m moumou --llm-transport stream --llm-reasoning-effort none --out runs/test/NEW_REASONING_SESSION
+```
+
+Omitting `--llm-reasoning-effort` leaves it at `None` and sends no such request
+field. Buffered mode rejects the option. The manifest, stream sidecar and attempt
+diagnostics record the requested setting, not proof that the provider honored it.
+On one fixed request to the configured school endpoint and model, `none` produced
+a complete `read_source` tool call without executing it; default and
+`thinking.type=disabled` trials ended with `finish_reason=length`. This limited
+diagnostic is neither an instructor-task pass nor a general HTTP 504 fix.
+
+Current source `be0d3f57…` completed full native Windows Conda `nlp` regression:
+1613 passed, 8 skipped, no failures/errors and zero Ruff diagnostics, with stable
+source/tests. Its assisted NewsTask1 retest used unchanged inputs, explicit
+stream/none, six reused public records and no new Tavily allowance. It naturally
+ended DEAD with zero formal exports and unknown quality. Scheduling recovery was
+observed, but missing review-file handoffs, incomplete stream responses and content
+corrections remain; framework checks do not establish teacher acceptance.
+
+Historical checkpoint `556d78fc…` retains its separate 1601 passed and 8 skipped.
+Its assisted NewsTask1 trial was operator-stopped after reporter token-budget
+exhaustion/retry exposed a failed-dependency scheduling bug. Raw `running` and
+missing final result/export/transport sidecar are retained; content quality is
+unknown. It is not the new retest. Versioned outcomes and stop evidence are in
+[performance](PERFORMANCE.en.md).
 
 `--out` must name a directory that does not exist. A scenario keeps one Engine,
 four private continuing role workspaces, memory, and actual Task 1 history for

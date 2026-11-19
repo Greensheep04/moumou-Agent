@@ -21,6 +21,16 @@ python -m pip install -e ".[dev]"
 conda run --no-capture-output -n nlp python -m moumou
 ```
 
+使用额外的 Git 工作树时，环境中的可编辑安装可能仍指向另一个项目副本。在目标工作树根目录中，为当前 PowerShell 会话绑定源码，并在测试前检查实际加载位置：
+
+```powershell
+$env:PYTHONPATH = Join-Path (Get-Location) "src"
+python -c "import moumou.eval.cli; print(moumou.eval.cli.__file__)"
+python -m moumou.eval.cli --plan
+```
+
+打印路径应属于准备测试的工作树。该设置只影响当前进程环境，不重新安装依赖、不修改系统 Python 配置，也不要求在工作树之间复制密钥。
+
 ## 本地密钥
 
 仅在 `.env` 尚不存在时复制模板，再编辑本地文件：
@@ -71,6 +81,20 @@ python -m moumou.eval.cli --tasks eval/tasks
 ```powershell
 python -m moumou --scenario scenario_1 --human files --out runs/test/NEW_SESSION
 ```
+
+模型响应默认仍使用 buffered 客户端。在同一入口显式添加 `--llm-transport stream` 可选择学校 SSE 客户端；它只接受完整响应，另存尝试元数据，不自动降级到 buffered，也不自动重试 HTTP 失败。短请求检查不能证明长任务可靠性或内容事实正确。
+
+学校流式客户端另支持显式推理设置：
+
+```powershell
+python -m moumou --llm-transport stream --llm-reasoning-effort none --out runs/test/NEW_REASONING_SESSION
+```
+
+省略 `--llm-reasoning-effort` 时值为 `None`，请求不发送该字段；buffered 模式拒绝此选项。运行清单、流式侧记录及尝试诊断保存的是请求设置，不证明提供方实际遵守。在同一学校端点及指定模型的一次固定请求中，`none` 返回了完整的 `read_source` 工具调用但未执行工具；默认及 `thinking.type=disabled` 试验以 `finish_reason=length` 结束。这项有限诊断不等于老师题通过，也不证明 HTTP 504 已全面解决。
+
+当前源码 `be0d3f57…` 完成原生 Windows Conda `nlp` 全量回归：1613 passed、8 skipped、0 failures/errors、Ruff 0 问题，源码与测试前后不变。该版新闻首题辅助复测沿用相同输入、使用 stream/none、复用六条公开记录且新 Tavily 配额为零，自然结束为 DEAD、正式导出为零、质量未知。实际观察到调度恢复，但审阅文件交接缺失、流式响应未完整结束和内容纠正问题仍在，框架检查不代表老师验收通过。
+
+历史检查点 `556d78fc…` 的 1601 passed、8 skipped 另行保留。其新闻首题辅助轮因记者耗尽 token 预算重试并暴露失败依赖调度问题，由操作员中止；原始 `running` 及缺失最终结果、导出和流式侧记录的事实均保留，内容质量未知，不与新复测混同。分版本结果及停机证据见[性能报告](PERFORMANCE.md)。
 
 `--out` 指定的目录必须尚不存在。同一场景保留一个 Engine、四个持续使用的私有角色工作区、记忆，以及 Task 1 的真实结果和对话，供 Task 2 使用。具体分工、实现和检查在执行中协商；评测器不会用固定问题或预设答案代替原任务。
 

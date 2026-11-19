@@ -7,9 +7,9 @@ request, delegate work, execute tools in private working directories and return
 declared artifacts. Machine acceptance, agent completion and reviewed goal quality
 are separate observations.
 
-This document describes the implementation. The latest context-recovery, trace and
-evaluation additions still require regression execution and actual task evaluation;
-their presence in the code is not an acceptance result.
+This document describes the implementation. Regressions, real tasks and content reviews
+are bound to their actual source versions; implementation presence is not accepted task
+quality. See the [performance report](PERFORMANCE.en.md) for identities, checks and open findings.
 
 ## Runtime components
 
@@ -106,12 +106,24 @@ directories and databases isolate formal teams.
 ## Context and human decisions
 
 Both context builders preserve the full current role, goal, acceptance and recorded
-same-task answers. Optional dependency reports, lessons and board/history content
-yield first. If mandatory content cannot fit, `ContextAdmissionError` stops admission
-before a model call.
+same-task answers. Delegated tasks also retain exact ancestor goals in root-to-parent
+order. Worker follows only the current repository's `parent_id` edges, validating
+identity, project, conversation, depth and cycles; dependencies and prior phases do not
+define ancestry. Full references and their UTF-8 SHA-256 hashes are mandatory pinned
+opening content. Optional dependency reports, lessons and board/history yield first.
+Unfit mandatory content or a delegated builder dropping references causes
+`ContextAdmissionError` before a model call.
 
-The formal adapter saves auxiliary context in private
-`.evaluation/context/<digest-prefix>.json` archives. New filenames use a 32-hex prefix,
+References remain separate from the child's own goal, role and acceptance, preserving
+qualifications and unknowns without automatically resolving conflicts. They contain
+ancestor goals only, never parent-private answers, approvals, memories, results or files,
+and grant no extra tools or search allowance. A Task 2 root has no ancestor references
+even when it depends on a prior phase. Re-entry, same-task answer refresh and compaction
+retain mandatory references. Availability does not prove model use or correct conclusions.
+
+The formal adapter saves auxiliary context and exact ancestor-goal records in private
+`.evaluation/context/<digest-prefix>.json` archives, including lineage-only context.
+New filenames use a 32-hex prefix,
 with full SHA-256 references and collision checks. These are framework evidence,
 not delivered project artifacts.
 
@@ -172,7 +184,50 @@ A `DONE` node with no machine criteria is self-report. Reviewed quality requires
 evidence; a regression result, memory record or export does not establish that all
 instructor goals passed or a teammate accepted the integration.
 
+## Public evidence and final delivery checks
+
+Formal teacher engines keep public research in a scenario-owned source-evidence store,
+separate from private role workspaces, task memory and immutable delivery snapshots.
+Metered search records the actual query, request, role/task, URL, snippet and original
+time. `source_history` exposes that evidence across the four roles; `read_source` adds
+bounded original text and read/network provenance without making a new search.
+Only registered public sources and explicit same-document formats are accepted. Failed
+reads remain failures; neither snippets nor successful retrieval certify factual claims.
+
+Teacher context preserves original role/task text and adds a generic source/claim,
+date/unit and independent-calculation protocol. Its root-delivery hook checks declared
+document references before acceptance and publication. It asks the model to correct
+missing/undeclared support files instead of publishing private or inferred files.
+Packaging evidence and semantic quality remain separate; human review is never forged.
+Explicit public research reuse retains original times and is labeled separately in the
+run manifest. It does not import previous answers, deliverables, memories or grades.
+
 ## Delivery references
+
+Data handoff uses explicit graph edges: every model plan states each child's `deps`,
+and a missing field receives corrective feedback before delegation changes state.
+Python plan defaults remain compatible. This exposes silent omission; it does not
+infer data flow from prose or prove that chosen edges are right.
+
+Approval notes have a separate typed feedback path from Gate to the next agent
+observation. Their request/call/scope identity is retained without modifying tool
+content channels or widening authorization. Question history, approvals and
+independent content acceptance remain distinct records.
+
+Public-source retention separates immutable raw/text blobs and retrieval metadata
+versions from the mutable latest-URL pointer. GETs retain their identities and dates;
+cache/page serving is not a new retrieval. Verified legacy current rows can be
+backfilled, while missing historical versions remain unavailable. Storage integrity
+and supplemental operator captures do not establish claim accuracy.
+
+`verify_source_quote` checks a literal against the current source store's retained
+`metadata_sha256`. After configuring the team, the operator binds the tool once to
+actual provider-returned role paths, without assuming LocalDirs or Git worktree layout.
+It reads only the exact version, with no HTTP, search or latest-page fallback. Exact
+code-point matching is the default; optional normalization changes whitespace only.
+Match, non-match and unavailable evidence yield `true`, `false` and `null`. Coordinates
+identify saved extractor text or the explicitly normalized derived text. A lexical
+match does not establish truth, attribution, metric/date scope or human acceptance.
 
 - [Setup](SETUP.en.md)
 - [Evaluation workflow](EVAL.en.md)

@@ -29,6 +29,14 @@ collisions are rejected, and existing archives are not renamed. If mandatory ins
 before attributing a missed requirement to the model; framework truncation is a system
 failure, and its unfinished goals remain in the planned denominator.
 
+Delegated openings also pin validated ancestor goals from the current repository in
+root-to-parent order, with UTF-8 SHA-256 hashes. References preserve qualifications
+and unknowns separately from the child's own goal, role and acceptance. Only `parent_id`
+defines ancestry, never `deps`, a prior phase or a role name. Parent-private answers,
+approvals, memories and files are not shared, and no search authorization is added.
+Both builders budget full references as mandatory and retain them across re-entry,
+answer refresh and compaction. Transmitted availability is not correct model use.
+
 The lower-priority [supplementary bank](../eval/supplementary/README.md) retains the
 fifteen self-authored tasks as Markdown using the same role/task conventions. Its
 eight groups contain two tasks each except the last, which has one. It requires an
@@ -171,3 +179,212 @@ do so.
 
 The [delivery checklist](DELIVERY.en.md) maps these records to the architecture,
 performance report, contribution screenshots and final presentation requirements.
+
+## Research evidence and delivery quality
+
+The formal teacher entry point registers `source_history` and `read_source` alongside
+the metered search tool. Public queries, source URLs, snippets, original retrieval times
+and request identities are shared inside one scenario. Search snippets remain previews.
+Read the actual HTML/plain-text passage, its dates and units before marking a claim
+supported; the page reader records original/final URLs, content hashes and read time.
+Cached reads retain their original time. Unsupported formats, inaccessible pages and
+missing evidence remain explicit limitations, never a successful fact check.
+
+The reader accepts registered public sources. It verifies TLS, pins validated public
+addresses and rejects private targets, credential URLs, search-engine bypasses, access
+barriers and oversized/compressed responses. If system DNS returns unusable addresses,
+it may use fixed Cloudflare HTTPS DNS; resolver provenance is retained and no local
+network settings are changed. A registered arxiv PDF permits only its same-ID,
+same-version HTML/abstract format, with the derivation recorded. It does not parse PDF.
+
+For explicit research reuse, a new session can import only public provider-cache results:
+
+```powershell
+python -m moumou.eval.cli --scenario scenario_2 --reuse-sources runs/test/PRIOR_SESSION --search-requests 0 --quality-review deferred --out runs/test/NEW_SESSION
+```
+
+The source session must have a terminal saved manifest and a stable public cache.
+Original retrieval timestamps/request IDs are preserved; old query text is marked
+unknown where the cache did not retain it. Human answers, deliverables, memories and
+grading decisions are not imported. `source_reuse` records this in the new manifest;
+imports count as neither fresh searches nor new-run search-cache hits. Report such a
+run as research reuse, separately from a fresh research benchmark.
+
+The teacher adapter also checks final root document references. A missing or undeclared
+local companion/asset produces correctable `result_rejected` feedback before publication.
+Explicitly include intended public files or correct their references; nothing is added
+automatically. This checks packaging, not factual accuracy. Final semantic review must
+still compare consequential claims with source passages and independently recompute
+rates, units and arithmetic. No automatic human-quality approval follows.
+
+Successful page captures now retain immutable raw/text blobs and canonical metadata
+versions, with a separate latest-URL cache pointer. The original retrieval identity,
+time, source request and explicit format derivation are archived before hashing;
+cached serving preserves them. A read's `metadata_sha256`, `raw_sha256` and
+`text_sha256` identify the captured evidence, rather than whichever page is latest.
+Legacy backfill retains only the verified current row and labels its origin. Missing
+pre-retention content remains unavailable, and supplemental operator copies retain
+their separate provenance. Never migrate an original closed acceptance archive just
+to make a historical retention check pass.
+
+The formal entry also registers the local read-only `verify_source_quote` tool, bound
+once after team configuration to actual provider-returned role workspaces. Supply a
+real read's `metadata_sha256` and a quote. It checks only that retained version, without
+HTTP, search or latest-version fallback. Roles cannot supply their own source body,
+path or namespace. Default `exact` mode preserves code points; `collapse_whitespace`
+changes Unicode whitespace only, never numbers, dates, case or punctuation. Results
+separate lexical match `true`, non-match `false` and unavailable evidence `null`.
+Coordinates identify retained extractor text or explicitly normalized derived text.
+Tool `ok`, lexical presence and factual correctness are different observations;
+read surrounding passages, check attribution/scope and independently recompute values.
+
+Corrective supplementary sessions keep separate plans, source and authorization scope;
+they are not pooled into the canonical six goals. Preserve `DEAD`, unposted stages and
+zero formal artifacts. Candidate files recovered from private role directories support
+only explicitly labelled local forensic checks, never a formal root delivery. See the
+[performance report](PERFORMANCE.en.md) for versioned results. Implementation regression
+does not manufacture human acceptance, closed-set scores or contribution screenshots.
+
+For example, the `6a830670` sessions `news-reviewed-revision-01` and
+`fund2-reviewed-revision-01` ended `DEAD` after repeated HTTP 504 failures, with no
+formal root artifact export. News Task 2 did not run. Local forensic checks of candidate
+files do not alter those formal states or establish an instructor-task pass.
+
+Model plans must explicitly state `deps` for every child. A missing field is a
+correctable proposal error, not permission to infer an edge from the goal's prose.
+Successful approval notes reach the next role observation as scoped metadata,
+separately from the tool's stdout/stderr. They do not add a search allowance, create
+a reusable authorization or stand in for a quality review. File-search coverage also
+reports large-file skips and output limits; an empty match list is not an exhaustive
+claim about unexamined text.
+
+Independent content audits may still reject an agent-completed, structurally intact
+delivery. Keep those findings, model/protocol failures and assisted revisions separate
+from implementation regressions and raw human-quality fields. Research reuse and
+operator clarification must remain visible when comparing sessions from different
+source versions; do not pool them into a single six-goal final benchmark.
+
+## Final-file quotes, served ranges and optional streaming
+
+The formal entry also registers `verify_artifact_quote` and `source_access_audit`,
+binding actual role workspaces after team configuration. The former reads a
+zero-based half-open Unicode `[start,end)` slice from an actual UTF-8 file in the
+caller's own workspace. It returns whole-file, slice and exact-source-version
+hashes, accepting no separately pasted quote. Any later file edit makes the old
+check inapplicable to the new whole file. A byte-identical child copy can establish
+content identity, never a manager's reading or verification.
+
+The latter defaults to the current actor and task; explicit arguments can select
+other bound group actors or prior tasks. `SourceAuditStore` queries the existing
+public-source store read-only, without initialization, migration, search or access
+to private answers/memory. Successes, failures, cache status, versions and served
+character intervals describe only the returned event window. Follow its cursor;
+missing legacy versions or pagination remain unknown. Fetching a whole page,
+returning some characters to a role and model understanding are different facts.
+Zero records in a limited window do not establish that the actor never read a page.
+
+Before human quality review, delivery writes
+`task_1-artifact-quote-evidence.json` or `task_2-artifact-quote-evidence.json`.
+The task result's `artifact_quote_evidence` references its path, SHA-256, status and
+counts. This sidecar binds tool-owned records from the current task tree to the
+immutable delivery snapshot, separating `matched`, `not_found`, `unknown` and
+`unapplied`. Changed whole files, prior-phase records and missing evidence never
+become matches. Dropped records make evidence incomplete; a corrupt snapshot
+remains unavailable. Coverage, factual and quality judgments in this sidecar stay
+null. It does not replace human review; deferred quality remains unknown.
+
+Before a dependent role starts, the team context can include a bounded summary of
+native file-check receipts. The trusted current repository must list a same-scope,
+`DONE` direct dependency; only files declared in both `result.files` and accepted
+`artifacts` qualify. The summary reads the recipient's own integrated files and
+applies receipts only to the same current bytes. A previous root task can qualify
+when explicitly listed as a direct dependency. This does not expose the
+producer's private files, answers or full history, or follow transitive tasks.
+
+The opening summary is limited to 2000 characters and 8000 UTF-8 bytes. Full,
+compact and empty variants pass through the normal context budget; mandatory
+goals, lineage references and same-task human answers remain intact. Missing,
+omitted or incomplete receipts mean unknown prior checks, not that the producer
+performed none. Selected-slice matches do not certify every quote or content
+quality. See the [interface contract](INTERFACES.en.md) for binding and scope.
+
+`--llm-transport buffered|stream` defaults to `buffered`, retaining the existing
+client. Explicit SSE selection uses the same entry and a fresh output directory:
+
+```powershell
+python -m moumou --llm-transport stream --out runs/test/NEW_STREAM_SESSION
+```
+
+The optional school reasoning setting requires stream mode:
+
+```powershell
+python -m moumou --llm-transport stream --llm-reasoning-effort none --out runs/test/NEW_REASONING_SESSION
+```
+
+Omitting the option leaves `None` and sends no `reasoning_effort` request field;
+buffered mode rejects it. `test.json` records `model.reasoning_effort`, the stream
+sidecar records `reasoning_effort`, and each attempt records
+`requested_reasoning_effort`. These describe the request, not guaranteed provider
+behavior. One fixed-request diagnostic on the configured school endpoint and model
+returned a complete `read_source` tool call with `none`, without executing the
+tool; default and `thinking.type=disabled` trials ended with `finish_reason=length`.
+This is not an instructor-task result or a general HTTP 504 remedy.
+
+CLI `stream` makes one attempt per model call, never automatically downgrades to
+buffered and imposes no completion-token cap; the node's cumulative execution
+budget still applies. Only a complete, valid SSE response reaches `RecordingLLM`;
+partial text or tool calls are not executed. Each scenario's `stream-transport.json`
+records attempts, timings, completion and observed usage separately. Its call IDs
+are independent of dialogue IDs: do not infer correspondence or phases from order.
+Missing usage is not zero or a complete billing total. Worker retries and transport
+attempts remain separate. Optional streaming does not establish that long-request
+HTTP 504 failures are solved, rewrite previous failures or create instructor scores.
+See the [interface contract](INTERFACES.en.md) for fields.
+
+Current source `be0d3f57…` completed full native Windows Conda `nlp` regression:
+1613 passed, 8 skipped, 0 failures/errors and zero Ruff diagnostics; pytest 180.15s
+(wrapper 180.562s), with stable source/tests. A parent can review failure only for
+its own children after all dependencies are terminal, subject to `MAX_WAKEUPS`.
+Failure propagation continues to a fixed point; this does not waive acceptance or
+quality checks.
+
+The `news-dependency-retest-01` NewsTask1 trial used the same five
+input files and unchanged original roles, goal and operator-feedback bytes as the
+interrupted baseline, explicit stream/none, six reused public records and no new
+Tavily allowance. It naturally ended root DEAD with zero formal exports in
+4202.906s; quality remains null. The failed checker's downstream editor did not
+run, and the parent recovered, directly exercising the scheduling repair. The
+recovery plan still omitted necessary file dependencies; the replacement editor
+could not inspect the package.
+
+Four failed stream attempts returned HTTP200 and began within 1.1s, but generated
+219k–251k ordinary content characters without tool calls, a finish reason or DONE
+before the local deadline; reasoning characters were zero. This is incomplete
+generation, not proof of no response or network delay. Transport IDs do not map
+themselves to dialogue tasks. Forty-five real human replies accumulated 3129.672s
+of waiting, which can overlap and must not be subtracted from delivery time.
+Source integrity and 784-span replay checks passed, but all 33 file receipts are
+unapplied to the zero-file formal snapshot. Candidate content remains forensic:
+time framing, causal wording, review-date distinctions and final editorial review
+need correction. This assisted single-goal run is not a canonical six-goal score.
+
+Historical checkpoint `556d78fc…` completed full native Windows Conda `nlp` regression:
+1601 passed, 8 skipped, 0 failures/errors and zero Ruff diagnostics. Pytest took
+178.56s (wrapper 178.938s), with unchanged source/tests. These checks include the
+reasoning option and receipt handoff; they do not establish teacher content quality.
+The earlier `8bc0c2ca…` checkpoint retains its separate 1538 passed and 8 skipped.
+The original-NewsTask1 assisted trial on `556d78fc…` used explicit stream mode with
+`reasoning_effort=none`, six reused public records and zero new Tavily allowance.
+Reporter token-budget exhaustion/retry exposed a P1 failed-dependency scheduling
+bug, and the operator stopped the trial. The raw manifest still says `running`;
+there is no final Task1 result, export snapshot or stream sidecar. Preserve the
+exact raw record with separate stop evidence, rather than inventing natural DEAD
+closure or a verified zero-file export. Content and quality remain unknown.
+That interrupted baseline and its 1601-pass framework checkpoint remain separate
+from the current source and new retest.
+
+The generic quality protocol also preserves individual measurement/effective dates,
+conditional-probability directions and population boundaries. It distinguishes an
+original speaker from the secondary page actually read, and limited support from
+missing evidence or disproof. These are review instructions, not an automatic
+semantic grader; their effect on a new teacher run remains unverified.

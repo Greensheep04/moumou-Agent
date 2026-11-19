@@ -4,9 +4,10 @@
 
 A running agent combines an assigned task, its own context and a private workspace.
 The generic engine creates roles as needed; formal instructor sessions instead
-reuse the four original members of each supplied team. The mechanisms below are
-implemented in source. New recovery, hierarchy and cleanup regressions have not
-been executed in the current development version.
+reuse the four original members of each supplied team. Framework regressions and
+live-session evidence for these mechanisms are bound to their executed versions;
+earlier frozen-source results do not validate later fixes. See the
+[performance and verification report](PERFORMANCE.en.md) for identity and content limits.
 
 ## Delegation lifecycle
 
@@ -53,7 +54,8 @@ application boundaries, not a universal operating-system security sandbox.
 
 Only declared artifacts cross workspace boundaries. A child does not receive the
 parent's private conversation or sibling transcripts automatically. The parent
-must provide a self-contained task and explicit dependencies. The formal team
+states the child's work, inputs and dependencies; exact ancestor goals are separately
+retained as scoped references. The formal team
 adapter also records prior task context and bounded history, with complete
 auxiliary archives in the member's private `.evaluation/` directory.
 
@@ -71,6 +73,19 @@ The generic `ContextPolicy` opening default is 8,000 estimated tokens, bounded b
 the configured prompt ceiling. Formal team admission uses its actual configured
 policy and retains source-linked auxiliary archives. These limits are runtime
 configuration, not a provider capability claim.
+
+Worker follows only the current repository's validated `parent_id` chain and collects
+full ancestor goals in root-to-parent order with UTF-8 SHA-256 hashes. Both builders
+pin these as mandatory before optional history. Missing, cross-scope, cyclic or
+depth-inconsistent chains fail before the model. Re-entry, same-task answer refresh
+and compaction retain them; custom builders that accept but omit references also
+reject. A previous phase in Task 2's dependencies is not an ancestor of that root.
+
+References remain separate from the child's goal, role and acceptance, preserving
+qualifications and unknowns without automatically rewriting conflicts. This channel
+does not carry parent-private answers, approvals, results, memories, notes or files,
+and grants no tools or search allowance. Prompt availability is not model compliance
+or correct content.
 
 Original clarification questions and answers are persisted by
 project/conversation/task/role. On parent re-entry, retry or process recovery,
@@ -91,6 +106,22 @@ The generic defaults trigger at 600,000 estimated tokens and target 256,000;
 deterministic shrinking precedes dropping old whole turns, and optional model
 summarization is disabled by default. Configure these values for the actual course
 model; see [context and memory](CONTEXT-MEMORY.en.md).
+
+## Team public evidence and lexical checking
+
+The formal `source_history`, `read_source` and `verify_source_quote` tools use one
+scenario-owned public store, not other roles' private directories. The operator binds
+the verifier once to actual provider-returned role paths. Four roles can check an
+exact `metadata_sha256` read by another group member, without inferring access from
+the original search actor or directory names. Unbound and foreign-workspace calls reject.
+
+`verify_source_quote` makes no HTTP/search call, never falls back to the latest URL
+version and accepts no model-pasted source body or path. Default matching preserves
+code points; optional normalization changes whitespace only. `true` / `false` / `null`
+mean lexical presence, absence or unknown evidence. Coordinates identify retained
+extractor text or normalized derived text; numbers, dates, case and punctuation remain
+unchanged. Public sources, ancestor goals and private human exchanges are distinct
+channels. A literal match is not factual, attribution, risk/scope or human acceptance.
 
 ## Handoff and acceptance
 

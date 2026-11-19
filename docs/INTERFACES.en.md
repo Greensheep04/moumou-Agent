@@ -441,7 +441,9 @@ history or a fresh independent attempt. A source's actual task count defines its
 
 The team context states the file/delegation contract: only direct dependencies with
 explicit `artifacts` transfer files; dependency chains and parent directories are not
-automatically shared. Child goals must be self-contained. For missing inputs, use
+automatically shared. Child goals state their own work and inputs; exact ancestor goals
+are separately retained as scoped references, without parent-private answers or files.
+For missing inputs, use
 `submit_plan` to ask the owning role for an explicit delivery, then declare the dependency,
 or use `ask_human`; do not bypass private workspaces or repeat denied cross-role searches.
 
@@ -542,10 +544,10 @@ allowance is separate from this search counter.
 
 ### Offline report consumer API
 
-The current recovery, trace and phase-evidence additions have regression source but
-await execution. Published e35e820's 905/8 result is a historical baseline, not validation
-of the changed implementation. Actual task quality and consumer sign-off require their
-own evidence; see [delivery requirements](DELIVERY.en.md).
+Recovery, trace and phase evidence are validated against their actual source versions;
+see the [performance report](PERFORMANCE.en.md). Historical regression does not validate
+later changes. Actual task quality and consumer sign-off require their own evidence;
+see [delivery requirements](DELIVERY.en.md).
 
 `eval.report.build_report(root)` validates one saved suite and its authoritative task
 records. `generate_report(root, output=None)` writes a derived `.md`/`.txt` report without
@@ -631,6 +633,7 @@ All of it lives in `src/moumou/contracts/`; import with `from moumou.contracts i
 | `AgentInstance` | `agent.py` | a running instance with its two scope keys |
 | `Message` / `Scope` | `message.py` | messaging and addressing |
 | `Tool` / `ToolContext` / `ToolResult` | `tool.py` | the tool trio |
+| `HumanApprovalFeedback` | `tool.py` | scoped note from one actual approved request |
 | `IntegrateResult` | `workspace.py` | the outcome of moving artifacts between workspaces |
 | `TraceEvent` | `trace.py` | one execution record |
 | `MemoryRecord` | `memory.py` | one lesson |
@@ -640,3 +643,258 @@ All of it lives in `src/moumou/contracts/`; import with `from moumou.contracts i
 Run `pytest tests/test_contracts.py` and relevant adapter regressions after changing
 these fields. A schema-compatible change still needs its actual runtime and consumer
 checks; the existence of a test file is not a passing result.
+
+## Quality-facing optional interfaces
+
+- Model-facing `submit_plan` calls require an explicit `deps` array on every
+  subtask: `[]` means independent work; producer keys create the file handoff.
+  Omission receives correctable `invalid_plan` feedback before creating children
+  or roles. Direct Python `Plan`/`SubtaskSpec` callers retain default-empty deps.
+  A filename in prose or a historical imported task ID creates no dependency;
+  explicit empty arrays can still be logically wrong and need plan review.
+- `ToolResult.human_approval` optionally carries `HumanApprovalFeedback` from an
+  actual approved request, bound to its request/tool-call/task/role/scope. The gate
+  discards tool-supplied attestations and the context renderer shows genuine notes
+  separately, without changing `stdout`, `stderr`, errors or pagination JSON.
+  This is per-call feedback, not a reusable grant, search-budget increase,
+  clarification-ledger entry or human quality approval. Rejection behavior remains.
+- `read_file` retains its original bounded preview when called with only `path`.
+  Explicit `offset`/`limit` enables UTF-8 byte pagination (`limit`1..8192). `stdout`
+  contains only content; `stderr` JSON exposes `offset`, `next_offset`, `file_size`,
+  `bytes_returned`, `limit` and `eof`. Follow the returned cursor, not `offset+limit`,
+  because pages end on UTF-8 boundaries. Invalid cursors and too-small pages fail.
+- `search_files` preserves its bounded JSON match-list `stdout`. `stderr` JSON
+  reports `files_started`, `max_file_bytes`, observed large-file skips and a bounded
+  relative-path sample, `walk_exhausted` and `output_truncated`. Counts describe
+  visited entries; exhausted iteration does not prove unreadable/filtered entries
+  were covered. Empty matches do not establish absence in omitted content.
+- The formal evaluation registry adds `source_history` (`fs_read`) and `read_source`
+  (`network`). Their scenario-owned `SourceEvidenceStore` shares public evidence only;
+  it does not grant access to private workspaces. A source/page hash proves captured
+  bytes, not that a claim is true. Original retrieval and current serving times differ.
+  Source-page offsets/limits count extracted-text characters, unlike file byte
+  pagination; follow that reader's `next_offset` and retained metadata identity.
+- New source captures retain immutable raw/text blobs and canonical retrieval
+  metadata, identified by full SHA256, separately from the latest-URL cache pointer.
+  `SourceEvidenceStore.raw_blob`, `text_blob`, `document_version` and
+  `retention_status` expose exact stored content/version provenance. Unknown hashes
+  return no content; corrupt records fail validation. A new GET has a new retrieval
+  identity even when bytes match; cache hits and pagination retain it. Legacy
+  backfill verifies only the currently stored row and labels its origin; it cannot
+  reconstruct already overwritten history. Captured versions do not certify claims.
+- `SearchBudgetTool(..., source_store=...)` optionally records public search evidence;
+  omitting it preserves existing behavior and all request charging/grant rules.
+- `TaskRunner` calls an optional context `validate_delivery(node, workspace, result)`
+  for root submissions before acceptance and again before publication. The teacher
+  context checks explicit document-reference closure; ordinary contexts without the
+  hook preserve their contract. Rejections use the existing correctable result-file
+  feedback. Neither files nor quality approvals are synthesized.
+- `FileSession` retries only eligible read-only disappearance/permission errors and
+  an exact Windows extended-prefix resolve race, with full path checks on each of
+  three attempts. Persistent read failure reports operation/path/native error fields;
+  genuine aliases/escapes and unrelated validation errors still reject immediately.
+
+### Scoped ancestor-goal interface
+
+`context.lineage.collect_assignment_references(repo, node)` uses existing `repo.get`
+to follow only the current task's `parent_id` chain. It returns an immutable tuple of
+`AssignmentReference` in root-to-parent order. Records contain only task/project/
+conversation/parent identities, depth, role and the complete original goal; serialization
+adds provenance and a UTF-8 `goal_sha256`. Missing, cross-scope, cyclic, mismatched or
+depth-inconsistent ancestry rejects explicitly. Dependencies, earlier phases, private
+answers and files do not repair the chain. Roots return an empty tuple.
+
+`ContextBuilder.build(..., assignment_references=None)` and `TeamContextBuilder.build`
+accept the optional keyword for compatibility with old direct Python calls. Actual
+Worker collects and supplies the full delegated chain. A custom builder that cannot
+accept it, or omits the exact references from its pinned opening, fails before the
+model. The child's current goal, role and acceptance remain unchanged. Full references
+are admitted as mandatory before optional content; they cannot be sliced or replaced
+by an archive link. Teacher evidence retains exact records, including lineage-only
+context. Refresh, re-entry and compaction retain the pinned opening. Trace records
+reference IDs/hashes as admission evidence, not observed model use.
+
+Ancestor goals are not the parent's full context. Parent-private answers, approvals,
+results, memories, notes and files are not inherited, and no search/action authority
+is added. A previous phase in Task 2's dependencies is not an ancestor of that root.
+Conflicts remain visible rather than being silently rewritten as a new requirement
+or human decision.
+
+### Local lexical quote-check interface
+
+`tools.source_quote.VerifySourceQuoteTool(store, *, workspaces=None)` registers
+`verify_source_quote` with action class `fs_read`. The trusted operator can supply an
+actual path collection at construction, or register the tool, configure the team and
+call `bind_workspaces(team.workspaces.values())` once before task submission. Exact
+canonical unaliased role paths are accepted, without guessing directory prefixes;
+this accommodates LocalDirs and managed Git worktrees. Unbound operation, foreign
+paths and rebinding reject. Model arguments cannot change bindings or select a store.
+
+Arguments are only a full lowercase `metadata_sha256`, a nonempty `quote` and optional
+`mode` (`exact` by default, or `collapse_whitespace`). Quotes are limited to 4096 Unicode
+code points and 16384 UTF-8 bytes. Model-supplied document bodies, paths, namespaces and
+other extra arguments reject. The tool uses the bound store's `document_version` to
+validate metadata, index and raw/text hashes, and requires a registered source. It does
+not read the latest-cache pointer, make HTTP/search calls, append a read event or spend
+a Tavily request.
+
+| `status` | `ToolResult.ok` | `lexical_match` | Meaning |
+| --- | --- | --- | --- |
+| `matched` | `true` | `true` | Literal present in this exact retained version |
+| `not_found` | `true` | `false` | Version checked, literal absent; the claim is not thereby false |
+| `unknown` | `false` | `null` | Missing/corrupt/unregistered evidence or unsafe identity; no version fallback |
+| `rejected` | `false` | `null` | Invalid arguments or workspace binding, not a factual check result |
+
+`exact` preserves every code point. `collapse_whitespace` collapses Unicode whitespace
+runs to one ordinary space and trims outer resulting spaces; numbers, dates, case,
+punctuation and Unicode composition remain unchanged. `coordinates` reports the first
+zero-based half-open `[start,end)` span in code points and identifies retained extractor
+text or normalized derived text, never HTML byte offsets or an occurrence count. Output
+retains source/version hashes, original retrieval time and current `checked_at`, plus
+comparison-text/quote hashes. The comparison-text excerpt is at most 360 characters and states
+`contains_entire_match`; total JSON is bounded to 16 KiB.
+
+Lexical `true`, tool success, factual correctness and human acceptance are separate
+judgments. Source text remains untrusted. Presence does not establish attribution,
+date/metric scope, completeness or delivery quality. Missing evidence remains unknown;
+comparing two model-pasted literals is not source verification.
+
+### Actual-file quotes and delivery binding
+
+`tools.artifact_quote.VerifyArtifactQuoteTool(store, *, workspaces=None)` registers
+`verify_artifact_quote` (`fs_read`). The operator binds `team.workspaces.values()`
+once after `configure_team`; model arguments cannot change workspaces or stores.
+Arguments are `metadata_sha256`, relative `path`, Unicode code-point `start`/`end`
+(zero-based half-open), optional `mode` and `expected_artifact_sha256`. A pasted
+`quote` or forged receipt is rejected. It reads a regular UTF-8 file in the caller's
+own workspace, rejecting directories, private credential paths, aliases/reparse
+points and hard links. Files are bounded to 1 MiB; slices to 4096 code points and
+16384 UTF-8 bytes.
+
+Output includes whole-file SHA-256, byte/character counts, actual slice hash,
+code-point and UTF-8 byte coordinates, exact source identity, comparison hashes
+and lexical three-state result. The file must remain stable across the checks;
+later edits invalidate the old whole-file identity. JSON is bounded to 16 KiB and
+contains no artifact/source prose. `audit_records()` returns deep copies of at most 256 tool-owned
+records plus `dropped_records`; model-generated text is not this journal.
+`not_found` is a valid lexical negative, not a factual-false judgment.
+
+`eval.quote_delivery.capture_artifact_quote_evidence(scenario_dir, snapshot_ref,
+task, journal, *, task_ids, secrets=())` uses the trusted current task tree and that
+journal to validate the immutable snapshot, final whole-file/slice identity and
+source-receipt structure. Write-once `task_N-artifact-quote-evidence.json` refuses
+overwrite. `task_result.artifact_quote_evidence` records its path, SHA-256, status
+and counts before human quality review. `matched`/`not_found` apply only to valid
+records whose final bytes still match. Prior-phase or changed whole files are
+`unapplied`; missing/corrupt evidence is `unknown` or unavailable. A byte-identical
+child copy retains the original actor/task/path and is labelled content identity
+only, never a manager read. Dropped journal records make evidence incomplete;
+without a valid journal, counts remain null. `quotation_coverage`,
+`factually_correct` and `quality_pass` always remain null.
+
+### Dependency receipt context
+
+The trusted CLI calls
+`TeamContextBuilder.bind_artifact_receipts(repo, artifact_verifier.audit_records)`
+once after binding actual team workspaces. Models cannot replace the repository
+or journal getter. `eval.quote_handoff.summarize_dependency_checks` uses the
+current repository's same-project, same-conversation `DONE` direct dependencies.
+Only structured `result.files` also present in accepted `artifacts` qualify;
+an explicit direct dependency may be a previous root task. Historical task names
+or a transitive relationship alone do not grant access.
+
+The helper reads only declared, recipient-owned integrated UTF-8 files and checks
+their current whole-file and slice identities against native tool-owned receipts.
+It does not open the producer's private files or share private human answers,
+approvals, memory, tool history, source prose or raw quotations. File identity is
+not evidence that the receiving role read the file. Later edits invalidate receipt
+applicability, and selected-slice matches do not establish full quotation coverage,
+factual truth or human approval.
+
+The opening-time summary includes bounded file identities, check counts and sample
+receipt IDs. It is limited to 2000 characters and 8000 UTF-8 bytes. Full, compact
+and empty alternatives are admitted through the context budget, without truncating
+mandatory goals, lineage references or same-task human answers. Missing, dropped,
+malformed or omitted history remains unknown; it never establishes that the
+producer performed no checks. This summary is separate from final-export evidence.
+
+Current source `be0d3f57…`, including this handoff and the reasoning option below,
+completed full native Windows Conda `nlp` regression: 1613 passed, 8 skipped,
+no failures/errors and zero Ruff diagnostics, with stable source/tests. Parent
+failure recovery covers only its own children after all dependencies are terminal,
+preserves `MAX_WAKEUPS` and propagates failures to a fixed point. Acceptance and
+quality checks remain required. The actual NewsTask1 retest naturally ended DEAD
+with zero formal exports and null quality. The failed checker's downstream editor
+was not launched and the parent recovered; the subsequent plan still omitted
+review-file dependencies. All 33 receipts remain unapplied to the formal snapshot.
+Source-integrity and replay checks do not certify the private candidate content.
+
+The earlier `556d78fc…` (1601 passed, 8 skipped) and `8bc0c2ca…` regressions remain
+separate historical checkpoints.
+The assisted NewsTask1 trial on `556d78fc…` was operator-stopped after reporter token-budget
+exhaustion/retry exposed a failed-dependency scheduling bug. The raw `running`
+record and absent final result/export/transport sidecar remain unchanged; content
+quality is unknown. This interrupted baseline is separate from the current retest;
+interface regressions do not certify teacher quality.
+
+### Source access audit interface
+
+`tools.source_audit.SourceAccessAuditTool(store, *, workspaces=None)` registers
+`source_access_audit` (`fs_read`). One-time `bind_workspaces(team.workspaces)` binds
+actual `agent_id -> workspace` pairs and checks both caller ID and canonical path,
+using actual LocalDirs or managed Git paths. Optional arguments are `agent_id`,
+`task_id`, `all_tasks`, `limit` (default 10, maximum 50) and `before_event_id`.
+The default is current actor/task. Explicit `agent_id="*"` selects the bound group;
+`all_tasks=true` includes its current and previous tasks and cannot accompany `task_id`. This
+does not expand private-answer, approval, memory or workspace permissions.
+
+`eval.source_audit_store.SourceAuditStore` uses `mode=ro`, `query_only` and short,
+deadline-bounded queries against an existing source store. It does not construct
+or migrate the original store or fall back to writable getters. Actor/task filters
+precede LIMIT; stable event IDs support continuation. SQL does not write database
+content, but SQLite may use existing WAL/SHM coordination: this is not a claim of
+filesystem immutability. Missing/corrupt versions and unattributable legacy events
+remain unknown.
+
+Reports contain window-scoped successes/failures, fresh/cache counts, distinct
+versions, known first/last recorded times and served-interval unions per exact
+retained extractor-text version. `counts_for_this_page` and coverage do not mean
+complete history or model understanding; follow `pagination.next_before_event_id`.
+JSON is bounded to 32 KiB and explicitly marks clipping. An oversized single
+event retains identity and a continuation cursor, returning unknown rather than
+silently losing it. `factual_grade` remains null. Search origin is not provider
+HTTP billing; the search-budget journal remains authoritative for attempts.
+
+### Optional school SSE transport
+
+Formal CLI `--llm-transport buffered|stream` defaults to `buffered`. Explicit
+`stream` uses `eval.school_stream.SchoolStreamClient` with the existing async
+`chat(messages, tools)` protocol, fixed `max_attempts=1`, `retry_transport=False`
+and `completion_cap=None`. It sends no `stream_options`, never automatically
+downgrades to buffered and sets no completion-token cap; stream byte/event guards
+still apply. Cumulative node budgets remain. The Python class permits a limited second attempt only when
+both the second-attempt and transport-retry policies are explicitly enabled;
+the CLI does not expose that policy. Worker retries are separate attempts.
+
+`--llm-reasoning-effort none` is accepted only with `--llm-transport stream`.
+The Python client accepts `reasoning_effort=None` or `"none"`; the default `None`
+omits the wire field, while explicit `"none"` sends a top-level
+`reasoning_effort` field. Buffered mode rejects the CLI option before reading
+configuration or creating output. `test.json` records `model.reasoning_effort`,
+the stream sidecar records `reasoning_effort`, and attempts record
+`requested_reasoning_effort`. None of these fields proves provider compliance.
+
+One fixed-request diagnostic on the configured school endpoint and model returned
+a complete `read_source` tool call with `none`, without executing it. Default and
+`thinking.type=disabled` trials ended with `finish_reason=length`. This limited
+observation establishes neither an instructor-task pass nor a general HTTP 504 fix.
+
+The client validates complete SSE, UTF-8, tool arguments and finish state, discards
+incomplete output and executes no partial tools. Each scenario's
+`stream-transport.json` records independent `call_id`, attempt, status, timings,
+finish reason and `usage_raw`/`usage_present`, excluding prompts, content, tool
+arguments, authorization and full headers. Its IDs are not `RecordingLLM` dialogue
+IDs; do not infer phases from order. Missing/failed usage is not measured zero or
+a complete billing total. Original HTTP 504 failures and unfinished instructor
+tasks retain their saved status. This transport option is not a reliability or
+content-acceptance claim.

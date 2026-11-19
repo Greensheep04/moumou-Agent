@@ -2,104 +2,365 @@
 
 [简体中文](PERFORMANCE.md) · [English](PERFORMANCE.en.md)
 
-Status as of 2026-11-16: **candidate implementation prepared; current verification pending**.
-This report deliberately leaves unmeasured quantities unknown. It is not a completed
-instructor performance result or a claim that the candidate meets final acceptance.
+As of 2026-11-18, real instructor sessions, explicitly assisted revisions and
+independent content reviews exist, but **final-candidate acceptance is incomplete**.
+Original runs, research reuse, operator-assisted revisions, forensic candidates and
+latest framework checks are separate evidence, not one same-source, same-assistance six-goal score.
 
-## Evaluation configuration
+## Version and verification identity
 
-| Field | Current record |
+| Evidence version | Recorded result | Limit |
+| --- | --- | --- |
+| Historical published `e35e820` | Native Windows / Conda `nlp`: 905 passed, 8 skipped, 209.43s; Ruff passed | Historical framework baseline, not later code or instructor quality |
+| Published `085b12e` original instructor runs | `news-live-01` / `fund-live-01`: four roots and twelve subtasks DONE; content not all accepted | Preserve original failures and UI reattachment evidence |
+| Uncommitted frozen source `e59ee40c…` | 1261 passed, 8 skipped; zero Ruff diagnostics; research-reuse runs `qn01` / `qf01` | Applies only to that frozen source and its four observed tasks |
+| Uncommitted source `6a830670…` | 1307 passed, 8 skipped, 0 failed; pytest 153.65s; zero Ruff diagnostics; source/tests unchanged across checks | Actual assisted revisions are listed below, not a canonical six-goal rerun |
+| Lineage-only stage `4c99184f…` | 1325 passed, 8 skipped, 0 failed; pytest 164.40s; zero Ruff diagnostics | Validates general delegated-context repair, not later tool checks or content acceptance |
+| Earlier combined source `8f7f8d23…` | 1354 passed, 8 skipped, 0 failed; pytest 163.10s; zero Ruff diagnostics; source/tests stable across checks | Combined regression and the assisted runs below have separate evidence; this is not content acceptance |
+| Historical quality integration `8bc0c2ca…` | Native Windows Conda `nlp`: 1538 passed, 8 skipped, 0 failures/errors; zero Ruff diagnostics; source/tests unchanged; pytest 179.14s, wrapper 179.734s | Includes real-engine offline CLI contracts; subsequent source and teacher-task/content acceptance remain separate |
+| Historical checkpoint `556d78fc…` | Native Windows Conda `nlp`: 1601 passed, 8 skipped, 0 failures/errors; zero Ruff diagnostics; pytest 178.56s, wrapper 178.938s; source/tests unchanged across checks | Includes native-receipt handoff, verification guidance and explicit reasoning profile; its NewsTask1 trial was operator-stopped, with unknown content quality |
+| Current failed-dependency fix `be0d3f57…` | Native Windows Conda `nlp`: 1613 passed, 8 skipped, 0 failures/errors; zero Ruff diagnostics; pytest 180.15s, wrapper 180.562s; source/tests unchanged across checks; full02 exited 0 | Scheduling recovery was directly observed; the assisted NewsTask1 retest naturally ended DEAD with zero formal exports and null quality |
+
+The 905 result belongs to published
+[e35e820](https://github.com/Greensheep04/moumou-Agent/commit/e35e8204a3ff2d1b798e1b055bd3cc9706f0a6e9).
+The original instructor source fingerprint is
+`61322bee1059661b79b4edb6afb00303f9da0c5ab35ce81c4366ce507bc80485`;
+the research-reuse fingerprint is
+`e59ee40c4cf5e3a13945833b6eb4132c120eea6bcc975898f38b954a4c360d27`.
+The 6a assisted revisions used
+`6a83067070128fc18c978192665e4346ad43b3ff7b566e9f43b68632c6916157`;
+lineage-only source is
+`4c99184f860abfc9d7194ecd4cb3c71a926277d79967488b9af381a0e9d2cec8`;
+the earlier combined source is
+`8f7f8d23f38d93bf8d58a73ab1947769dafe3f3e29920aa38a5aab9ad858bde6`.
+The historical quality-integration source is
+`8bc0c2cafba6e0122068ca4deb944dfe1cef301479cf93b5ec94a18755a4c72a`;
+the earlier checkpoint verified by full regression is
+`556d78fc624333a2b408568bc83a636c2e820dc0a9d1a3aaeecf34b2bb7840c6`;
+the current failed-dependency fix verified by full regression is
+`be0d3f57cdbfe71ac92b5655defbaca2f7fe68e4828b53182d9ce0e43456e81b`.
+These development stages still record Git HEAD `085b12e` with uncommitted changes;
+the commit field alone does not identify executed source.
+
+The first full attempt on the dependency repair recorded the same 1613 pytest
+passes but failed Ruff with one E501 line-length finding. After a line-wrap-only
+correction, full02 completed with the result above. The earlier lint failure is
+retained; it is not counted as a wholly passing validation.
+
+The repair allows failed-input review only by a parent of the failed children,
+after all declared dependencies are terminal, retaining `MAX_WAKEUPS`. Other
+consumers fail rather than receiving unusable upstream input; promotion repeats
+to a fixed point. These rules do not bypass acceptance or content-quality checks.
+
+The `news-dependency-retest-01` original NewsTask1 trial naturally ended root DEAD,
+with four of six observed subtasks DONE, zero formal exports and null quality.
+Actual delivery time was 4202.906s. It retained the same five input files, original
+roles/goal and operator feedback from the interrupted baseline, with explicit
+stream/none, six reused public records and no new Tavily allowance. This is an
+assisted single-goal trial, not a canonical six-goal score or recovery of an older
+failed run. Backend exited 1; the UI exited 0; separate native-process observation
+confirmed no remaining writers.
+
+The failed checker's original downstream editor was not launched, and its own
+parent was allowed to recover, directly exercising the repaired scheduler. The
+recovery plan still omitted required file dependencies: a replacement checker
+read already-owned package files, but the replacement editor received none and
+truthfully reported an incomplete source-only review.
+
+The 174 recorded model calls include four errors with unknown usage. Known input
+and output subtotals are 7,208,691 and 93,014 tokens; full totals remain null.
+All four failed stream attempts returned HTTP200 and began within 1.1s. Each
+produced roughly 219k–251k ordinary content characters, zero reasoning characters,
+and no tool calls, terminal finish or DONE before its local deadline. This is
+sustained incomplete generation, not evidence of no response, a network-delay
+cause or the older reasoning-only failure. Transport IDs are not explicit
+dialogue-task mappings. Forty-five answered human requests accumulated 3129.672s
+of waiting; overlapping waits must not be subtracted as independent wall time.
+
+Stopped-run source audit confirmed six imports, zero new Tavily/grants, 42 successful
+reads (16 fresh, 26 cached), no read failures and no missing native versions. Rich
+replay preserved 784 spans. These are integrity/rendering results, not goal success.
+All 33 file-check receipts remain unapplied to the zero-file formal snapshot.
+
+Independent forensic review found the main article and both channel files identical
+across reporter, checker and chief. Main length is 987 whitespace tokens, or 900
+excluding headings/draft notes, with four named people and three channels including
+the main article. Core claims are substantially supported. Remaining issues are
+November text still treating 2026/27 as approaching, a stronger-than-supported
+forum-to-programme causal claim, review prose conflating undated publication with
+the explicit effective cohort, and missing actual-file editorial review. Source
+independence is correctly limited to HKUST's own account.
+
+All 97 source-string observations independently recomputed as 87 matches and 10
+non-matches. The 33 file observations record 12 matches and 21 non-matches; 23
+still correspond to final private bytes and independently recompute as 8 matches
+and 15 non-matches. Ten observations concern an earlier edited whole-file version
+whose complete bytes were not recovered in this bounded audit; their 4 recorded
+matches and 6 non-matches are not new independent confirmations. Selected slices
+do not establish whole-quotation coverage, exact final glyphs, truth or acceptance.
+No content approval or general HTTP504 fix is established.
+
+The 8bc checkpoint adds actual-file quotation checks, public-source access
+audits, and delivery-time binding of tool-owned checks to immutable exports.
+Buffered transport remains the default. The optional SSE client passed three
+actual short school requests (text, assembled tool call, tool-result round trip)
+with no retries and no new Tavily requests. This does not prove that long requests
+or HTTP504 failures are resolved, or that generated claims are correct. Existing
+failed sessions and nullable human-quality decisions are retained. Its 8
+skips are 5 POSIX-only cases and 3 optional GNU Make cases; skips are not passes.
+
+Checkpoint `556d78fc…` adds bounded native-receipt summaries for
+completed direct dependencies, generic verification-note guidance and an explicit
+`--llm-transport stream --llm-reasoning-effort none` profile. Its completed full
+framework regression is recorded separately above. The eight skips are five
+POSIX-only checks and three optional GNU Make cases; skips are not passes.
+
+Its assisted original NewsTask1 trial `news-receipt-profile-01` used explicit
+stream/none, six reused public records and no new Tavily allowance. Reporter
+`budget:tokens` exhaustion/retry exposed a P1 state-machine bug that let dependency
+consumers proceed too early. The operator stopped the trial: backend exit1, UI
+exit0, and separate process evidence confirmed no native writers remained.
+
+This is an interrupted failure baseline. The exact raw manifest still says
+`running` and is preserved unchanged alongside external stop evidence. There is
+no final Task1 result, export snapshot or stream sidecar. Do not manufacture
+natural DEAD closure or a verified zero-file export manifest. Content and quality
+remain unknown. This baseline belongs to `556d78fc…` and is not the new retest.
+
+Its independent stopped-run audit counted 180 model requests, 178 completed
+responses, one `SchoolStreamTimeout` and one open request interrupted at stop.
+Known usage subtotals were 8,768,590 input and 91,707 output tokens; missing usage
+keeps whole-run totals null. Search evidence recorded six imports, zero new Tavily
+requests and zero grants. Twenty-three recorded quote-check observations comprised
+21 matches and two non-matches; these are not independent final-file coverage or
+content-quality certification.
+
+A separate fixed-request school-interface diagnostic observed one complete tool
+response with `reasoning_effort="none"`; the baseline and `thinking=disabled`
+trials reached that diagnostic's completion cap with reasoning only. No returned
+tool was executed. This is limited evidence for an explicit option, not a teacher
+task result, a default change or a general HTTP504 reliability fix.
+
+The first assisted NewsTask1 run on `8bc0c2ca…` subsequently ended DEAD after two
+local stream-attempt timeouts. All three subtasks completed, but formal root
+exports remain zero; recorded execution time was 2279.984s. Both failed attempts
+returned HTTP200 and large amounts of reasoning data, with no content, tool call,
+finish or DONE before the configured 180s limit. This is a local incomplete-response
+timeout, not an observed HTTP504. All 48 file-check receipts remain unapplied to
+formal exports. Post-exit source audit confirmed six imported public searches,
+zero new provider requests/grants, 12 successful reads and no lost source versions;
+Rich replay preserved 403 original spans. These integrity observations do not
+change the failed root or null human quality. Candidate-content review is forensic.
+
+An additional-worktree import check confirmed that the Conda editable installation
+can point to a different checkout. The current entry was verified with an explicit
+per-process source path; see [setup](SETUP.en.md) for checking the loaded module.
+The 6a full suite used native Windows Conda `nlp`, Python 3.12.16: pytest reported
+153.65s, subprocess time was 153.968s, and Ruff exited zero. Both the 6a and 8f
+combined suite's eight skips were five POSIX shell alias/argv behaviors and three
+dry-runs requiring optional GNU Make; missing Make is not platform inapplicability.
+The lineage-only stage took 164.40s in pytest, 164.735s in the invoking subprocess.
+The 8f combined stage took 163.10s in pytest, 163.453s in the subprocess and
+exited zero; Ruff also exited zero. Source and test fingerprints each remained
+stable before/after. These completed framework checks are not instructor content scores.
+The lineage stage's 105-file source copy and combined stage's 106-file copy were
+separately hash-verified file by file. They retain actual execution identity, not
+proof of instructor completion on either source.
+
+Implemented changes preserve current-goal lineage, known requester inputs and scope
+through delegation. `verify_source_quote` locally matches wording against an actual
+saved source metadata/version and retains that binding. The quote stage recorded
+109 focused passes and zero Ruff diagnostics; a separate real GitProvider→Teacher
+tool-binding check recorded 1 passed, 28 deselected. Do not add these counts into a
+new full-suite or content score. A match establishes text presence under its stated
+mode, not truth, attribution, research independence or quality approval.
+
+## Configuration, assistance and research scope
+
+- Canonical input is the [original instructor Markdown](../eval/tasks/README.md):
+  three four-role groups, two sequential tasks each; six roots when all are selected.
+- Primary environment: native Windows, activated Conda `nlp`. This round configured
+  school HKGAI model `t2_hkgai-v3_fp8_1m_e7`; request configuration/source identity is
+  recorded per manifest. Actual provider routing identity has not been independently established for every call.
+- Task 2 reuses group identities, workspaces, deliveries and memory. These are
+  dependent tasks, not independent repeated trials. The [fifteen supplementary tasks](../eval/supplementary/README.md) are reported separately.
+- Original news/fund runs used six new Tavily requests each, twelve total.
+  The research-reuse round explicitly imported six public search records per group
+  and made zero new Tavily requests. Reused records are not fresh independent research;
+  actual retrieval of known public originals is recorded separately. Zero Tavily does not mean no network access.
+- A separately authorized 6a Fund2 additional-public-research run,
+  `fund2-primary-revision-01`, spent all four additional
+  Tavily requests. Its later correction reused only those four actual provider-cache
+  records, not four plus six older imported events. News/Fund1 corrections reused
+  their own original six public records with no new Tavily requests. Old private
+  products, human answers, memories and grades were not imported.
+- Existing editorial choices and clearly labeled synthetic-client fixtures,
+  engineering permissions and procedural clarifications were supplied through actual HITL.
+  This is assisted engineering acceptance, not an unattended blind benchmark.
+  Synthetic data is not the owner's finances; tool permission is not fact approval or suitability approval.
+- School model allowance and Tavily metering are separate. No monetary cost or causal
+  efficiency improvement is inferred from tokens, different source inputs or operator waits.
+
+Four separate critic diagnostics produced no qualified review: three ended with
+`length` and empty content, and the fourth returned HTTP504. None establishes a quality PASS.
+One critic response reported e10; normalized responses in the 6a Fund2 additional-public-research
+revision also all reported e10 rather than configured e7. The cause is unknown. These
+are returned identifiers within specified evidence scopes, not independent verification
+of every call's actual model identity or authorization to change configuration.
+
+## Original published-version observations
+
+These rows belong only to the original `085b12e` runs.
+
+| Goal | Saved execution | Original independent content result | Delivery wall time |
+| --- | --- | --- | --- |
+| News 1: campus AI report | Root +3 children DONE; 7 files | Factual failure: an official source specified the credit split, but the package called it unconfirmed | 952.140s |
+| News 2: detector fact-check | Root +3 children DONE; 6 files | Conditional: rate units and some source support needed qualification | 2188.282s |
+| Fund 1: simulated allocation | Root +3 children DONE; 1 file | Conditional arithmetic passed; referenced companions and some AUM/date support were missing | 1985.531s |
+| Fund 2: semiconductor HTML | Root +3 children DONE; one 11-slide HTML | Browser functionality passed; price attribution, FX convention and some evidence remained incomplete | 1068.094s |
+
+The two software tasks have earlier acceptance evidence. This report has not reverified
+their exact original version/timing metadata, and they were not rerun after the current edits.
+No guessed timings or combined candidate score are supplied.
+Each original news/fund Rich UI had one read failure followed by reattachment.
+Later successful sessions do not erase those failures.
+
+## Frozen e59 round: independent content review
+
+Both `qn01` and `qf01` backends and Rich UIs exited normally. Four roots and twelve
+children reached DONE. Formal status remains `agent_completed_quality_unreviewed`,
+each `verified_goal_success=null`, with human-quality decisions unknown.
+These are independent assistant reviews, not teacher grades or changes to saved quality fields.
+
+| Goal | Delivered and supported | Corrections/qualifications still needed | Delivery wall time |
+| --- | --- | --- | --- |
+| News 1 | 9 files; 949 whitespace-word main article, 4 named people, three channels; credit split, three outcomes and July dates corrected | Social copy presents rewritten wording as a direct quotation; absence claims need reviewed-source scope | 3828.672s |
+| News 2 | 5 files; published-study figures checked, unsupported old 26%/9% removed, secondary provenance and 2023 corpus limits explicit | True positive called an error; hypothetical papers become accused people; scope not applied throughout verdict; main text does not explain percentage points | 927.110s |
+| Fund 1 | All 4 referenced documents delivered; 80/10/10 allocation and six conditional stress formulas correct; fee unknowns disclosed | 1983 system inception conflated with the 2005 band; holding through 30% treated as a ceiling; return/drawdown definitions mixed; 70/30 still gives −33.5% under its scenario | 1208.281s |
+| Fund 2 | One 12-slide HTML; principal figures and forecast/actual labels supported; native Chrome 12/12 and navigation passed | Unsupported priced-in/exposure/correlation claims; primary driver becomes sole driver; revenue does not identify price/volume; latest verified actual period is July | 3672.843s |
+
+No extra companion requirement was imposed on Fund 2 and no News 1 word limit was
+imposed on News 2. Internal risk judgments may remain judgments; they are not measured facts.
+News 2's published text uses 61.3%→11.6%, whereas preprint v3 uses 61.22%→11.77%.
+Bind figures to their actual version rather than mixing endpoints or calling this mere one-decimal rounding.
+
+## Explicitly assisted revisions on 6a
+
+These runs retained original roles and the formal CLI but added labeled operator
+correction feedback or synthetic inputs. They are not unmodified blind teacher tests.
+Each row has its own run identity; repeated revisions do not add independent successes
+to the standard six goals. Formal human-quality fields remain unknown.
+
+| Run label / original task | Formal execution and export | Independent content observation | Saved wall time |
+| --- | --- | --- | --- |
+| `fund1-reviewed-revision-01` / Fund1 | Root +3 children DONE; 4 formal files | Chronology, conditional shocks and the old 70/30 issue improved; risk companion loses known synthetic inputs, compares thresholds incorrectly and extrapolates S&P500-member evidence to VXF; corrections remain | 670.766s |
+| `fund2-primary-revision-01` / Fund2 | Root +3 children DONE; 3 formal files, 13-slide HTML | Priced-in/correlation/sole-driver caveats improved; Q2 forecasts become realized prices, a dominant revenue price share is not established, and policy chronology needs qualification. Browser use was interrupted; the earlier 12-slide pass does not transfer | 1285.922s |
+| `news-reviewed-revision-01` / News1 | Root DEAD after HTTP 504; 3 children DONE; 0 formal exports | Seven declared child candidates equal parent integration copies. Main article: 860 whitespace tokens, 4 named people, three channels and fact record; old social quote corrected and core content supported within reviewed sources. This is forensic review, not formal delivery | 4466.375s |
+| Same news run / News2 | Never started after News1 failure; no delivery | No result or content verdict for this round; do not invent Task2 completion or impose News1's word limit | Not run |
+| `fund2-reviewed-revision-01` / Fund2 | Root DEAD after HTTP 504; 3 children DONE; 0 formal exports | Three declared candidates equal parent integration copies; main forecast table, decomposition limit and rescission chronology improved. Forecast tense in risk summaries, source type and date scope still need correction; forensic candidates only | 1109.234s |
+
+The failed runs retain their official zero-file manifests, HTTP 504 errors, retries
+and original quality. Candidate copies and later improvements do not overwrite them.
+The news editor reached DONE after a retry while its root still failed. Wall time
+includes actual human waits. News source verification covered 29 successful original-page
+reads, 16 metadata versions and 4 unique text bodies, not 16 independent sources; the failed
+Fund2 round covered 13 successful reads and 6 versions. Hash/version bindings establish
+examined bytes, not automatic factual approval.
+
+## Actual context-assisted runs on 8f: November 18 cutoff
+
+These use the same `8f7f8d23…` source, original four roles and explicitly identified
+operator feedback, as separate assisted supplementary runs. Formal human quality and
+`verified_goal_success` remain null; they are not pooled into the original six goals.
+
+| Run / original task | Actual execution and formal export | Independent observation and limits | Delivery wall time |
+| --- | --- | --- | --- |
+| `fund1-context-revision-01` / Fund1 | Root +3 children DONE; 4 files. Numeric backend exit was not recovered and remains unknown; UI exited 0; native process observation confirmed no longer running | Known synthetic profile, conditional arithmetic and quote binding improved. Two corrections remain: a summary assigns the current FX band to 1983, and a general drawdown definition incorrectly requires multiple years | 1035.797s |
+| `news-context-revision-01` / News1 | Root DEAD after HTTP504; 3 children DONE; 0 formal exports; backend exit1/UI exit0 | Forensic candidates support the core content, with NC01: final quote glyphs do not match the claimed exact-verification scope. No formal delivery or human acceptance | 2179.094s |
+| Same news run / News2 | Task2 never started; no formal delivery | News1 forensic findings cannot fill this missing phase | Not run |
+| `fund2-context-revision-01` / Fund2 | Root DEAD after HTTP504; 3 children DONE; 0 formal exports; backend exit1/UI exit0 | Forecast/actual, price-dominance, exposure and rescission issues improved; four corrections remain below. The 9-slide candidate passed 19 native-Chrome functional observations, as forensic functionality only | 1549.031s |
+| `news-task2-standalone-01` / original News2 | Root DONE; 3 formal files; backend exit0/UI exit0; original S2T2 independently mapped to supplementary S2T1/t1 | Core corrections independently supported; N2C-01/02 editorial clarifications recommended. Not continuous Task2 or recovery of failed Task1; raw human quality null | 1820.594s |
+
+The four Fund2 corrections concern the 39.31% volatility date (31 October, not
+11 November); blanket Q1-unknown wording ignoring limited support in an already-read
+April secondary retrospective; a snippet-only claim despite seven successful original-
+page responses to risk; and treating missing revenue decomposition as proof that every
+counterfactual assumption is false. Preserve source type, individual metric dates and
+qualifications rather than upgrading these to a complete primary realized-price series.
+
+Closed-run source checks are below. Successful reads are not independent-source counts
+or proof that the model received or understood the full page:
+
+| Run | Imported public cache rows | Successful page responses (fresh/cached) | Controlled failures | New Tavily / added grants | Missing raw/text versions |
+| --- | --- | --- | --- | --- | --- |
+| Fund1 context | 6 | 12 (5/7) | 4 | 0 / 0 | 0 / 0 |
+| News context | 6 | 24 (6/18) | 0 | 0 / 0 | 0 / 0 |
+| Fund2 context | 4 from the PRIMARY run's own cache | 19 (8/11) | 5 | 0 / 0 | 0 / 0 |
+| Standalone News2 | 6 | 20 (7/13) | 3 | 0 / 0 | 0 / 0 |
+
+Standalone News2's final article corrects detection categories, papers-versus-people,
+2023/2026 scope and percentage-point/relative-change errors. N2C-01 asks it to distinguish
+a developer statement reproduced by news from a directly read primary page. N2C-02
+asks it to specify the population behind "most flags wrong": P(flag|human) alone does
+not establish P(human|flag) in a mixed population. Draft errors corrected in the final
+remain historical, not new final-article failures. All 27 quote calls (13 exact,
+14 whitespace-only) were independently recomputed; this supports the submitted strings
+and version bindings, not global exact certification of every final Markdown sentence.
+
+Standalone News2 reuses only the original news six public cache rows, with initial
+budget zero; terminal audit also confirms zero actual new provider attempts or grants.
+It recorded 63 outer model calls, one recovered HTTP504 and one call with unknown
+usage. Known input is 2,097,782 tokens and output 49,459; complete totals remain null.
+All validation model backends/Rich UIs stopped at November 18 14:52. The independent
+content opinion saved afterward does not rewrite raw null human quality.
+No old private answers, products, memories or grades are imported. New page fetches
+retain actual retrieval times; caches retain old search times. Publication date,
+observation period, forecast horizon and the end-2026 perspective remain distinct.
+
+## Metric interpretation
+
+| Metric | Reportable scope |
 | --- | --- |
-| Canonical input | Original [instructor Markdown](../eval/tasks/README.md), three four-member teams, two sequential requests each |
-| Root-goal denominator | Six when all instructor scenarios are selected |
-| Lower-priority input | [Supplementary Markdown](../eval/supplementary/README.md), fifteen goals; separate reports |
-| Model backbone | Course-assigned DeepSeek or HKGAI; actual run model/endpoint recorded in the manifest |
-| Primary development platform | Native Windows, activated Conda `nlp`; actual Python/platform recorded per run |
-| Search allowance | Initially six fresh Tavily HTTP attempts per scenario; cache hits separate; explicit grants recorded |
-| Candidate commit/source hash | Pending approved commit and run-start capture; do not substitute the report builder's version |
-| Candidate test execution | Not run; regression source has been written |
-| Candidate instructor evaluation | Not run; no new score or timing result asserted |
+| Verified root-goal success | Formal quality confirmation is incomplete; DONE does not establish candidate 6/6 or 100% |
+| Observed subtask state | Each original/e59 round separately has 12/12 DONE; supplementary runs are separate, and child DONE does not replace a failed root's formal delivery |
+| Delivery time | Per-root wall-time samples above, including approvals/operator waits; not pure model time |
+| Complete six-task runtime | No complete same-source candidate sample; do not splice separate runs |
+| Human/LLM/tool cumulative time | May overlap and even exceed delivery wall time; do not directly sum or subtract |
+| Tokens/cost | HTTP errors and other calls can lack usage; retain null/missing coverage and known subtotals, never fill them with zero or invent total cost/speed gains |
+| Research/search | Separate fresh search, explicit reuse, cache, denials and original-page retrieval; reviewer access is not SUT research |
+| Memory benefit | Retrieval, admission, prompt presence and use differ; no causal learning benefit established |
 
-Task 2 intentionally reuses the same group's team, private workspaces, experience and
-real Task 1 history. These are dependent requests, not repeated independent experiments.
+## Failure analysis and follow-up
 
-## Implementation verification
+The frozen e59 checks and real sessions establish some cross-module execution,
+evidence-capture and interaction behavior. They also expose semantic errors that can
+survive surface source checking. Answer meaning, metric definitions, forecast/observed
+status, dates/units and causal scope still need validation; more citations or disclaimers
+alone do not establish a correct conclusion.
 
-One historical baseline is available: published commit
-[`e35e820`](https://github.com/Greensheep04/moumou-Agent/commit/e35e8204a3ff2d1b798e1b055bd3cc9706f0a6e9)
-recorded 905 passed and 8 skipped in 209.43 seconds on native Windows with activated
-Conda `nlp`, plus a passing Ruff check. These were framework checks for that version,
-not instructor task quality. They do not validate the later uncommitted implementation.
+Preserve original question-recovery, handoff and Windows-read failure evidence.
+Later fixes require new source identity and evidence, rather than rewriting old outcomes.
+Typed approval NOTE, explicit dependencies, source-version retention, search coverage
+and the Git own-root repair passed framework checks on 6a; its actual assisted revisions
+are above. Later lineage passed a separate full suite, and quote checking passed focused
+and real Git-workspace binding checks. The combined full suite completed with 1354 passed,
+8 skipped, 0 failed and zero Ruff diagnostics. Actual 8f assisted runs are separately
+listed above; they do not establish a complete same-source six-goal content result.
+Historical e59/6a evidence
+and failed critics do not validate later code or establish content acceptance.
+Saved memory metadata, lesson hashes and prompt presence prove their stated observations,
+not model use or causal improvement.
 
-| Current candidate check | Outcome | Required evidence |
-| --- | --- | --- |
-| Framework regression | Not run | Exact command, source identity, output/JUnit, exit code, duration and skips |
-| Static lint | Not run | Exact command/output and exit code for the candidate |
-| Question recovery after delegation/retry/reopen | Code and regression written; not executed | Original request/answer and actual later model-input evidence |
-| Trace concurrency/cancellation and cleanup | Code and regression written; not executed | Actual span/actor hierarchy and completed cleanup observations |
-| Artifact/review/report/replay integrity | Code and regression written; not executed | Immutable snapshots, strict read failures and original/effective quality provenance |
-| Cross-module consumer verification | Pending | Actual P0/P1/P2 acknowledgment and consumer results |
+Known limits also remain: Worker failure retries and HTTP POST retries within one model
+call are separate layers, so one layer's logs do not establish the other's attempt count.
+A tool's check of one string does not prove the final artifact's quote avoided glyph
+drift. A complete page fetch/archive is not proof that all pages were served to or read
+by the model. Check final artifact bytes, retained source version and actual served ranges,
+rather than treating HTTP success, a hash or a literal match as complete verification.
 
-## Instructor completion and time
-
-The current candidate has no measured instructor session. The following rows are
-required report slots, not fabricated failed executions or accepted goals.
-
-| Scenario | Goal | Agent state | Machine evidence | Reviewed quality | Verified success | Delivery time |
-| --- | --- | --- | --- | --- | --- | --- |
-| Software | Booking application | Unknown | Unknown | Unknown | Unknown | Unknown |
-| Software | Usage dashboard | Unknown | Unknown | Unknown | Unknown | Unknown |
-| Newsroom | Campus news report | Unknown | Unknown | Unknown | Unknown | Unknown |
-| Newsroom | AI-detector fact-check | Unknown | Unknown | Unknown | Unknown | Unknown | Unknown |
-| Fund | Simulated investment proposal | Unknown | Unknown | Unknown | Unknown | Unknown | Unknown |
-| Fund | Semiconductor presentation | Unknown | Unknown | Unknown | Unknown | Unknown | Unknown |
-
-The simulated fund tasks produce research outputs, not authorization to place real
-trades. Each task is judged against its original request and actual clarified criteria.
-
-| Required metric | Candidate value | Rule |
-| --- | --- | --- |
-| Verified root-goal completion | Unknown | Reviewed successful roots / complete selected plan; disclose unreviewed and unposted separately |
-| Observed subtask completion | Unknown | DONE non-root nodes / observed non-root nodes; report coverage |
-| Whole-suite execution time | Unknown | Saved aware `started_at` to `finished_at`; missing endpoint stays unknown |
-| Delivery times | Unknown | Actual per-root delivery samples, before quality review; include measured n |
-| Human/LLM/tool cumulative times | Unknown | May overlap; do not sum into wall time |
-| Token usage | Unknown | Actual provider usage and missing coverage; no assumed monetary cost |
-| Search attempts/cache/denials/grants | Unknown | Per-task delta plus separate cumulative scenario observations |
-
-Preserved development runs belong to their original implementation versions. Earlier
-DONE roots with deferred quality remain unverified; interrupted manifests and pending
-questions are not rewritten. Their results must not be pooled into this candidate's
-measurements or silently excluded to improve its rate.
-
-## Failure analysis and memory evolution
-
-Two development defects motivated the candidate: delegation re-entry omitted an already
-recorded same-task answer, and result handoffs needed reliable publication of explicitly
-declared existing files. Earlier mandatory-context truncation was also a framework
-failure. Identify these as framework/context or handoff defects when the saved input
-establishes that fact; do not infer that a model ignored information it never received.
-
-The candidate persists scoped question/answer history, pins restored answers, and saves
-execution/delivery evidence. Its fixes are implemented but remain unverified. A later
-report must link each observed failure, original evidence, repair version and actual
-follow-up outcome, including unsuccessful cases.
-
-Memory reporting uses project/role identity for each stable instructor persona and
-distinguishes retrieval candidates, admitted context and conservative prompt-presence
-observations. Saved active-record metadata, hashed lessons and phase observations do
-not prove the model used a lesson or that it caused an improvement. Deletion totals,
-missing telemetry and historical snapshots absent from old runs remain unknown.
-No causal memory benefit or statistically significant timing gain is established here.
-
-## Completing this report
-
-After actual candidate verification, retain the raw run locally, reconstruct its report
-and analysis using [the documented commands](SETUP.en.md), and publish a reviewed,
-redacted summary with exact source/configuration/evidence references. Keep original raw
-quality distinct from append-only offline review overlays. Record the real reviewer,
-scope and limitations; a matching HumanIO record is not cryptographic identity proof.
-
-Add the actual six-goal table, failure discussion and memory observations without
-replacing prior failure evidence. Final closed-set evaluation, contribution screenshots
-and presentation evidence remain separate pending [delivery requirements](DELIVERY.en.md).
+Raw logs, immutable deliveries, source versions and reviews remain local; public pages
+contain redacted summaries. Follow [setup](SETUP.en.md) to rebuild reports while separating
+execution identity, builder identity, original quality and appended review.
+The final closed set, actual member-contribution screenshots, week-13 presentation,
+person-operated P2 sign-off and six-goal acceptance for the final submitted version
+remain pending [delivery requirements](DELIVERY.en.md).

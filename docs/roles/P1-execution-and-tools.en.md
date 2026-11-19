@@ -32,6 +32,11 @@ rejection, evidence readability and artifact isolation; it never stages or commi
 private files. Unregistered files remain visible to the existing cleanliness check.
 Worktrees containing private evidence are retained instead of silently removed.
 
+Full ancestor-goal records also belong to this private framework archive, not delivered
+files. References come only from the validated task-parent chain. Parent-private
+answers, approvals, memories and files remain isolated; artifact integration,
+dirty-worktree protection and action approval are not relaxed by goal references.
+
 ## Registered capabilities
 
 The actual names in `default_tools()` are:
@@ -51,6 +56,16 @@ The registry also includes `echo` and the orchestration control names
 Control calls are handled by the orchestration layer; they are not independent shell
 tools. Document outputs use Markdown/plain text; proprietary document parsers are not
 part of the required delivery.
+
+Formal evaluation separately registers P3's `source_history` (`fs_read`), `read_source`
+(`network`) and `verify_source_quote` (`fs_read`); these are not implicit additions to
+the `default_tools()` inventory above. After team configuration, the verifier binds
+once to actual provider-returned role paths, accommodating LocalDirs or managed Git
+worktrees without guessing prefixes. Models cannot select paths/stores or paste a
+source body. It reads only one retained `metadata_sha256`, without HTTP, search or
+latest-page fallback. Lexical match, non-match and unknown are `true`, `false` and
+`null`; tool success is not factual or human acceptance. See [interfaces](../INTERFACES.en.md)
+for arguments, code-point coordinates and result semantics.
 
 The framework Gate owns approval policy and tracing. Formal sessions require approval
 for Git staging/committing as well as other configured critical operations; a role
@@ -104,12 +119,19 @@ P0 consumes tools, the approval result and integration reports; P2 displays the 
 decisions/results; P3 records outputs, timing, errors and search evidence. Agreement
 on these fields requires real consumer checks.
 
+The actual workspace collection returned by P1's provider is the verifier's trusted
+binding input before task submission. Unbound calls, foreign paths and rebinding
+reject. Sharing group public sources neither opens private directories nor grants
+search allowance. Whitespace-only normalization preserves numbers, dates, case and
+punctuation. Neither ancestor references nor lexical checks reuse another task's approval.
+
 ## Delivery and validation
 
 Preserve meaningful regression sources and document the exact environment, commands,
-results and limits when checks are actually run. Current changed code still requires
-execution; earlier historical results are not current acceptance. Contract tests alone
-do not establish generated-application quality or teacher goal success.
+results and limits when checks are actually run. The [performance report](../PERFORMANCE.en.md)
+records executed checks, subsequent-change validation status and matching source identity;
+earlier results cannot be applied to the next version. Contract tests alone do not establish
+generated-application quality, teacher goal success or actual consumer-member sign-off.
 
 See [delivery checklist](../DELIVERY.en.md), [formal evaluation](../EVAL.en.md),
 [P1 operational notes](../P1-EXECUTION.md) and [P1 handoff](../P1-HANDOFF.md).
