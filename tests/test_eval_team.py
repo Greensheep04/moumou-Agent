@@ -167,6 +167,7 @@ async def test_existing_fixed_member_delegation_integrates_declared_files_only(t
         if lead_calls == 1:
             return response("submit_plan", reasoning="Reuse the provided developer", roles=[],
                             subtasks=[{"key": "build", "role": "dev", "goal": "Write answer.txt",
+                                       "deps": [],
                                        "acceptance": [{"kind": "file_contains",
                                                        "target": "answer.txt",
                                                        "expect": "verified"}]}])

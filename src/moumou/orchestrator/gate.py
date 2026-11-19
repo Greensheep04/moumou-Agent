@@ -17,6 +17,7 @@ from pathlib import Path
 from moumou.contracts import (
     DEFAULT_APPROVAL,
     AgentInstance,
+    HumanApprovalFeedback,
     HumanRequest,
     HumanResponse,
     TaskNode,
@@ -51,6 +52,7 @@ class Gate:
         if tool is None:
             return ToolResult(ok=False, error=f"unknown tool: {call.name}")
 
+        feedback = None
         if self.policy.needs_approval(tool.action_class):
             try:
                 answer = await self._ask_human(call, tool, node, agent)
@@ -58,6 +60,13 @@ class Gate:
                 return ToolResult(ok=False, error="invalid_human_approval", stderr=str(exc))
             if answer.decision != "approve":
                 return ToolResult(ok=False, error="rejected_by_human", stderr=answer.text or "")
+            if answer.text and answer.text.strip():
+                feedback = HumanApprovalFeedback(
+                    request_id=answer.request_id, tool_call_id=call.id,
+                    project_id=node.project_id, conversation_id=node.conversation_id,
+                    task_id=node.id, agent_id=agent.id, role=node.role,
+                    action=tool.name, action_class=tool.action_class, note=answer.text,
+                )
 
         ctx = ToolContext(agent_id=agent.id, task_id=node.id, workspace=workspace)
         with self.trace.span(
@@ -76,6 +85,10 @@ class Gate:
             span.payload["ok"] = result.ok
             span.payload["artifacts"] = result.artifacts
 
+        # Only the gate may attest human provenance. Preserve the tool's content
+        # fields, including JSON/pagination stdout and error diagnostics, verbatim.
+        if feedback is not None or result.human_approval is not None:
+            result = result.model_copy(update={"human_approval": feedback})
         self.repo.add_artifacts(node.id, result.artifacts)
         return result
 

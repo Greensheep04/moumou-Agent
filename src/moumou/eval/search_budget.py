@@ -49,7 +49,7 @@ class SearchBudgetTool:
     params_schema = WebSearchTool.params_schema
 
     def __init__(self, cache_dir: Path, max_requests: int = 6, delegate=None,
-                 namespace: str = "scenario", ttl_s: float = 900.0):
+                 namespace: str = "scenario", ttl_s: float = 900.0, source_store=None):
         if type(max_requests) is not int or max_requests < 0:
             raise ValueError("max_requests must be a nonnegative integer")
         if (isinstance(ttl_s, bool) or not isinstance(ttl_s, (float, int))
@@ -58,6 +58,7 @@ class SearchBudgetTool:
         if not isinstance(namespace, str) or not namespace.strip() or len(namespace) > 200:
             raise ValueError("namespace must be a nonempty scenario identifier")
         self.delegate = delegate or WebSearchTool()
+        self.source_store = source_store
         self.cache_dir = Path(cache_dir).resolve()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.database = self.cache_dir / "search-budget.sqlite3"
@@ -155,6 +156,25 @@ class SearchBudgetTool:
         return ToolResult.model_validate(values)
 
     async def run(self, args, ctx):
+        result = await self._run(args, ctx)
+        if self.source_store is not None:
+            try:
+                metadata = json.loads(result.stderr.rsplit("search_budget=", 1)[1])
+                self.source_store.record_search(
+                    args.get("query", "") if isinstance(args, dict) else "", result, ctx,
+                    retrieved_at=metadata["original_retrieved_at"],
+                    request_id=metadata["source_request_id"] or metadata["call_id"],
+                    origin=metadata["status"],
+                )
+            except Exception:
+                # Do not alter search quota/cache semantics if the optional evidence sink
+                # fails, and never claim a snippet or missing provenance was verified.
+                result = result.model_copy(update={
+                    "stderr": result.stderr + "\nsource_evidence_error: provenance was not saved",
+                })
+        return result
+
+    async def _run(self, args, ctx):
         call_id = uuid4().hex
         self._record("tool_call", {"call_id": call_id, "task_id": ctx.task_id,
                                    "agent_id": ctx.agent_id})

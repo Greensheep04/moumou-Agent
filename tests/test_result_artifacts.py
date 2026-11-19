@@ -41,6 +41,7 @@ async def test_unchanged_role_file_is_persisted_and_delivered_to_consumer(tmp_pa
             return answer("submit_plan", reasoning="Export unchanged input before consuming it",
                           roles=[], subtasks=[{
                               "key": "export", "role": "dev", "goal": "Export existing module.py",
+                              "deps": [],
                               "acceptance": [{"kind": "file_exists", "target": "module.py"}],
                               "budget": {"max_retries": 0},
                           }, {

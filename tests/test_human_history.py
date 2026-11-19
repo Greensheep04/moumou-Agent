@@ -93,6 +93,7 @@ async def test_parent_receives_original_answer_after_actual_delegation(tmp_path)
                 "reason": "write the output", "tools": ["write_file", "submit_result"],
             }], subtasks=[{
                 "key": "write", "role": "writer", "goal": "Write out.txt containing blue",
+                "deps": [],
                 "acceptance": [{"kind": "file_contains", "target": "out.txt", "expect": "blue"}],
             }])
         resumed.append(deepcopy(messages))

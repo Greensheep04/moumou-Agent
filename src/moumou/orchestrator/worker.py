@@ -11,10 +11,16 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import defaultdict
+from inspect import signature
 from pathlib import Path, PureWindowsPath
 from time import monotonic
 
-from moumou.context.builder import LESSONS_HEADER
+from moumou.context.builder import LESSONS_HEADER, ContextAdmissionError
+from moumou.context.lineage import (
+    AssignmentReferenceError,
+    collect_assignment_references,
+    render_assignment_references,
+)
 from moumou.context.observation import memory_prompt_observation
 from moumou.contracts import (
     AgentInstance,
@@ -148,6 +154,7 @@ class TaskRunner:
             self.citations[node.id] = list(ctx.memory_ids)
         self._subscribe(agent.id)
         tool_specs = self.tools.subset(role.tools)
+        _explicit_plan_deps_schema(tool_specs)
 
         tokens = 0
 
@@ -208,6 +215,7 @@ class TaskRunner:
                 if call.name == "submit_plan":
                     # Invalid proposals are tool feedback, not failed task attempts.
                     try:
+                        _check_explicit_plan_deps(call.args)
                         self.delegation.apply(node, call.args)
                     except DelegationError as exc:
                         result = ToolResult(
@@ -265,6 +273,7 @@ class TaskRunner:
         declared = _declared_artifacts(workspace, result.files)
         # tools recorded artifacts against the database row, not this snapshot
         node = self.repo.get(node.id) or node
+        self._validate_delivery(node, workspace, result)
         ok, details = await self.acceptance.check(node, workspace)
         self.trace.record(
             task_id=node.id, kind="acceptance", name="verdict", ok=ok, checks=details
@@ -274,6 +283,7 @@ class TaskRunner:
             # declaration immediately before publication, still without writing
             # a partial result or artifact batch on failure.
             declared = _declared_artifacts(workspace, result.files)
+            self._validate_delivery(node, workspace, result)
         self.repo.set_result(node.id, result)
 
         if ok:
@@ -291,8 +301,21 @@ class TaskRunner:
             self.repo.set_error(node.id, json.dumps(failed, ensure_ascii=False)[:1000])
             self.repo.transition(node.id, "FAILED", "acceptance_failed")
 
+    def _validate_delivery(self, node: TaskNode, workspace: Path, result: TaskResult) -> None:
+        """Optional teacher-adapter hook; ordinary contexts keep their contract."""
+        validator = getattr(self.context, "validate_delivery", None)
+        if node.parent_id is None and callable(validator):
+            try:
+                validator(node, workspace, result)
+            except ValueError as exc:
+                raise InvalidResultFiles("delivery_quality: " + str(exc)) from exc
+
     # -- helpers ---------------------------------------------------------
     def _opening(self, node, role, agent, deliveries, hits, *, reason="initial"):
+        try:
+            references = collect_assignment_references(self.repo, node)
+        except AssignmentReferenceError as exc:
+            raise ContextAdmissionError(str(exc)) from exc
         records = self.repo.human_exchanges(node)
         options = {"memory_hits": hits}
         if records:
@@ -300,14 +323,32 @@ class TaskRunner:
             # old call shape. A builder must accept the new keyword to recover
             # actual answers; never silently omit mandatory clarification facts.
             options["human_exchanges"] = records
-        ctx = self.context.build(
-            node, role, self._dep_reports(node, deliveries), **options,
-        )
+        dependencies = self._dep_reports(node, deliveries)
+        if references:
+            options["assignment_references"] = references
+            try:
+                signature(self.context.build).bind(node, role, dependencies, **options)
+            except (TypeError, ValueError) as exc:
+                raise ContextAdmissionError(
+                    "delegated context builder must accept mandatory assignment_references"
+                ) from exc
+        ctx = self.context.build(node, role, dependencies, **options)
+        if references:
+            expected = render_assignment_references(node, references)
+            messages = ctx.messages()
+            if (ctx.pinned < 2 or len(messages) < 2
+                    or messages[1].get("role") != "user"
+                    or expected not in messages[1].get("content", "")):
+                raise ContextAdmissionError(
+                    "context builder omitted or changed pinned assignment references"
+                )
         self.trace.record(
             task_id=node.id, kind="memory", name="memory_context_selected", agent_id=agent.id,
             role=role.name, project_id=node.project_id, conversation_id=node.conversation_id,
             retrieved_ids=[record.id for record in hits], selected_ids=list(ctx.memory_ids),
             context_reason=reason, recorded_question_count=len(records),
+            assignment_reference_ids=[reference.task_id for reference in references],
+            assignment_reference_sha256s=[reference.goal_sha256 for reference in references],
             interpretation="context admission only; not observed model use or reward",
         )
         return ctx
@@ -528,6 +569,47 @@ class TaskRunner:
             self.repo.transition(task_id, to, reason)
         except Exception:
             pass          # the node already moved; never mask the original error
+
+
+def _explicit_plan_deps_schema(tool_specs: list[dict]) -> None:
+    """Require explicit model inputs without changing Python Plan defaults.
+
+    ToolRegistry produces fresh schema dictionaries for each subset call, so
+    this adjusts only the copy sent to this model, never registered tool state.
+    """
+    for spec in tool_specs:
+        function = spec.get("function", {})
+        if function.get("name") != "submit_plan":
+            continue
+        item = (function.get("parameters", {}).get("properties", {})
+                .get("subtasks", {}).get("items", {}))
+        deps = item.get("properties", {}).get("deps")
+        if not isinstance(deps, dict):
+            continue
+        item["required"] = list(dict.fromkeys([*item.get("required", []), "deps"]))
+        deps["description"] = (
+            "Explicit sibling producer keys for every required input/artifact. "
+            "Supply [] only for independent work. A filename in prose creates no handoff."
+        )
+
+
+def _check_explicit_plan_deps(payload: dict) -> None:
+    """Reject omitted tool-call edges before role or child creation.
+
+    Direct Python Plan/Delegation callers retain their default-empty contract.
+    No dependency is inferred from prose and no existing DAG is rewritten.
+    """
+    subtasks = payload.get("subtasks") if isinstance(payload, dict) else None
+    if not isinstance(subtasks, list):
+        return  # Existing Plan validation reports malformed payload structure.
+    missing = [str(spec.get("key", index)) for index, spec in enumerate(subtasks)
+               if isinstance(spec, dict) and "deps" not in spec]
+    if missing:
+        raise DelegationError(
+            f"subtasks {missing} must explicitly include deps; supply [] only for "
+            "independent work, or list sibling producer keys for required inputs. "
+            "Mentioning a filename in a goal does not create a dependency or file handoff."
+        )
 
 
 def _declared_artifacts(workspace: Path, files: list[str]) -> list[str]:

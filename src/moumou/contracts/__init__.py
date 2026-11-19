@@ -23,7 +23,14 @@ from .task import (
     TaskSummary,
     can_transition,
 )
-from .tool import DEFAULT_APPROVAL, ActionClass, Tool, ToolContext, ToolResult
+from .tool import (
+    DEFAULT_APPROVAL,
+    ActionClass,
+    HumanApprovalFeedback,
+    Tool,
+    ToolContext,
+    ToolResult,
+)
 from .trace import SpanKind, TraceEvent
 from .workspace import IntegrateResult, WorkspaceProvider
 
@@ -44,6 +51,7 @@ __all__ = [
     "Budget",
     "Channel",
     "ContextPolicy",
+    "HumanApprovalFeedback",
     "HumanIO",
     "HumanRequest",
     "HumanResponse",

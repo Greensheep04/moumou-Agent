@@ -45,6 +45,22 @@ class ToolContext(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
 
 
+class HumanApprovalFeedback(BaseModel):
+    """A note from one actual approval, never a standing grant or clarification."""
+
+    request_id: str
+    tool_call_id: str
+    project_id: str
+    conversation_id: str
+    task_id: str
+    agent_id: str
+    role: str
+    action: str
+    action_class: str
+    decision: Literal["approve"] = "approve"
+    note: str
+
+
 class ToolResult(BaseModel):
     ok: bool
     stdout: str = ""
@@ -53,6 +69,7 @@ class ToolResult(BaseModel):
     error: str | None = None   # required when ok=False; shown to the LLM verbatim
     artifacts: list[str] = Field(default_factory=list)   # relative to the workspace
     truncated: bool = False
+    human_approval: HumanApprovalFeedback | None = None
 
 
 @runtime_checkable

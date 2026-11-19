@@ -35,12 +35,25 @@ def parse_args(argv=None):
     parser.add_argument("--out", default=None, help="fresh suite directory under local runs")
     parser.add_argument("--human", choices=("console", "files"), default="console")
     parser.add_argument(
+        "--llm-transport", choices=("buffered", "stream"), default="buffered",
+        help="explicit optional school SSE transport; default buffered client is unchanged",
+    )
+    parser.add_argument(
+        "--llm-reasoning-effort", choices=("none",), default=None,
+        help="explicit school stream reasoning setting; omitted uses the provider default",
+    )
+    parser.add_argument(
         "--quality-review",
         choices=("human", "deferred"),
         default="human",
         help="real post-delivery quality review; deferred never implies success",
     )
     parser.add_argument("--plan", action="store_true", help="inspect sources without API calls")
+    parser.add_argument(
+        "--reuse-sources", default=None,
+        help="reuse only public search results from a saved terminal teacher run; retains "
+             "original retrieval dates and does not import answers or count as new searches",
+    )
     parser.add_argument(
         "--search-requests",
         type=int,
@@ -60,7 +73,10 @@ def parse_args(argv=None):
         default=3600,
         help="cooperative per-node seconds, including real human waiting",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.llm_reasoning_effort is not None and args.llm_transport != "stream":
+        parser.error("--llm-reasoning-effort requires --llm-transport stream")
+    return args
 
 
 def _now():
@@ -174,17 +190,31 @@ async def run_suite(args, scenarios):
     from moumou.contracts import Budget, HumanRequest
     from moumou.eval.artifacts import _code_version, atomic_json, atomic_text, redact
     from moumou.eval.human import ConsoleHuman, FileHuman, RecordingLLM
+    from moumou.eval.quote_delivery import capture_artifact_quote_evidence
     from moumou.eval.search_budget import SearchBudgetTool
     from moumou.eval.session_evidence import (
         capture_artifact_snapshot,
         capture_scenario_state,
         sanitize_evidence,
     )
+    from moumou.eval.source_evidence import SourceEvidenceStore
+    from moumou.eval.source_seed import reuse_public_sources
     from moumou.eval.team import configure_team, submit_teacher_task
     from moumou.orchestrator import Engine, Settings
     from moumou.tools import ToolRegistry, default_tools
+    from moumou.tools.artifact_quote import VerifyArtifactQuoteTool
+    from moumou.tools.source import ReadSourceTool, SourceHistoryTool
+    from moumou.tools.source_audit import SourceAccessAuditTool
+    from moumou.tools.source_quote import VerifySourceQuoteTool
 
     dataset_kind = _dataset_kind(scenarios)
+    llm_transport = getattr(args, "llm_transport", "buffered")
+    reasoning_effort = getattr(args, "llm_reasoning_effort", None)
+    if llm_transport not in {"buffered", "stream"}:
+        raise ValueError("unknown LLM transport")
+    if (reasoning_effort not in (None, "none")
+            or (reasoning_effort is not None and llm_transport != "stream")):
+        raise ValueError("explicit reasoning effort requires the school stream transport")
     settings = LLMSettings.from_env()
     settings.require_key()
     root = (Path(args.out) if args.out else Path("runs/test") / uuid4().hex[:10]).resolve()
@@ -208,7 +238,8 @@ async def run_suite(args, scenarios):
             "model": settings.model,
             "endpoint_host": urlsplit(settings.base_url).hostname,
             "timeout_s": settings.timeout_s,
-            "max_retries": 2,
+            "max_retries": 2 if llm_transport == "buffered" else None,
+            "transport": llm_transport,
         },
         "environment": {"python": sys.version, "platform": platform.platform()},
         "task_budget": {
@@ -222,6 +253,9 @@ async def run_suite(args, scenarios):
         "automatic_quality_pass": False,
         "quality_review_mode": args.quality_review,
     }
+    if llm_transport == "stream":
+        manifest["model"].update(max_attempts=1, retry_transport=False, completion_cap=None,
+                                 reasoning_effort=reasoning_effort)
     atomic_json(root / "test.json", manifest)
     budget = Budget(
         max_steps=args.max_steps,
@@ -236,8 +270,14 @@ async def run_suite(args, scenarios):
             folder = root / scenario.id
             folder.mkdir()
             transcript = folder / "dialogue.jsonl"
+            source_evidence = SourceEvidenceStore(folder / "source-evidence")
+            source_reuse = (
+                reuse_public_sources(args.reuse_sources, scenario.id, source_evidence)
+                if getattr(args, "reuse_sources", None) else None
+            )
             search = SearchBudgetTool(
-                folder / "search", max_requests=args.search_requests, namespace=scenario.id
+                folder / "search", max_requests=args.search_requests, namespace=scenario.id,
+                source_store=source_evidence,
             )
 
             def accept_response(request, response, *, search_budget=search):
@@ -254,20 +294,68 @@ async def run_suite(args, scenarios):
                 transcript_path=transcript,
                 on_response=accept_response,
             )
-            llm = RecordingLLM(
-                DeepSeekClient(
+            transport_attempts = [] if llm_transport == "stream" else None
+
+            def persist_transport(*, attempts=transport_attempts, directory=folder):
+                if attempts is None:
+                    return
+                atomic_json(directory / "stream-transport.json", {
+                    "schema_version": 1,
+                    "kind": "optional_school_stream_attempts",
+                    "transport": "stream",
+                    "saved_at": _now(),
+                    "configured_model": redact(settings.model, settings),
+                    "max_attempts_per_call": 1,
+                    "retry_transport": False,
+                    "completion_cap": None,
+                    "reasoning_effort": reasoning_effort,
+                    "stream_options_sent": False,
+                    "call_count": len({row["call_id"] for row in attempts}),
+                    "attempt_count": len(attempts),
+                    "attempts": sanitize_evidence(attempts, secrets),
+                    "notes": [
+                        "Transport call IDs are independent of dialogue RecordingLLM call IDs; "
+                        "no order-based identity or phase mapping is inferred.",
+                        "Usage counters are observed per attempt; a missing or failed attempt "
+                        "does not become measured zero or a complete billing total.",
+                        "Only complete SSE responses enter RecordingLLM; this metadata sidecar "
+                        "contains no prompts, content, arguments, authorization or full headers.",
+                    ],
+                })
+
+            if llm_transport == "stream":
+                from moumou.eval.school_stream import SchoolStreamClient
+
+                delegate = SchoolStreamClient(
+                    api_key=settings.api_key,
+                    base_url=settings.base_url,
+                    model=settings.model,
+                    timeout_s=settings.timeout_s,
+                    max_attempts=1,
+                    retry_transport=False,
+                    reasoning_effort=reasoning_effort,
+                    on_attempt=transport_attempts.append,
+                )
+            else:
+                delegate = DeepSeekClient(
                     api_key=settings.api_key,
                     base_url=settings.base_url,
                     model=settings.model,
                     timeout_s=settings.timeout_s,
                     max_retries=2,
-                ),
-                transcript,
-                secrets=secrets,
-            )
+                )
+            llm = RecordingLLM(delegate, transcript, secrets=secrets)
+            quote_verifier = VerifySourceQuoteTool(source_evidence)
+            artifact_verifier = VerifyArtifactQuoteTool(source_evidence)
+            source_audit = SourceAccessAuditTool(source_evidence)
             tools = ToolRegistry()
             tools.register_all(
-                *(search if tool.name == "web_search" else tool for tool in default_tools())
+                *(search if tool.name == "web_search" else tool for tool in default_tools()),
+                SourceHistoryTool(source_evidence),
+                ReadSourceTool(source_evidence),
+                quote_verifier,
+                artifact_verifier,
+                source_audit,
             )
             try:
                 engine = Engine(
@@ -285,7 +373,10 @@ async def run_suite(args, scenarios):
                     ),
                 )
             except BaseException:
-                await llm.aclose()
+                try:
+                    await llm.aclose()
+                finally:
+                    persist_transport()
                 raise
             entry = {
                 "scenario_id": scenario.id,
@@ -295,6 +386,8 @@ async def run_suite(args, scenarios):
                 "tasks": [],
                 "source_sha256": scenario.source_sha256,
                 "source_kind": scenario.source_kind,
+                "source_evidence": str(folder / "source-evidence"),
+                "source_reuse": source_reuse,
                 "roles": [role.model_dump(mode="json") for role in scenario.roles],
             }
             manifest["scenarios"].append(entry)
@@ -302,6 +395,10 @@ async def run_suite(args, scenarios):
             scenario_ready = False
             try:
                 team = configure_team(engine, scenario, previous_dialogue_path=transcript)
+                quote_verifier.bind_workspaces(team.workspaces.values())
+                artifact_verifier.bind_workspaces(team.workspaces.values())
+                source_audit.bind_workspaces(team.workspaces)
+                team.context.bind_artifact_receipts(engine.repo, artifact_verifier.audit_records)
                 team.context.search_budget_notice = (
                     f"This group initially has {args.search_requests} new Tavily requests "
                     "shared across both tasks and all four roles. Cache hits are separate. "
@@ -339,6 +436,12 @@ async def run_suite(args, scenarios):
                     current = engine.repo.get(node.id)
                     task["artifact_snapshot"] = capture_artifact_snapshot(
                         folder, entry["workspaces"][current.role], current, phase,
+                        secrets=secrets,
+                    )
+                    task["artifact_quote_evidence"] = capture_artifact_quote_evidence(
+                        folder, task["artifact_snapshot"], task,
+                        artifact_verifier.audit_records(),
+                        task_ids={item.id for item in _tree(engine.repo, node.id)},
                         secrets=secrets,
                     )
                     task["evidence_capture_s"] = round(monotonic() - capture_started, 6)
@@ -452,9 +555,14 @@ async def run_suite(args, scenarios):
                         "reason": "No state snapshot was established; do not infer final state.",
                     }
                 try:
-                    engine.close()
+                    try:
+                        engine.close()
+                    finally:
+                        await llm.aclose()
                 finally:
-                    await llm.aclose()
+                    persist_transport()
+                    if transport_attempts is not None:
+                        entry["stream_transport"] = str(folder / "stream-transport.json")
                 atomic_json(root / "test.json", manifest)
         manifest["status"] = (
             "human_accepted" if args.quality_review == "human"
@@ -526,6 +634,8 @@ def main(argv=None):
                         "kind": "instructor_test",
                         "dataset_kind": _dataset_kind(scenarios),
                         "human": args.human,
+                        "llm_transport": args.llm_transport,
+                        "llm_reasoning_effort": args.llm_reasoning_effort,
                         "quality_review": args.quality_review,
                         "search_requests_per_scenario": args.search_requests,
                         "planned_root_goals": sum(len(case.tasks) for case in scenarios),

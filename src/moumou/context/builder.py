@@ -3,6 +3,7 @@
     role        who I am and how I must behave          (never trimmed)
     task        full goal and acceptance               (never trimmed)
     questions   recorded same-task clarification       (never trimmed)
+    assignment  scoped ancestor goal references        (never trimmed)
     upstream    dependency reports and board notes     (trimmed under pressure)
     experience  lessons retrieved from long-term memory (trimmed next)
     dialogue    this task's tool history                (compacted at runtime)
@@ -28,6 +29,7 @@ from moumou.human_history import render_human_exchanges
 from moumou.prompts import FRAMEWORK_RULES, LEAD_ROLE, PLANNER_PROMPT, SPECIALIST_TEMPLATE
 
 from .compactor import CompactionResult, Compactor
+from .lineage import AssignmentReference, AssignmentReferenceError, render_assignment_references
 from .tokens import TokenBudget
 
 LESSONS_HEADER = "\n## Lessons from previous runs\n"
@@ -134,6 +136,13 @@ def _render_result(result: ToolResult) -> str:
         parts.append("error: " + result.error)
     if result.artifacts:
         parts.append("artifacts: " + ", ".join(result.artifacts))
+    if result.human_approval is not None:
+        parts.append(
+            "human_approval_feedback (scoped to this task, role and tool call only; "
+            "not standing permission, a new search allowance, clarification history "
+            "or quality acceptance):\n"
+            + json.dumps(result.human_approval.model_dump(mode="json"), ensure_ascii=False)
+        )
     return "\n".join(parts)
 
 
@@ -224,6 +233,7 @@ class ContextBuilder:
         memory_hits: list[MemoryRecord] | None = None,
         board_notes: list[str] | None = None,
         human_exchanges: list[dict] | None = None,
+        assignment_references: tuple[AssignmentReference, ...] | None = None,
     ) -> AgentContext:
         deps = dep_reports or []
         lessons = [record.lesson for record in (memory_hits or [])]
@@ -232,12 +242,17 @@ class ContextBuilder:
             board_notes = self.board.recent(scope, self.policy.board_entries)
         notes = list(board_notes or [])
         recorded_answers = render_human_exchanges(node, role, human_exchanges or [])
+        try:
+            assignment_text = render_assignment_references(node, assignment_references)
+        except AssignmentReferenceError as exc:
+            raise ContextAdmissionError(str(exc)) from exc
 
         mandatory = self._render(node, role, deps, lessons, [], 0, 0, None)
-        if not self._fits(mandatory[0], mandatory[1] + recorded_answers):
+        if not self._fits(mandatory[0], mandatory[1] + assignment_text + recorded_answers):
             raise ContextAdmissionError(
-                "mandatory original role, full current goal, acceptance and recorded "
-                "human answers exceed the opening budget; no truncated instructions were admitted"
+                "mandatory original role, full current goal, acceptance, assignment references "
+                "and recorded human answers exceed the opening budget; "
+                "no truncated instructions were admitted"
             )
 
         dep_limit = len(deps)
@@ -248,7 +263,7 @@ class ContextBuilder:
         )
 
         for kind, value in self._ladder():
-            if self._fits(system, brief + recorded_answers):
+            if self._fits(system, brief + assignment_text + recorded_answers):
                 break
             if kind == "deps":
                 dep_limit = min(dep_limit, value)
@@ -263,7 +278,7 @@ class ContextBuilder:
         return AgentContext(
             [
                 {"role": "system", "content": system},
-                {"role": "user", "content": brief + recorded_answers},
+                {"role": "user", "content": brief + assignment_text + recorded_answers},
             ],
             pinned=2,
             memory_ids=[record.id for record in (memory_hits or [])[:lesson_limit]],
