@@ -89,6 +89,13 @@ def _stream_http_retry_options(args, transport):
     return {"transient_http_retries": retries}
 
 
+def _research_progress_enabled(args):
+    enabled = getattr(args, "research_progress", False)
+    if type(enabled) is not bool:
+        raise ValueError("research_progress must be a boolean")
+    return enabled
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Run the instructor's continuous team scenarios")
     parser.add_argument("--tasks", default="eval/tasks", help="instructor Markdown directory")
@@ -125,6 +132,11 @@ def parse_args(argv=None):
     parser.add_argument(
         "--require-declared-inputs", action="store_true",
         help="explicit teacher input manifests and first-admission file checks",
+    )
+    parser.add_argument(
+        "--research-progress", action="store_true",
+        help="opt-in formal-session compact evidence indexes, repeat feedback and retry "
+             "checkpoint; native source validation, cache, audit and tools stay authoritative",
     )
     parser.add_argument(
         "--opening-context-tokens", type=int, default=None,
@@ -170,6 +182,7 @@ def parse_args(argv=None):
         _opening_context_options(args)
         _stream_tool_choice_options(args, args.llm_transport)
         _stream_http_retry_options(args, args.llm_transport)
+        _research_progress_enabled(args)
     except ValueError as exc:
         parser.error(str(exc))
     return args
@@ -314,6 +327,7 @@ async def run_suite(args, scenarios):
     stream_output_options = _stream_output_options(args, llm_transport)
     stream_tool_options = _stream_tool_choice_options(args, llm_transport)
     stream_http_retry_options = _stream_http_retry_options(args, llm_transport)
+    research_progress_enabled = _research_progress_enabled(args)
     transient_http_retries = stream_http_retry_options.get("transient_http_retries", 0)
     tool_choice_policy = stream_tool_options.get("tool_choice_policy", "auto")
     completion_cap = stream_output_options.get("completion_cap")
@@ -365,6 +379,12 @@ async def run_suite(args, scenarios):
             "omitted_inputs_inferred": False, "final_file_review": None,
         },
         "opening_context_policy": opening_context_options,
+        "research_progress_policy": {
+            "enabled": research_progress_enabled,
+            "scope": "explicit formal-session CLI only; instructor or supplementary bank",
+            "refresh": "re-emit native bounded result; native cache policy unchanged",
+            "observation": "prepared tool output, not model receipt or quality approval",
+        },
         "quality_review_mode": args.quality_review,
     }
     if llm_transport == "stream":
@@ -509,11 +529,20 @@ async def run_suite(args, scenarios):
             quote_verifier = VerifySourceQuoteTool(source_evidence)
             artifact_verifier = VerifyArtifactQuoteTool(source_evidence)
             source_audit = SourceAccessAuditTool(source_evidence)
+            history_tool = SourceHistoryTool(source_evidence)
+            read_tool = ReadSourceTool(source_evidence)
+            research_progress = None
+            if research_progress_enabled:
+                from moumou.eval.research_progress import TeacherResearchProgress
+
+                research_progress = TeacherResearchProgress(scenario.id, "instructor-group")
+                history_tool = research_progress.wrap(history_tool)
+                read_tool = research_progress.wrap(read_tool)
             tools = ToolRegistry()
             tools.register_all(
                 *(search if tool.name == "web_search" else tool for tool in default_tools()),
-                SourceHistoryTool(source_evidence),
-                ReadSourceTool(source_evidence),
+                history_tool,
+                read_tool,
                 quote_verifier,
                 artifact_verifier,
                 source_audit,
@@ -563,6 +592,9 @@ async def run_suite(args, scenarios):
                         opening_context_options["requested_tokens"]
                     )
                 team = configure_team(engine, scenario, **team_options)
+                if research_progress is not None:
+                    research_progress.bind(engine.repo, team.workspaces, engine.trace)
+                    team.context.research_progress = research_progress
                 quote_verifier.bind_workspaces(team.workspaces.values())
                 artifact_verifier.bind_workspaces(team.workspaces.values())
                 source_audit.bind_workspaces(team.workspaces)
@@ -807,6 +839,7 @@ def main(argv=None):
                         "llm_completion_cap": args.llm_completion_cap,
                         "llm_max_content_chars": args.llm_max_content_chars,
                         "llm_tool_choice": args.llm_tool_choice,
+                        "research_progress": args.research_progress,
                         "llm_transient_http_retries": args.llm_transient_http_retries,
                         "llm_max_http_attempts_per_call": (
                             1 + (args.llm_transient_http_retries or 0)

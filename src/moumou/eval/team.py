@@ -413,6 +413,31 @@ class TeamContextBuilder(ContextBuilder):
                 "integrate their declared work and explain evidence and remaining uncertainty. "
                 "Delegate with submit_plan when useful, referencing the existing role IDs.\n"
             )
+        progress = getattr(self, "research_progress", None)
+        if progress is not None:
+            system += (
+                "\n## Evidence progress and recovery\n"
+                "source_history is an index, not a research deliverable. Use the exact returned "
+                "next_offset; null ends that query, including an empty page. Do not guess more "
+                "offsets or restart an unchanged catalogue. Select relevant registered URLs "
+                "and original-source windows, then act on the assigned task. "
+                "no_new_evidence means the same task/actor already prepared that evidence; "
+                "change to useful work rather than loop. It does not prove you received, "
+                "understood or verified the earlier text. If it is missing after compaction "
+                "or retry, refresh=true re-emits the native bounded result. Refresh does not "
+                "force a new network fetch or certify a whole document. Distinct sources, "
+                "versions and relevant windows remain available.\n"
+            )
+            if role.name == self.scenario.leader:
+                system += (
+                    "Coordinate independent multi-part work early through submit_plan using "
+                    "the existing specialist roles and explicit artifact/dependency contracts. "
+                    "A short source index can guide assignments; do not scan every page "
+                    "yourself before delegating. Bound exploration to claims needed for the "
+                    "requested output. Ask only genuinely blocking questions, report missing "
+                    "evidence honestly, and review actual delivered files before completion.\n"
+                )
+            system += progress.checkpoint(node, role)
         system += FRAMEWORK_RULES
         system += CONTENT_QUALITY_RULES
         if self.source_tools_available:
