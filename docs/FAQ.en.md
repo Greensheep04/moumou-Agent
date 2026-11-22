@@ -61,10 +61,10 @@ credentials in ignored local configuration.
 
 **Which task source is used?**
 
-`python -m moumou` and `python -m moumou.eval.cli` default to `eval/tasks`: three
-instructor teams, six goals. The retained self-authored bank uses the same Markdown
-format and requires `--tasks eval/supplementary`. It has lower priority and separate
-scores. `--plan` inspects sources without model calls.
+`python -m moumou` and `python -m moumou.eval.cli` default to `eval/tasks`: the
+instructor mid-test's three teams and six goals, the only bundled bank. Compatible
+external Markdown directories remain explicitly selectable with `--tasks`, using
+their own actual plans and scores. `--plan` inspects sources without model calls.
 
 **Why is a task `DONE` but its quality unknown?**
 
@@ -102,8 +102,8 @@ result. Re-review requires the current review ID via `--supersedes`. Follow
 No. `tests/` contains code-function, interface, storage, orchestration and regression
 checks, including checks of the task loader/evaluation framework itself. Its FakeLLM
 and scripted human fixtures are test doubles. `eval/tasks/` contains the original
-instructor Markdown tasks; `eval/supplementary/` contains the explicit lower-priority
-self-authored tasks. All framework tests passing does not establish that the six
+instructor Markdown mid-test and is the only bundled bank. All framework tests
+passing does not establish that the six
 instructor goals passed. Keep meaningful regression sources with their functionality;
 caches, temporary databases and generated test output are not submission sources.
 

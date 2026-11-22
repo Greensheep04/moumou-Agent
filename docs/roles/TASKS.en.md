@@ -16,14 +16,14 @@ Do not commit actual credentials or runtime data.
 | --- | --- |
 | `python -m moumou --plan` | Inspect the original task sources without model calls |
 | `python -m moumou` | Instructor conversations with real HumanIO and quality review |
-| `python -m moumou.eval.cli --tasks eval/supplementary` | Explicit lower-priority supplementary evaluation |
 | `python -m pytest -q` / `make unit-test` | Framework regressions, separate from model evaluation |
 | `python -m moumou.eval.report --run RUN_DIRECTORY` | Reconstruct a saved report without rerunning tasks |
 
-The default `eval/tasks` contains three instructor groups and six goals. Keep its
-original texts and hashes. The retained fifteen-task supplementary bank uses the
-same Markdown protocol and a separate denominator. Commands here are reproduction
-instructions, not new verification results.
+`eval/tasks` is the only bundled bank: the instructor mid-test's three groups and
+six goals. Keep its ten original Markdown files and hashes. Compatible externally
+supplied Markdown directories remain explicitly selectable with `--tasks` and use
+their own actual plans. Commands here are reproduction instructions, not new
+verification results.
 
 ## Ownership and handoff
 

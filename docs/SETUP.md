@@ -67,7 +67,7 @@ python -m moumou --plan
 python -m moumou.eval.cli --tasks eval/tasks --plan
 ```
 
-自建十五题保留在 [eval/supplementary](../eval/supplementary/README.md)，同样使用 Markdown 团队/任务协议，分为八组，最后一组只有一道题。它们优先级低于老师题库，不会自动选择，也不计入老师成绩。检查或运行时，在同一 CLI 显式指定 `--tasks eval/supplementary`。
+仓库唯一随附题库是 `eval/tasks/` 的老师 mid-test，十份原始 Markdown 文件保持不变。同一 CLI 仍可通过 `--tasks` 显式选择另行提供的兼容 Markdown 目录；外部题源使用自己的任务计划与结果，不混入老师成绩。
 
 以下两个命令使用相同正式协议：
 

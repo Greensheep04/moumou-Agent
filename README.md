@@ -69,13 +69,9 @@ python -m moumou
 
 [老师原题](eval/tasks/README.md)包含三个团队，每组四个指定角色、两个顺序任务。Task 2 复用同组身份、角色私有工作区、已交付文件和记忆，不同组拥有独立状态。每组两个任务和四个角色共享初始六次 Tavily 新检索额度；缓存命中单独统计，追加额度必须获得明确的人类授权。学校模型调用额度与搜索计量分开。
 
-保留的十五个[自建补充题](eval/supplementary/README.md)使用相同 Markdown 格式，优先级低于老师题库：
+`eval/tasks/` 是仓库唯一随附题库，保留老师 mid-test 的十份原始 Markdown 文件。另行提供的兼容 Markdown 题源仍可通过 `--tasks` 显式选择外部目录，按其实际任务计划独立计分，不混入老师成绩。
 
-```powershell
-python -m moumou.eval.cli --tasks eval/supplementary
-```
-
-补充题成绩与老师题分开。每次执行使用新的本地 `runs/test/<id>/` 目录，保留完整对话、实际人类交互、任务结果、trace、数据库和产物。CLI 不会自动覆盖或续跑已有输出目录。
+每次执行使用新的本地 `runs/test/<id>/` 目录，保留完整对话、实际人类交互、任务结果、trace、数据库和产物。CLI 不会自动覆盖或续跑已有输出目录。
 
 ## 查看结果与运行框架检查
 
@@ -89,7 +85,7 @@ python -m pytest -q
 
 这些是复现命令，不代表新增测试结果。安装了 Make 时，`make unit-test` 运行 pytest；`make test` 和 `make eval` 运行老师协议。原生 Windows 无需安装 Make。离线复核、分析和回放导出见[环境配置](docs/SETUP.md)与[评测流程](docs/EVAL.md)。
 
-`tests/` 包含代码功能、接口和回归检查，也检查题库加载器与评测框架本身；它不同于 `eval/tasks/` 的老师题库和 `eval/supplementary/` 的低优先级补充题。框架测试全绿不能证明老师六目标通过。有意义的回归源码与功能代码一起保留，生成的测试输出只保存在本地。
+`tests/` 包含代码功能、接口和回归检查，也检查题库加载器与评测框架本身；它不同于 `eval/tasks/` 的老师 mid-test 题库。框架测试全绿不能证明老师六目标通过。有意义的回归源码与功能代码一起保留，生成的测试输出只保存在本地。
 
 ## P2 文件会话与回放
 
@@ -133,8 +129,7 @@ src/moumou/
   eval/           正式会话、证据保存、报告、复核与回放
   demo/           确定性的框架演示
 
-eval/tasks/       老师原始 Markdown 题源
-eval/supplementary/ 同协议的低优先级补充题
+eval/tasks/       唯一随附题库：老师 mid-test 原始 Markdown
 tests/            有意义的框架与集成回归
 docs/             架构、接口、运行与交付说明
 runs/             本地运行证据，排除在 Git 之外

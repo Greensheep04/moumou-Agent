@@ -41,7 +41,7 @@ python -m pip install -e ".[dev]"
 
 **默认使用哪个题源？**
 
-`python -m moumou` 和 `python -m moumou.eval.cli` 默认使用 `eval/tasks`，即老师三个团队、六个目标。保留的自建题库采用相同 Markdown 格式，必须指定 `--tasks eval/supplementary`，优先级较低且独立计分。`--plan` 检查题源，不调用模型。
+`python -m moumou` 和 `python -m moumou.eval.cli` 默认使用 `eval/tasks`，即老师 mid-test 的三个团队、六个目标，也是唯一随附题库。可用 `--tasks` 显式选择兼容的外部 Markdown 目录，其结果按实际任务计划独立计分。`--plan` 检查题源，不调用模型。
 
 **任务已经 `DONE`，为什么质量还是未知？**
 
@@ -68,8 +68,7 @@ python -m pip install -e ".[dev]"
 | 目录 | 内容 | 说明 |
 | --- | --- | --- |
 | `tests/` | 代码功能、接口、存储、编排及回归测试，也包含题库加载/评测框架本身的检查 | 用于检查系统实现；其中的 FakeLLM 和脚本人类属于测试替身 |
-| `eval/tasks/` | 老师发布的原始 Markdown 题库 | 正式任务评测的默认题源 |
-| `eval/supplementary/` | 保留的自建 Markdown 补充题库 | 显式选择、低优先级、成绩与老师题分开 |
+| `eval/tasks/` | 老师发布的原始 Markdown mid-test | 唯一随附题库，正式任务评测的默认题源 |
 
 `tests/` 全绿不能证明老师六目标通过。有意义的回归源码应与所保护的功能一起保留在仓库；运行缓存、临时数据库和测试输出不提交。
 

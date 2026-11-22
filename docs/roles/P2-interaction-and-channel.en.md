@@ -72,8 +72,9 @@ authenticate manually typed versus assisted authorship.
 ## Formal workflow and P3 handoff
 
 The formal entry is `python -m moumou` (also `python -m moumou.eval.cli`), using real
-console/file interaction. Instructor sources are default; the supplementary bank
-requires explicit selection. See [setup](../SETUP.en.md) and
+console/file interaction. The instructor mid-test is the only bundled bank;
+compatible external Markdown directories remain explicitly selectable with `--tasks`.
+See [setup](../SETUP.en.md) and
 [evaluation](../EVAL.en.md) for pending/response file formats.
 
 Formal team members keep stable role IDs/private directories across sequential tasks,

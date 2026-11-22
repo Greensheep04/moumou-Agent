@@ -12,11 +12,10 @@
 | --- | --- |
 | `python -m moumou --plan` | 检查原始题源，不调用模型 |
 | `python -m moumou` | 老师会话，使用真实 HumanIO 和质量复核 |
-| `python -m moumou.eval.cli --tasks eval/supplementary` | 显式运行低优先级补充评测 |
 | `python -m pytest -q` / `make unit-test` | 框架回归，与模型评测分开 |
 | `python -m moumou.eval.report --run RUN_DIRECTORY` | 从保存结果重建报告，不重新运行任务 |
 
-默认 `eval/tasks` 包含老师三个团队、六个目标，保留其原文及哈希。保留的十五题补充库使用相同 Markdown 协议和单独分母。本页命令用于复现，不代表新增验证结果。
+`eval/tasks` 是唯一随附题库，包含老师 mid-test 三个团队、六个目标，保留十份原始 Markdown 及其哈希。另行提供的兼容 Markdown 目录仍可用 `--tasks` 显式选择，按实际计划独立计分。本页命令用于复现，不代表新增验证结果。
 
 ## 责任与交接
 

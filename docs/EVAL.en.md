@@ -37,15 +37,15 @@ approvals, memories and files are not shared, and no search authorization is add
 Both builders budget full references as mandatory and retain them across re-entry,
 answer refresh and compaction. Transmitted availability is not correct model use.
 
-The lower-priority [supplementary bank](../eval/supplementary/README.md) retains the
-fifteen self-authored tasks as Markdown using the same role/task conventions. Its
-eight groups contain two tasks each except the last, which has one. It requires an
-explicit `--tasks eval/supplementary`, never runs as an automatic fallback and has its
-own results and 15-goal denominator. Original setup and check information is retained;
-historical scripted-answer metadata does not authorize real human answers or approvals.
+`eval/tasks/` is the only bundled bank, containing the instructor mid-test's ten
+original Markdown files. The protocol can still explicitly select compatible
+externally supplied Markdown directories with `--tasks`. External datasets keep
+separate results and an actual-task-plan denominator; they are neither an automatic
+fallback nor part of instructor scores. Historical scripted-answer metadata does not
+authorize real human answers or approvals.
 
-For memory-transfer tasks, the original warmup is an explicit preparation prerequisite
-in the task text. The team must perform and record that preparation; the CLI does not
+If an externally supplied memory-transfer task declares a warmup prerequisite,
+the team must perform and record that preparation; the CLI does not
 run the old ablation schedule or automatically seed memories. Claims of transfer need
 actual preparation and retrieval evidence.
 
@@ -62,8 +62,6 @@ python -m moumou.eval.cli --tasks eval/tasks
 # One scenario, real file-based input, fresh output directory.
 python -m moumou --scenario scenario_1 --human files --out runs/test/NEW_SESSION
 
-# Optional self-authored tasks, after the instructor work; same protocol.
-python -m moumou.eval.cli --tasks eval/supplementary --plan
 ```
 
 `make test` and `make eval` call this protocol. Use `make unit-test` or

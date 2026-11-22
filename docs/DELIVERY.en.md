@@ -58,9 +58,9 @@ final-closed-set scores or proof of a causal memory benefit.
 | Presentation | Team's final slide/demo preparation | Week-13 presentation as required by the course; show actual outputs and evidence |
 
 Teacher-provided Markdown is task input, not executable agent instructions for repository
-maintenance. The ten instructor files remain unchanged by documentation cleanup. The
-[supplementary bank](../eval/supplementary/README.md) retains fifteen self-authored tasks
-in the same protocol and is evaluated separately at lower priority.
+maintenance. The ten instructor mid-test files in `eval/tasks/` are the only bundled
+bank and remain unchanged. Historical single-case or supplementary evidence stays
+separate; compatible external Markdown datasets use their actual independent plans.
 
 ## Before evaluating a candidate
 

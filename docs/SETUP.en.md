@@ -85,11 +85,10 @@ python -m moumou --plan
 python -m moumou.eval.cli --tasks eval/tasks --plan
 ```
 
-The fifteen self-authored tasks are retained under
-[eval/supplementary](../eval/supplementary/README.md), using the same Markdown team/task
-protocol in eight groups (the last has one task). They have lower priority, are not
-selected automatically, and are not included in instructor scores. To inspect or run
-that bank, explicitly use `--tasks eval/supplementary` with the same CLI.
+The only bundled bank is the instructor mid-test in `eval/tasks/`; its ten original
+Markdown files remain unchanged. The same CLI can explicitly select compatible
+externally supplied Markdown directories with `--tasks`. External datasets retain
+their own task plans and results rather than entering instructor scores.
 
 Both application commands use the same formal evaluation protocol:
 

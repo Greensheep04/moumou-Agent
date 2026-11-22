@@ -165,15 +165,13 @@ Each group initially shares six fresh Tavily requests across both tasks and all
 roles; cache hits are separate, and extra allowance requires an explicit human
 grant. The school's model allowance is separate from search metering.
 
-The fifteen self-authored [supplementary tasks](eval/supplementary/README.md) remain
-available in the same Markdown format, at lower priority:
+`eval/tasks/` is the only bundled bank and retains the instructor mid-test's ten
+original Markdown files. Compatible externally supplied Markdown datasets may still
+be selected explicitly with `--tasks`. Their actual task plans and results remain
+separate from instructor scores.
 
-```powershell
-python -m moumou.eval.cli --tasks eval/supplementary
-```
-
-Their scores remain separate from instructor results. Every execution uses a fresh
-local `runs/test/<id>/` directory, retaining dialogue, actual human exchanges, task
+Every execution uses a fresh local `runs/test/<id>/` directory, retaining dialogue,
+actual human exchanges, task
 results, trace, databases and outputs. The CLI does not overwrite or resume an
 existing output directory automatically.
 
@@ -194,7 +192,7 @@ are documented in [setup](docs/SETUP.en.md) and [evaluation](docs/EVAL.en.md).
 
 `tests/` contains code-function, interface and regression checks, including checks
 of the task loader and evaluation framework. It is separate from the instructor
-bank in `eval/tasks/` and the lower-priority bank in `eval/supplementary/`.
+mid-test bank in `eval/tasks/`, the only bundled task bank.
 All framework tests passing does not prove that the six instructor goals passed.
 Keep meaningful regression sources with their code; generated test output stays local.
 
@@ -249,8 +247,7 @@ src/moumou/
   eval/           formal sessions, saved evidence, reports, review and replay
   demo/           deterministic framework demonstrations
 
-eval/tasks/       original instructor Markdown sources
-eval/supplementary/ lower-priority sources using the same protocol
+eval/tasks/       only bundled bank: original instructor mid-test Markdown
 tests/            meaningful framework and integration regressions
 docs/             architecture, interfaces, operation and delivery guides
 runs/             local runtime evidence; excluded from Git

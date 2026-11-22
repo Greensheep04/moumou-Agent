@@ -91,8 +91,9 @@ python -m moumou.eval.report --run runs/test/EXISTING_SESSION
 ```
 
 `make test` / `make eval` use the formal task protocol; `make unit-test` uses pytest.
-The default bank is `eval/tasks`. The retained fifteen-task supplementary bank
-requires explicit `--tasks eval/supplementary` and has a separate denominator.
+The instructor mid-test in `eval/tasks` is the only bundled bank. Compatible external
+Markdown sources remain explicitly selectable; historical and external results use
+their own actual-plan denominators.
 
 See [setup](SETUP.en.md), [evaluation](EVAL.en.md), [metrics](metrics.md),
 [interfaces](INTERFACES.en.md) and [team responsibilities](roles/TASKS.en.md).

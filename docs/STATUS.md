@@ -59,6 +59,6 @@ python -m pytest -q
 python -m moumou.eval.report --run runs/test/EXISTING_SESSION
 ```
 
-`make test` / `make eval` 使用正式任务协议，`make unit-test` 使用 pytest。默认题库为 `eval/tasks`；保留的十五题补充库须显式指定 `--tasks eval/supplementary`，并使用单独分母。
+`make test` / `make eval` 使用正式任务协议，`make unit-test` 使用 pytest。`eval/tasks` 的老师 mid-test 是唯一随附题库。兼容的外部 Markdown 题源仍可显式选择，历史或外部结果按各自实际计划独立统计。
 
 相关说明：[环境配置](SETUP.md)、[评测](EVAL.md)、[指标](metrics.zh-CN.md)、[接口](INTERFACES.md)及[团队职责](roles/TASKS.md)。

@@ -360,7 +360,9 @@ that the model read or used them, or that they are independent sources.
   school HKGAI model `t2_hkgai-v3_fp8_1m_e7`; request configuration/source identity is
   recorded per manifest. Actual provider routing identity has not been independently established for every call.
 - Task 2 reuses group identities, workspaces, deliveries and memory. These are
-  dependent tasks, not independent repeated trials. The [fifteen supplementary tasks](../eval/supplementary/README.md) are reported separately.
+  dependent tasks, not independent repeated trials. Historical supplementary or
+  single-case evidence stays separate; it is not a current bundled bank or proof
+  that the six instructor goals passed.
 - Original news/fund runs used six new Tavily requests each, twelve total.
   The research-reuse round explicitly imported six public search records per group
   and made zero new Tavily requests. Reused records are not fresh independent research;

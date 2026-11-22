@@ -11,8 +11,7 @@ inputs separate from framework implementation tests.
 | Area | Current responsibility |
 | --- | --- |
 | `src/moumou/store/trace.py` and Recorder integration | Durable trace storage, exact-task queries and JSONL recovery |
-| `eval/tasks/` | Original instructor Markdown: three four-member teams, six sequential goals; default and first priority |
-| `eval/supplementary/` | Fifteen self-authored tasks in the same Markdown protocol; lower priority, explicit selection |
+| `eval/tasks/` | The only bundled bank: original instructor mid-test Markdown, three four-member teams and six sequential goals |
 | `src/moumou/eval/cases.py` | Source loading and original role/task hashes |
 | `src/moumou/eval/team.py` | Fixed-team adapter, continuing private workspaces and real handoff/history |
 | `src/moumou/eval/human.py` | Complete redacted model dialogue and real console/file HumanIO |
@@ -41,13 +40,13 @@ separate teams. Generic Engine per-task instances retain the existing sharing po
 ```powershell
 python -m moumou --plan
 python -m moumou.eval.cli --tasks eval/tasks
-python -m moumou.eval.cli --tasks eval/supplementary --plan
 python -m moumou.eval.report --run runs/test/EXISTING_SESSION
 ```
 
 `make test` and `make eval` call the same protocol; `make unit-test` runs framework
-pytest. Instructor material is first priority. Supplementary material is retained,
-not automatically selected or included in instructor scores. The original tasks
+pytest. The instructor mid-test is the only bundled bank. Compatible externally
+supplied Markdown directories remain explicitly selectable with `--tasks` and use
+their own actual plans and scores. The original tasks
 are not rewritten as a predetermined workflow or a script of human answers.
 
 Task 2 keeps its team's four identities, separate continuing directories, memory,
@@ -106,8 +105,8 @@ fix.
 
 ## Metric and replay contract
 
-- Use the actual selected root-goal plan: six for all instructor tasks, fifteen for
-  all supplementary tasks; keep unposted and pending quality visible.
+- Use the actual selected root-goal plan: six for all instructor mid-test tasks and
+  the actual plan count for historical or external sources; keep unposted and pending quality visible.
 - Report agent `DONE`, machine acceptance and actual human-reviewed quality separately.
   Empty root criteria are self-report, not machine verification.
 - Keep each task's own subtree/phase calls distinct from cumulative scenario totals.
@@ -165,7 +164,7 @@ session do not create formal root artifacts. Unrun phases and unknown quality re
 
 | Deliverable | Required content |
 | --- | --- |
-| Code and sources | Reproducible configuration template, the original instructor task hashes, retained supplementary bank and meaningful framework regressions |
+| Code and sources | Reproducible configuration template, the only bundled instructor mid-test originals and hashes, and meaningful framework regressions |
 | Architecture and interfaces | Routing/delegation, human recovery, identity/memory policy, sandbox limits and saved-evidence consumer fields |
 | Performance report | Actual selected plan, verified goals, execution times, observed failures, memory changes and limitations, linked to original saved evidence |
 | Reproduction | Native Windows / activated Conda instructions, commands, model identity and non-secret configuration |
@@ -180,7 +179,7 @@ set is available and run; no placeholder value is a submitted score.
 
 Storage layout, retrieval implementation and report presentation remain design choices.
 Instructor prompts, original task text, actual human replies and evidence integrity are
-inputs to preserve. Setup/check information in supplementary tasks is retained, while old
+inputs to preserve. Setup/check declarations in externally supplied tasks remain source inputs, while historical
 scripted-answer metadata does not authorize a real response.
 
 P0 owns scheduling, memory policy and orchestration semantics. P1 owns execution/tools;

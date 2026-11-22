@@ -9,16 +9,18 @@ manifest is `RUN/test.json` (`kind: instructor_test` identifies the shared proto
 `task_1-result.json` and, when present, `task_2-result.json`. Do not reconstruct scores from a
 console message or substitute framework pytest counts for task quality.
 
-`dataset_kind` identifies `instructor` or `supplementary`; scenario `source_kind`
-and source hashes retain that provenance. The common protocol kind does not turn
-supplementary work into instructor evidence. A historical missing label stays unknown.
+`dataset_kind` retains `instructor` and historical/external `supplementary` labels;
+scenario `source_kind` and source hashes retain that provenance. These compatibility
+fields do not imply another bundled bank. The common protocol kind does not turn
+external work into instructor evidence. A historical missing label stays unknown.
 
 ## Root goals and quality
 
 `planned_root_goals` is the actual number of task texts in the selected source and
-scenarios: six for all instructor scenarios, two for one instructor scenario, and
-fifteen for the explicitly selected supplementary bank. Its last group has one task.
-Supplementary results do not enter the instructor denominator. Unposted,
+scenarios: six for the only bundled instructor mid-test, two for one instructor
+scenario, and the actual plan count for historical or external Markdown datasets.
+There is no fixed supplementary-bank size. Non-instructor results do not enter
+the instructor denominator. Unposted,
 interrupted and unreviewed goals stay in that denominator. They do not prove an
 agent executed or that a person rejected the output.
 

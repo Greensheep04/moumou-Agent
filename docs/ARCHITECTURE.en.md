@@ -154,9 +154,10 @@ not a universal hard process deadline.
 
 ## Evidence and evaluation
 
-The default source is the instructor's original Markdown: three teams and six root
-goals. The retained fifteen supplementary goals use the same protocol and require
-explicit selection. Results from the sources stay separate.
+The only bundled source is the instructor mid-test's original Markdown in
+`eval/tasks/`: three teams and six root goals. Compatible external Markdown sources
+can still be selected explicitly. Historical and external results remain separate
+from instructor scores.
 
 Each fresh run records source/code/configuration identity, dialogue, human exchanges,
 task results, trace and search accounting. New delivery captures add selected immutable

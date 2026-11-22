@@ -427,10 +427,10 @@ actual attempt, including materialization; it is not assignment-to-delivery wall
 
 `eval.cases.load_cases(path)` loads Markdown scenario folders in their README order,
 retaining original role prompts, ordered task texts and source hashes. The default
-`eval/tasks` source is the instructor's three four-member groups and six root goals.
-The optional lower-priority `eval/supplementary` source retains the fifteen self-authored
-tasks in the same format: eight groups, with one task in the last group. It is selected
-explicitly and never automatically mixed into instructor results.
+`eval/tasks` source is the instructor mid-test's three four-member groups and six
+root goals, the only bundled bank. Compatible external Markdown directories can
+still be loaded explicitly, retaining their own provenance and actual task plans
+rather than automatically entering instructor results.
 
 `python -m moumou` and `python -m moumou.eval.cli` invoke the same formal protocol;
 `--tasks` selects the source. There is no separate task-format-specific launch path.

@@ -179,14 +179,14 @@ def test_all_formal_entry_plans_use_three_original_teams_without_runtime(module,
     assert not output.exists()
 
 
-def test_supplementary_bank_uses_the_same_entry_only_when_explicitly_selected():
-    result = offline_command("moumou.eval.cli", "--tasks", "eval/supplementary", "--plan")
-    assert result.returncode == 0, result.stdout + result.stderr
-    plan = json.loads(result.stdout)
-    assert plan["kind"] == "instructor_test" and plan["dataset_kind"] == "supplementary"
-    assert len(plan["scenarios"]) == 8 and plan["planned_root_goals"] == 15
-    assert [case["task_count"] for case in plan["scenarios"]] == [2] * 7 + [1]
-    assert all(case["source_kind"] == "supplementary" for case in plan["scenarios"])
+def test_removed_supplementary_bank_cannot_run_from_checkout(tmp_path):
+    output = tmp_path / "never-created"
+    result = offline_command(
+        "moumou.eval.cli", "--tasks", "eval/supplementary", "--plan", "--out", output,
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "cannot run instructor test" in result.stderr
+    assert not output.exists()
 
 
 @pytest.mark.parametrize("module,arguments", [

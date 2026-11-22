@@ -18,9 +18,9 @@
 
 委派开场还固定保留当前仓库中经校验的祖先原目标，按根到直接父任务排列并记录 UTF-8 SHA-256。引用与当前子目标、角色和验收分别呈现，保留原限定及未知项；只沿 `parent_id`，不从 `deps`、上一阶段或角色名称猜祖先。父任务私有人答、审批、记忆及文件不随引用共享，也不产生额外搜索授权。普通和老师 builder 均先为完整引用分配必需预算，重入、答复刷新及压缩保持它们；信息已发送不等于模型正确采用。
 
-低优先级[补充题库](../eval/supplementary/README.md)将原自建十五题保留为相同角色/任务约定的 Markdown，共八组，除最后一组单题外每组两题。必须显式 `--tasks eval/supplementary`，不会自动降级运行；使用独立结果和十五目标分母。原 setup 与检查信息保留，但历史脚本答案元数据不授权真实人工作答或审批。
+`eval/tasks/` 是唯一随附题库，包含老师 mid-test 的十份原始 Markdown 文件。同一协议仍可通过 `--tasks` 显式加载另行提供的兼容 Markdown 目录；外部题源使用独立结果和实际任务计划分母，不自动降级或混入老师成绩。历史脚本答案元数据不授权真实人工作答或审批。
 
-记忆迁移题的原 warmup 已作为题目中的明确准备前提。团队应实际执行并记录；CLI 不运行旧消融计划，也不会自动注入记忆。迁移结论需要真实准备和检索证据。
+若另行提供的记忆迁移题声明 warmup 为准备前提，团队应实际执行并记录；CLI 不运行旧消融计划，也不会自动注入记忆。迁移结论需要真实准备和检索证据。
 
 在项目根目录激活环境后：
 
@@ -35,8 +35,6 @@ python -m moumou.eval.cli --tasks eval/tasks
 # 单组、真实文件输入、新输出目录。
 python -m moumou --scenario scenario_1 --human files --out runs/test/NEW_SESSION
 
-# 老师任务之后可显式选择自建题，协议相同。
-python -m moumou.eval.cli --tasks eval/supplementary --plan
 ```
 
 `make test` 和 `make eval` 使用该协议。确定性框架回归使用 `make unit-test` 或 `python -m pytest -q`；这些测试提供实现证据，不是老师任务完成率。

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -55,75 +54,6 @@ def test_official_prompts_keep_source_bytes_identities_and_task_sequence(index, 
         text = path.read_text(encoding="utf-8-sig")
         block, = re.findall(r"^```text[^\S\n]*\n(.*?)^```[^\S\n]*$", text, re.M | re.S)
         assert getattr(case, name) == block.rstrip("\n")
-
-
-# SHA-256 of each original self-authored goal (UTF-8, terminal newline removed).
-# These fixed provenance values do not need Git, local evidence or model answers.
-SUPPLEMENTARY_GOALS = {
-    "s1_hello": "4dfe93342b46f7775b4ba5f11570912a1174e4d75632469f4bf38dec5bacd08f",
-    "s1_stats": "465bab97d05532284fa80af017dfd90090e7261fc2906bdd946d3508b1b0f912",
-    "s2_bugfix": "e067b5ec388860b4e602420b88472fae73258cf536fe5a49a04ae4ada10b7485",
-    "s2_tags": "4253b40ccb463c9a7ce3dbf7a150b027b624043210c93af208fe9846e7490a50",
-    "s3_cli": "b13d62be02867c0192b52ae7d4593b206e7130d3527199343903bfd1e1894640",
-    "s3_catalog": "4bd0976ec7d4d14f9de396062f51060ff8586a432a4aedb51c3a4004f9c5ca67",
-    "s4_python_research": "614fb903d15eb2d9709f33c27b32db2c9ac9d715f8632d83bc6e4f8bba4da988",
-    "s4_http_research": "97558ab3fc6fe9e956a518f2f253f8b360c6ffcd371698ba8356686d5c760574",
-    "s5_approval": "3776c8aa5b8fe37d7d5e3751467ae9c8e74225acb438a15fdd091d98436d7d33",
-    "s5_approval_reject": "7140bd76ef4e6a5606bcc863d8744b865d8d178fe5bdf8944d911ca6c39182d7",
-    "s6_csv_memory": "c449302418e1dcad02c09ae7469e97b41517c4755782e38e00d26b3a3072e735",
-    "s6_path_memory": "8426f484108ade5f0c4393b8385fb2e7fd9420b568fa1d2a9b8172d1cb3fd33f",
-    "s7_parallel_stats": "70622f2d0f76ca5e159340eff09a7338835042e38964ea7edbf934a2beb5cc0a",
-    "s7_parallel_words": "0fe1046e5c6cde30ed551608cfd232e94666af859a0947a40846dd0ebf82a4a6",
-    "s8_composite": "96ca289f04427f5cc2fa7b9e6ba2e95e442bbc2e69f2e4ccb1b9c9570ec8d737",
-}
-SUPPLEMENTARY = TASKS.parent / "supplementary"
-
-
-def supplementary_sources():
-    paths = sorted(SUPPLEMENTARY.glob("*/0[23]_task_*.md"))
-    return [(path, path.read_text(encoding="utf-8-sig")) for path in paths]
-
-
-def text_prompt(text):
-    prompt, = re.findall(r"^```text[^\S\n]*\n(.*?)^```[^\S\n]*$", text, re.M | re.S)
-    return prompt.rstrip("\n")
-
-
-def test_supplementary_keeps_fifteen_unique_original_identities_and_goals():
-    assert len(list(SUPPLEMENTARY.rglob("*.md"))) == 24
-    assert not list(SUPPLEMENTARY.rglob("*.yaml"))
-    assert not list(SUPPLEMENTARY.rglob("*.yml"))
-    observed = {}
-    for _, text in supplementary_sources():
-        identity, = re.findall(r"^Original task ID: `([^`]+)`\.$", text, re.M)
-        assert identity not in observed
-        goal = text_prompt(text).split("\n\n", 1)[0]
-        observed[identity] = hashlib.sha256(goal.encode("utf-8")).hexdigest()
-    assert observed == SUPPLEMENTARY_GOALS
-
-
-def test_supplementary_uses_same_sequence_without_inventing_a_sixteenth_task():
-    cases = load_cases(SUPPLEMENTARY)
-    assert len(cases) == 8
-    assert [len(case.tasks) for case in cases] == [2] * 7 + [1]
-    assert sum(len(case.tasks) for case in cases) == 15
-    assert cases[-1].task2 is None and "task2" not in cases[-1].source_paths
-    assert all(case.source_kind == "supplementary" for case in cases)
-    assert all(case.leader == "lead" and len(case.roles) == 4 for case in cases)
-    expected = [text_prompt(text) for _, text in supplementary_sources()]
-    assert [task for case in cases for task in case.tasks] == expected
-
-
-def test_supplementary_historical_scripted_settings_are_not_live_prompt_instructions():
-    for _, text in supplementary_sources():
-        historical, = re.findall(r"^```json[^\S\n]*\n(.*?)^```[^\S\n]*$", text, re.M | re.S)
-        metadata = json.loads(historical)
-        assert metadata["id"] in SUPPLEMENTARY_GOALS
-        assert metadata["human"]["default"] in {"approve", "reject"}
-        prompt = text_prompt(text)
-        assert historical not in prompt
-        assert '"default": "approve"' not in prompt and '"default": "reject"' not in prompt
-        assert "Ask the actual human" in prompt
 
 
 def test_legacy_fixture_schema_defaults_are_compatible():

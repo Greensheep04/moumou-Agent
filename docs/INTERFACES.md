@@ -317,7 +317,7 @@ JSONL 与 SQLite 必须使用不同文件。`Recorder.close()` 关闭日志和�
 
 ### 题源与连续团队
 
-`eval.cases.load_cases(path)` 按 README 顺序加载 Markdown 场景，保留原角色、任务顺序和来源哈希。默认 `eval/tasks` 为老师三个四人组、六根目标；`eval/supplementary` 保留同格式十五自建题，八组，最后一组只有一题。补充题须显式选择，不能自动混算。
+`eval.cases.load_cases(path)` 按 README 顺序加载 Markdown 场景，保留原角色、任务顺序和来源哈希。`eval/tasks` 为老师 mid-test 的三个四人组、六根目标，也是唯一随附题库。兼容的外部 Markdown 目录仍可显式加载，结果使用各自来源身份与实际任务计划，不自动混算。
 
 `python -m moumou` 与 `python -m moumou.eval.cli` 是同一正式协议，`--tasks` 选择题源，不再有专属题库格式入口。`eval.team` 固定身份、连续私有角色工作区和同角色执行锁。Task 2 接收真实 Task 1 结果、交付文件和原对话归档，不虚构历史，也不是全新独立尝试。实际题数定义计划分母。
 
