@@ -169,6 +169,8 @@ python -m moumou --llm-transport stream --llm-reasoning-effort none --llm-comple
 
 ## 显式开场配额与工具请求策略
 
+`--execution-progress` 为正式会话启用 `shell` 和 `run_python` 的重复执行提示。若一次成功调用没有改动文件，同参请求遇到一致的工作区快照时会收到简短提示，采用已有结果。确需重跑可提供 `repeat_reason`，按原有规则审批。工作区变化或无法验证时走正常执行路径。记录按执行尝试隔离，追踪会分别记录跳过请求和真实执行。
+
 `--opening-context-tokens` 为正式团队单独选择开场的估算 token 配额，省略时仍为8000。显式值必须是500至2147483647的整数，且不超过配置的 `prompt_ceiling`；这是运行保护，不是提供方容量声明。团队适配器复制上下文策略，仅用于 `TeamContextBuilder`；通用P1策略、共享EMA校准和节点累计预算不变。完整角色、当前及祖先目标、验收和已答信息仍为必需内容，超过硬限仍明确拒绝，不删除要求或自动重置校准。该选项独立于传输模式。
 
 `--llm-tool-choice auto|required-when-tools` 只接受显式stream模式，省略时保留原auto行为。`required-when-tools` 仅在本次请求提供非空工具schema时发送 `tool_choice="required"`；无工具请求保留原plain格式，不发送 `tool_choice`。这是发请求前选择的策略分支，不是失败后降级。required响应必须包含参数为有效JSON对象、名称属于本次提供集合的完整工具调用，具有一致的 `tool_calls` 结束原因及DONE；不满足时失败并丢弃部分结果，不回退auto或执行半截工具。它不证明参数符合完整JSON Schema、事实正确、工具已执行或操作获批，实际执行仍经过Gate。

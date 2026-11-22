@@ -223,9 +223,11 @@ class _ProjectedTool:
                                   "blocker. Use refresh=true if earlier text is unavailable.")
             full = refresh or (self.name == "read_source" and not repeated)
             emitted = result if full else result.model_copy(update={"stdout": _json(projection)})
+            # This is a zero-duration task preparation marker, not an extra tool
+            # invocation or memory observation. Keep the existing trace contract.
             self.owner._trace.record(
-                task_id=ctx.task_id, agent_id=ctx.agent_id, kind="research_progress",
-                name="tool_output_prepared", tool=self.name, evidence_identity=identity,
+                task_id=ctx.task_id, agent_id=ctx.agent_id, kind="task",
+                name="research_progress_prepared", tool=self.name, evidence_identity=identity,
                 repeated_evidence=repeated, explicit_refresh=refresh,
                 native_stdout_characters=len(result.stdout),
                 projected_stdout_characters=len(emitted.stdout),

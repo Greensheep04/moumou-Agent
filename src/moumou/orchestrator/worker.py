@@ -34,6 +34,7 @@ from moumou.contracts import (
 )
 from moumou.human_history import HumanExchangeError
 from moumou.orchestrator.delegation import DelegationError
+from moumou.orchestrator.execution_progress import ExecutionProgress
 from moumou.sandbox.local import LocalJail
 
 
@@ -65,6 +66,7 @@ class TaskRunner:
         budget,
         retriever=None,
         memory_enabled=True,
+        execution_progress_enabled=False,
     ):
         self.repo = repo
         self.roles = roles
@@ -82,6 +84,7 @@ class TaskRunner:
         self.budget = budget
         self.retriever = retriever
         self.memory_enabled = memory_enabled
+        self.execution_progress_enabled = execution_progress_enabled
         self.citations: dict[str, list[str]] = {}
 
         self._steer: dict[str, list[Message]] = defaultdict(list)
@@ -158,6 +161,11 @@ class TaskRunner:
         self._subscribe(agent.id)
         tool_specs = self.tools.subset(role.tools)
         _explicit_plan_deps_schema(tool_specs)
+        execution_progress = (ExecutionProgress(self.gate, self.trace)
+                              if self.execution_progress_enabled else None)
+        if execution_progress is not None:
+            execution_progress.describe(tool_specs)
+        dispatcher = execution_progress if execution_progress is not None else self.gate
 
         tokens = 0
 
@@ -169,6 +177,8 @@ class TaskRunner:
 
             nudges = self._drain(agent.id)
             if nudges:
+                if execution_progress is not None:
+                    execution_progress.reset()
                 ctx.inject_steering([m.content for m in nudges])
                 self.trace.record(
                     task_id=node.id,
@@ -258,8 +268,10 @@ class TaskRunner:
                     return
                 if call.name == "ask_human":
                     result = await self._ask_human(call, node, agent)
+                    if result.ok and execution_progress is not None:
+                        execution_progress.reset()
                 else:
-                    result = await self.gate.execute(call, node, agent, workspace)
+                    result = await dispatcher.execute(call, node, agent, workspace)
                 ctx.add_tool_result(call.id, result)
                 if call.name == "ask_human":
                     ctx.replace_opening(self._opening(

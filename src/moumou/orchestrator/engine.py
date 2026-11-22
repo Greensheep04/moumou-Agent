@@ -46,6 +46,7 @@ class Settings(BaseModel):
         default=False,
         description="Reject delegated subtasks without machine acceptance checks; opt-in.",
     )
+    execution_progress_enabled: bool = False
 
     context_window: int = 1_000_000
     max_output_tokens: int = 384_000
@@ -159,6 +160,7 @@ class Engine:
             budget=self.budget,
             retriever=self.retriever,
             memory_enabled=self.settings.memory_enabled,
+            execution_progress_enabled=self.settings.execution_progress_enabled,
         )
         self.scheduler = Scheduler(
             self.repo,

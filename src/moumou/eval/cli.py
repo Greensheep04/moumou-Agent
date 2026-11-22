@@ -139,6 +139,10 @@ def parse_args(argv=None):
              "checkpoint; native source validation, cache, audit and tools stay authoritative",
     )
     parser.add_argument(
+        "--execution-progress", action="store_true",
+        help="opt-in feedback on successful shell and Python calls repeated without file changes",
+    )
+    parser.add_argument(
         "--opening-context-tokens", type=int, default=None,
         help="explicit teacher-only opening quota, at least 500 and within the prompt "
              "ceiling; omitted preserves the existing 8000-token opening budget",
@@ -328,6 +332,9 @@ async def run_suite(args, scenarios):
     stream_tool_options = _stream_tool_choice_options(args, llm_transport)
     stream_http_retry_options = _stream_http_retry_options(args, llm_transport)
     research_progress_enabled = _research_progress_enabled(args)
+    execution_progress_enabled = getattr(args, "execution_progress", False)
+    if type(execution_progress_enabled) is not bool:
+        raise ValueError("execution_progress must be a boolean")
     transient_http_retries = stream_http_retry_options.get("transient_http_retries", 0)
     tool_choice_policy = stream_tool_options.get("tool_choice_policy", "auto")
     completion_cap = stream_output_options.get("completion_cap")
@@ -385,6 +392,7 @@ async def run_suite(args, scenarios):
             "refresh": "re-emit native bounded result; native cache policy unchanged",
             "observation": "prepared tool output, not model receipt or quality approval",
         },
+        "execution_progress_policy": {"enabled": execution_progress_enabled},
         "quality_review_mode": args.quality_review,
     }
     if llm_transport == "stream":
@@ -559,6 +567,7 @@ async def run_suite(args, scenarios):
                         memory_enabled=True,
                         max_slots=4,
                         role_review_enabled=False,
+                        execution_progress_enabled=execution_progress_enabled,
                         approval={"git_commit": True},
                     ),
                 )
@@ -840,6 +849,7 @@ def main(argv=None):
                         "llm_max_content_chars": args.llm_max_content_chars,
                         "llm_tool_choice": args.llm_tool_choice,
                         "research_progress": args.research_progress,
+                        "execution_progress": args.execution_progress,
                         "llm_transient_http_retries": args.llm_transient_http_retries,
                         "llm_max_http_attempts_per_call": (
                             1 + (args.llm_transient_http_retries or 0)

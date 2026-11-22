@@ -7,6 +7,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 from test_eval_team import scenario
 from test_quality_tools_cli import exercise, forbid, read, single_case
 
@@ -14,13 +15,15 @@ from moumou.adapters import FakeLLM
 from moumou.adapters.llm import LLMResponse, ToolCall
 from moumou.config import LLMSettings
 from moumou.context import AgentContext, Compactor, TokenBudget
-from moumou.contracts import Budget, ContextPolicy, ToolContext, ToolResult
+from moumou.contracts import Budget, ContextPolicy, ToolContext, ToolResult, TraceEvent
 from moumou.eval import cli
+from moumou.eval.metrics import span_totals
 from moumou.eval.research_progress import TeacherResearchProgress
 from moumou.eval.source_evidence import SourceEvidenceStore
 from moumou.eval.team import configure_team, submit_teacher_task
 from moumou.orchestrator import Engine, Settings
 from moumou.tools.source import ReadSourceTool, SourceHistoryTool
+from moumou.trace import Recorder
 
 URL = "https://example.test/evidence"
 
@@ -250,6 +253,13 @@ async def test_real_native_retry_receives_checkpoint_without_disabling_memory(tm
         has_checkpoint = "## This task's prepared evidence checkpoint" in messages[0]["content"]
         checkpoint_requests.append(has_checkpoint)
         if has_checkpoint:
+            encoded = messages[0]["content"].split(
+                "## This task's prepared evidence checkpoint\n", 1,
+            )[1].split("\n", 1)[0]
+            checkpoint = json.loads(encoded)
+            assert isinstance(checkpoint["last_history"], dict)
+            assert checkpoint["last_history"]["total_events"] == 0
+            assert len(checkpoint["last_history"]["page_identity"]) == 64
             return LLMResponse(tool_calls=[ToolCall(id="done", name="submit_result", args={
                 "summary": "Synthetic source inspection complete", "files": [],
             })], tokens_in=10, usage_present=True)
@@ -273,6 +283,85 @@ async def test_real_native_retry_receives_checkpoint_without_disabling_memory(tm
         assert checkpoint_requests == [False, True]
         assert run.runner.compactor is compactor
         assert run.settings.memory_enabled is True
+        events = run.trace.query(root.id)
+        prepared = [event for event in events if event.name == "research_progress_prepared"]
+        assert len(prepared) == 1 and prepared[0].kind == "task"
+        tool_events = [event for event in events if event.kind == "tool"]
+        assert len(tool_events) == 1 and tool_events[0].name == "source_history"
+        assert prepared[0].parent_span == tool_events[0].span_id
+        assert span_totals(events)["per_kind"]["tool"]["closed_spans"] == 1
+
+
+def test_real_recorder_still_rejects_unregistered_span_kinds(tmp_path):
+    with Recorder(tmp_path / "trace.jsonl", sqlite_path=tmp_path / "trace.db") as trace:
+        with pytest.raises(ValidationError):
+            trace.record(task_id="fixture", agent_id="alpha", kind="research_progress",
+                         name="unsupported_kind")
+        assert trace.query("fixture") == [] and trace.all_events() == []
+
+
+async def test_real_recorder_persists_history_projection_and_replays_without_fake_tool_counts(
+    tmp_path,
+):
+    owner, ctx, store, _fake, nodes, paths = setup(tmp_path)
+    seed(store, ctx)
+    path, sqlite_path = tmp_path / "trace.jsonl", tmp_path / "trace.db"
+    with Recorder(path, sqlite_path=sqlite_path) as trace:
+        owner = TeacherResearchProgress("p", "c")
+        owner.bind(SimpleNamespace(get=nodes.get), paths, trace)
+        wrapped = owner.wrap(SourceHistoryTool(store))
+        first = json.loads((await wrapped.run({}, ctx)).stdout)
+        again = json.loads((await wrapped.run({}, ctx)).stdout)
+        assert first["representation"] == "compact_history_index"
+        assert again["status"] == "no_new_evidence"
+        checkpoint = json.loads(owner.checkpoint(nodes[ctx.task_id], SimpleNamespace(
+            name=ctx.agent_id,
+        )).split("\n")[2])
+        assert checkpoint["duplicate_feedback_count"] == 1
+        assert checkpoint["last_history"]["page_identity"] == again["evidence_identity"]
+        events = trace.query(ctx.task_id)
+        assert len(events) == 2
+        assert all(event.kind == "task" and event.name == "research_progress_prepared"
+                   and event.agent_id == ctx.agent_id and event.t0 == event.t1 for event in events)
+        assert [event.payload["repeated_evidence"] for event in events] == [False, True]
+        assert all(event.payload["tool"] == "source_history" for event in events)
+        assert not [event for event in events if event.kind in {"tool", "memory", "acceptance"}]
+        assert span_totals(events)["per_kind"]["tool"]["closed_spans"] == 0
+        expected = [event.model_dump(mode="json") for event in events]
+    # The unchanged strict contract and pre-existing SQLite reader accept the new marker.
+    assert [TraceEvent.model_validate_json(line).model_dump(mode="json")
+            for line in path.read_text(encoding="utf-8").splitlines()] == expected
+    with Recorder(path, sqlite_path=sqlite_path) as reopened:
+        assert [event.model_dump(mode="json") for event in reopened.query(ctx.task_id)] == expected
+    from moumou.ui.replay import load_replay
+
+    view = load_replay(path)
+    assert [item.event.model_dump(mode="json") for item in view.items] == expected
+
+
+async def test_real_recorder_read_window_feedback_retains_native_reads_and_refresh(tmp_path):
+    _owner, ctx, store, _fake, nodes, paths = setup(tmp_path)
+    seed(store, ctx)
+    native, fetches = native_reader(store, "synthetic retained text")
+    with Recorder(tmp_path / "read-trace.jsonl", sqlite_path=tmp_path / "read-trace.db") as trace:
+        owner = TeacherResearchProgress("p", "c")
+        owner.bind(SimpleNamespace(get=nodes.get), paths, trace)
+        wrapped = owner.wrap(native)
+        args = {"url": URL, "offset": 0, "limit": 9}
+        first = json.loads((await wrapped.run(args, ctx)).stdout)
+        again = json.loads((await wrapped.run(args, ctx)).stdout)
+        refreshed = json.loads((await wrapped.run({**args, "refresh": True}, ctx)).stdout)
+        assert first["text"] == refreshed["text"] == "synthetic"
+        assert again["status"] == "no_new_evidence" and again["text"] == ""
+        events = trace.query(ctx.task_id)
+        assert len(events) == 3 and all(event.kind == "task" for event in events)
+        assert [event.payload["projected_text_characters"] for event in events] == [9, 0, 9]
+        assert [event.payload["prepared_text_characters"] for event in events] == [9, 9, 9]
+        assert [event.payload["explicit_refresh"] for event in events] == [False, False, True]
+        assert owner._states[owner._key(ctx.task_id, ctx.agent_id, ctx.workspace)]["last_read"]
+        assert fetches == [URL]
+        reads = [event for event in store.history(limit=30)["events"] if event["kind"] == "read"]
+        assert len(reads) == 3  # Native preparation still executes once for every call.
 
 
 @pytest.mark.parametrize("enabled", [False, True])

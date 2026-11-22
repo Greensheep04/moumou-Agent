@@ -402,6 +402,14 @@ Earlier working-tree stage `16981d95…` qualified with 1668 passed, 8 skipped a
 
 ## Explicit opening quota and tool-request policy
 
+`--execution-progress` enables repeat feedback for `shell` and `run_python` in
+formal sessions. If a successful request left no file changes, another request
+with the same arguments and a matching workspace snapshot receives a short
+instruction to use its earlier result. `repeat_reason` requests fresh execution
+under the normal approval policy. Changed or unverified workspaces use the
+ordinary execution path. Each attempt starts with an empty history, and the
+trace records skipped requests separately from executed tools.
+
 `--opening-context-tokens` selects an estimated-token opening quota for the formal
 team, retaining 8000 when omitted. An explicit value must be an integer from 500
 to 2147483647 and no greater than the configured `prompt_ceiling`; this is a runtime
