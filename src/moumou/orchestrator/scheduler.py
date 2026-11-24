@@ -30,6 +30,7 @@ class Scheduler:
         self.on_terminal = on_terminal      # async callback: board write, reflection
         self._running: dict[str, asyncio.Task] = {}
         self._aborted = False
+        self.serial_roles = False
 
     def abort(self) -> None:
         self._aborted = True
@@ -66,14 +67,16 @@ class Scheduler:
 
     # -- internals -------------------------------------------------------
     def _fill_slots(self) -> None:
-        while len(self._running) < self.max_slots:
-            ready = self.repo.ready(limit=1)
-            if not ready:
-                return
-            node = ready[0]
+        busy = {self.repo.get(key).role for key in self._running} if self.serial_roles else set()
+        for node in self.repo.ready(limit=-1):
+            if len(self._running) >= self.max_slots:
+                break
+            if self.serial_roles and node.role in busy:
+                continue
             self.repo.transition(node.id, "RUNNING", "dispatched")
             fresh = self.repo.get(node.id)
             self._running[node.id] = asyncio.create_task(self.runner.run(fresh))
+            busy.add(node.role)
 
     async def _collect_one(self) -> None:
         by_task = {t: tid for tid, t in self._running.items()}
@@ -105,7 +108,9 @@ class Scheduler:
                 await self.on_terminal(node)
 
     def _handle_failure(self, node) -> None:
-        if node.retries < node.budget.max_retries:
+        if self.repo.targeted_recovery or node.recovery_used:
+            self.repo.transition(node.id, "DEAD", "node_failure_requires_repair")
+        elif node.retries < node.budget.max_retries:
             self.repo.bump_retries(node.id)
             self.repo.transition(node.id, "READY", "retry")
         else:

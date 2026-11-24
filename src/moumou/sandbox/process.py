@@ -13,6 +13,8 @@ from tempfile import TemporaryDirectory
 from moumou.contracts import ToolResult
 from moumou.sandbox.output import MAX_OUTPUT, clip_bytes
 
+SANDBOX_EXEC = "/usr/bin/sandbox-exec"
+
 
 def timeout_value(value):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -36,12 +38,18 @@ async def _finish_cleanup(task: asyncio.Task) -> bool:
             cancelled = True
 
 
-async def run_command(command, cwd: Path, timeout=60.0, env=None, *, strip_git_env=False):
+async def run_command(
+    command, cwd: Path, timeout=60.0, env=None, *, strip_git_env=False, sandbox_profile=None,
+):
     # A child-only PATH alias also covers compound commands and nested shells.
     # Argument-list execution already receives the exact requested executable.
     if not isinstance(command, str):
-        return await _run_command(command, cwd, timeout, env, strip_git_env=strip_git_env)
-    with TemporaryDirectory(prefix="moumou-python3-") as alias_dir:
+        return await _run_command(
+            command, cwd, timeout, env, strip_git_env=strip_git_env,
+            sandbox_profile=sandbox_profile,
+        )
+    alias_parent = env["TMPDIR"] if sandbox_profile else None
+    with TemporaryDirectory(prefix="moumou-python3-", dir=alias_parent) as alias_dir:
         if os.name == "nt":
             alias = Path(alias_dir) / "python3.cmd"
             alias.write_bytes(b'@echo off\r\n"%MOUMOU_PYTHON_EXECUTABLE%" %*\r\n')
@@ -49,7 +57,7 @@ async def run_command(command, cwd: Path, timeout=60.0, env=None, *, strip_git_e
             alias = Path(alias_dir) / "python3"
             alias.write_bytes(b'#!/bin/sh\nexec "$MOUMOU_PYTHON_EXECUTABLE" "$@"\n')
             alias.chmod(0o700)
-        child_env = dict(os.environ)
+        child_env = {} if sandbox_profile else dict(os.environ)
         child_env.update(env or {})
         child_env["MOUMOU_PYTHON_EXECUTABLE"] = sys.executable
         child_env["PATH"] = alias_dir + os.pathsep + child_env.get("PATH", "")
@@ -59,13 +67,16 @@ async def run_command(command, cwd: Path, timeout=60.0, env=None, *, strip_git_e
                 extensions = extensions.rstrip(";") + ";.CMD"
             child_env["PATHEXT"] = extensions
         return await _run_command(
-            command, cwd, timeout, child_env, strip_git_env=strip_git_env
+            command, cwd, timeout, child_env, strip_git_env=strip_git_env,
+            sandbox_profile=sandbox_profile,
         )
 
 
-async def _run_command(command, cwd: Path, timeout=60.0, env=None, *, strip_git_env=False):
+async def _run_command(
+    command, cwd: Path, timeout=60.0, env=None, *, strip_git_env=False, sandbox_profile=None,
+):
     timeout = timeout_value(timeout)
-    child_env = dict(os.environ)
+    child_env = {} if sandbox_profile else dict(os.environ)
     child_env.update(env or {})
     if strip_git_env:
         child_env = {k: v for k, v in child_env.items() if not k.upper().startswith("GIT_")}
@@ -81,6 +92,9 @@ async def _run_command(command, cwd: Path, timeout=60.0, env=None, *, strip_git_
             else shlex.quote(sys.executable)
         )
         command = exe + command[len("python3") :]
+    if sandbox_profile:
+        argv = ["/bin/sh", "-c", command] if isinstance(command, str) else command
+        command = [SANDBOX_EXEC, "-p", sandbox_profile, *argv]
     kwargs = {
         "cwd": str(cwd),
         "env": child_env,

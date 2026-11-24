@@ -188,7 +188,10 @@ class SearchBudgetTool:
         except (AttributeError, ValueError):
             return self._finish(ToolResult(ok=False, error="invalid search arguments"),
                                 call_id=call_id, origin="invalid_arguments")
-        key = hashlib.sha256(json.dumps(normalized, sort_keys=True,
+        cache_input = normalized
+        if isinstance(self.delegate, WebSearchTool) and self.delegate.provider != "tavily":
+            cache_input = dict(normalized, provider=self.delegate.provider)
+        key = hashlib.sha256(json.dumps(cache_input, sort_keys=True,
                                        ensure_ascii=False).encode("utf-8")).hexdigest()
         async with self._lock:
             with self._db() as db:
@@ -268,8 +271,10 @@ class SearchBudgetTool:
         try:
             if isinstance(self.delegate, WebSearchTool):
                 inner = self.delegate.transport or httpx.AsyncHTTPTransport()
-                backend = WebSearchTool(api_key=self.delegate.api_key,
-                                        transport=_MeteredTransport(inner, started))
+                backend = WebSearchTool(
+                    api_key=self.delegate.api_key, provider=self.delegate.provider,
+                    transport=_MeteredTransport(inner, started),
+                )
             else:
                 backend = self.delegate
                 # Explicit injected delegates model one provider attempt in tests.

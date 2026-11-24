@@ -24,7 +24,9 @@ MAX_CANDIDATE_BYTES = 8 * 1024 * 1024
 CLEANUP_TIMEOUT_S = 5.0
 _FACTORY = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*:[A-Za-z_]\w*\Z")
 _STATUSES = {"succeeded", "unverified", "failed", "error", "cancelled", "incomplete"}
-_NODE_STATUSES = {"PENDING", "READY", "RUNNING", "WAITING_HUMAN", "DONE", "FAILED", "DEAD"}
+_NODE_STATUSES = {
+    "PENDING", "READY", "RUNNING", "WAITING_HUMAN", "BLOCKED", "DONE", "FAILED", "DEAD",
+}
 
 
 def prepare_client(llm, worker_factory: str | None) -> tuple[dict, dict[str, str]]:

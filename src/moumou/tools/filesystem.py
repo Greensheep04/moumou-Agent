@@ -251,14 +251,14 @@ class SearchFilesTool(FileTool):
 
 class DeleteFileTool(FileTool):
     name = "delete_file"
-    description = "Delete a file or explicitly recursive directory; requires approval."
+    description = "Delete a file or explicitly recursive directory in this role workspace."
     action_class = "fs_delete"
     params_schema = _schema(
         {"path": PATH, "recursive": {"type": "boolean", "default": False}}, ["path"]
     )
 
     def execute(self, args, jail):
-        path = self.path(args, jail, mutable=True)
+        path = jail.resolve_artifact(args.get("path", "."))
         if not path.exists():
             raise ValueError(f"no such file: {args.get('path')}")
         if not isinstance(args.get("recursive", False), bool):
@@ -270,7 +270,7 @@ class DeleteFileTool(FileTool):
             # escaping the workspace and nested Git management directories.
             for root, dirs, files in os.walk(path, followlinks=False):
                 for name in dirs + files:
-                    jail.resolve(os.path.join(root, name), mutable=True)
+                    jail.resolve_artifact(os.path.join(root, name))
             artifacts = [jail.relative(p) for p in _walk(jail, path)]
             shutil.rmtree(path)
         else:
@@ -299,3 +299,76 @@ class ApplyPatchTool(FileTool):
         with path.open("w", encoding="utf-8", newline="") as stream:
             stream.write(text.replace(old, new, 1))
         return ToolResult(ok=True, artifacts=[jail.relative(path)], stdout="patched")
+
+
+class CheckDeliveryTool(FileTool):
+    """Dry-run the root delivery closure check without publishing anything.
+
+    The teacher adapter already validates ``result.files`` when a root submits.
+    That check is useful earlier: a release role that is about to hand a package
+    up can run exactly the same validator on exactly the list it intends to
+    submit, so a path mistake is caught while it is still cheap to fix.
+    """
+
+    name = "check_delivery"
+    description = (
+        "Preflight the proposed files and acceptance_files BEFORE submit_result. "
+        "Instructor teams check the assigned machine checks and version evidence as well. "
+        "Nothing is published. Paths in `files` are resolved from this "
+        "role's workspace root, while a link written inside a document is resolved from "
+        "that document's own directory - so 'final/web_article.md' inside a file that "
+        "already lives in final/ means 'final/final/web_article.md'. Reports "
+        "[missing_reference] when a link target is not an existing file, "
+        "[undeclared_reference] when a referenced file exists but is absent from `files`, "
+        "and unsafe or private declarations. An empty list of issues does not prove "
+        "factual quality; it only proves the package closes."
+    )
+    action_class = "fs_read"
+    timeout_s = 30.0
+    params_schema = _schema(
+        {"files": {"type": "array", "items": {"type": "string"}},
+         "acceptance_files": {"type": "array", "items": {"type": "string"}},
+         "freeze_candidate": {"type": "boolean", "description": (
+             "Instructor run only. Use true after completing mandatory edits, to record "
+             "the exact candidate hashes before final validation; use false to reopen it."
+         )}, "open_required_items": {"type": "array", "maxItems": 32, "items": {
+             "type": "string", "minLength": 1, "maxLength": 300,
+         }, "description": "Mandatory items remaining. Pass [] when ready to freeze."}},
+        ["files"],
+    )
+
+    def execute(self, args, jail):
+        files = args.get("files")
+        if not isinstance(files, list) or not all(isinstance(item, str) for item in files):
+            raise ValueError("files must be a list of workspace-relative paths")
+
+        from moumou.eval.delivery_quality import (
+            DeliveryQualityError,
+            validate_delivery,
+        )
+
+        class _Proposed:
+            parent_id = None          # validate as the root delivery would be
+
+        proposed = _Proposed()
+        proposed.files = list(files)
+        try:
+            validate_delivery(proposed, jail.root, proposed)
+        except DeliveryQualityError as exc:
+            report = {
+                "valid": False,
+                "declared_files": len(files),
+                "issues": str(exc),
+                "resolution_rule": (
+                    "result.files paths resolve from the workspace root; links inside a "
+                    "document resolve from that document's directory"
+                ),
+            }
+            return ToolResult(ok=True, stdout=json.dumps(report, ensure_ascii=False))
+        report = {
+            "valid": True,
+            "declared_files": len(files),
+            "issues": "",
+            "note": "package closes; factual and task quality are still reviewed separately",
+        }
+        return ToolResult(ok=True, stdout=json.dumps(report, ensure_ascii=False))

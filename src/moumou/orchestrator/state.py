@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -85,6 +86,14 @@ CREATE TABLE IF NOT EXISTS conclusions (
 );
 CREATE INDEX IF NOT EXISTS idx_conclusions_scope ON conclusions(scope, seq);
 
+CREATE TABLE IF NOT EXISTS published_versions (
+    task_id TEXT NOT NULL,
+    version TEXT NOT NULL,
+    files TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (task_id, version)
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -140,6 +149,9 @@ class Database:
     def _migrate(self) -> None:
         """Add columns introduced after a database was first created."""
         self._ensure_column("tasks", "wakeups", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("tasks", "blocker", "TEXT")
+        self._ensure_column("tasks", "recovery_used", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("tasks", "superseded_by", "TEXT")
         self._ensure_column("roles", "version", "INTEGER NOT NULL DEFAULT 1")
         self._ensure_column("roles", "updated_at", "TEXT")
 
@@ -150,6 +162,17 @@ class Database:
 
     def close(self) -> None:
         self.conn.close()
+
+    @contextmanager
+    def transaction(self):
+        self.conn.execute("SAVEPOINT task_update")
+        try:
+            yield self.conn
+        except BaseException:
+            self.conn.execute("ROLLBACK TO SAVEPOINT task_update")
+            raise
+        finally:
+            self.conn.execute("RELEASE SAVEPOINT task_update")
 
     # -- small key/value store (e.g. the token-estimate correction) -------
     def get_meta(self, key: str, default: str | None = None) -> str | None:
@@ -183,6 +206,9 @@ def _to_node(row: sqlite3.Row) -> TaskNode:
         error=row["error"],
         result=_parse_result(row["result"]),
         wakeups=row["wakeups"],
+        blocker=json.loads(row["blocker"]) if row["blocker"] else None,
+        recovery_used=bool(row["recovery_used"]),
+        superseded_by=row["superseded_by"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -200,6 +226,7 @@ def _parse_result(raw: str | None) -> TaskResult | None:
 class SqliteTaskRepo:
     def __init__(self, db: Database):
         self.db = db
+        self.targeted_recovery = False
 
     # -- reads -----------------------------------------------------------
     def _rows(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
@@ -212,6 +239,12 @@ class SqliteTaskRepo:
     def children(self, task_id: str) -> list[TaskNode]:
         rows = self._rows("SELECT * FROM tasks WHERE parent_id = ? ORDER BY rowid", (task_id,))
         return [_to_node(r) for r in rows]
+
+    def active_descendants(self, task_id: str) -> list[TaskNode]:
+        children = [child for child in self.children(task_id) if not child.superseded_by]
+        return children + [
+            item for child in children for item in self.active_descendants(child.id)
+        ]
 
     def by_status(self, status: TaskStatus) -> list[TaskNode]:
         rows = self._rows("SELECT * FROM tasks WHERE status = ? ORDER BY rowid", (status,))
@@ -348,8 +381,9 @@ class SqliteTaskRepo:
         self.db.conn.execute(
             """INSERT INTO tasks (id, project_id, conversation_id, parent_id, depth, goal, role,
                                    deps, acceptance, status, retries, budget, artifacts, branch,
-                                   error, result, wakeups, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                   error, result, wakeups, created_at, updated_at,
+                                   blocker, recovery_used, superseded_by)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 node.id,
                 node.project_id,
@@ -370,13 +404,14 @@ class SqliteTaskRepo:
                 node.wakeups,
                 node.created_at.isoformat(),
                 node.updated_at.isoformat(),
+                json.dumps(node.blocker) if node.blocker is not None else None,
+                int(node.recovery_used),
+                node.superseded_by,
             ),
         )
 
     def transition(self, task_id: str, to: TaskStatus, reason: str) -> None:
-        cur = self.db.conn.cursor()
-        cur.execute("BEGIN IMMEDIATE")
-        try:
+        with self.db.transaction() as cur:
             row = cur.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
             if row is None:
                 raise KeyError(f"no such task: {task_id}")
@@ -393,10 +428,16 @@ class SqliteTaskRepo:
                 "VALUES (?,?,?,?,?)",
                 (task_id, now, src, to, reason),
             )
-            cur.execute("COMMIT")
-        except BaseException:
-            cur.execute("ROLLBACK")
-            raise
+
+    def set_blocker(self, task_id: str, blocker: dict) -> None:
+        self.db.conn.execute("UPDATE tasks SET blocker = ? WHERE id = ?",
+                             (json.dumps(blocker, ensure_ascii=False), task_id))
+
+    def use_recovery(self, task_id: str, *, superseded_by: str | None = None) -> None:
+        self.db.conn.execute(
+            "UPDATE tasks SET recovery_used = 1, superseded_by = ? WHERE id = ?",
+            (superseded_by, task_id),
+        )
 
     def set_deps(self, task_id: str, deps: list[str]) -> None:
         self.db.conn.execute(
@@ -410,12 +451,55 @@ class SqliteTaskRepo:
             (result.model_dump_json(), _now(), task_id),
         )
 
+    def set_acceptance(self, task_id: str, acceptance: list) -> None:
+        """Replace a task's declared checks; used to attach a root's aggregate check."""
+        payload = [item.model_dump(mode="json") for item in acceptance]
+        self.db.conn.execute(
+            "UPDATE tasks SET acceptance = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(payload), _now(), task_id),
+        )
+
     def bump_wakeups(self, task_id: str) -> int:
         self.db.conn.execute(
             "UPDATE tasks SET wakeups = wakeups + 1 WHERE id = ?", (task_id,)
         )
         node = self.get(task_id)
         return node.wakeups if node else 0
+
+    def publish_version(self, task_id: str, version: str, files: list[dict]) -> None:
+        """Record one immutable publication. Versions never overwrite each other."""
+        self.db.conn.execute(
+            "INSERT OR IGNORE INTO published_versions (task_id, version, files, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (task_id, version, json.dumps(files, ensure_ascii=False), _now()),
+        )
+
+    def published_version(self, task_id: str) -> dict | None:
+        """The most recent publication for a task, or ``None`` if it never published."""
+        row = self.db.conn.execute(
+            "SELECT version, files, created_at FROM published_versions "
+            "WHERE task_id = ? ORDER BY created_at DESC, version DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            files = json.loads(row["files"])
+        except (TypeError, ValueError):
+            files = []
+        return {"version": row["version"], "files": files, "created_at": row["created_at"]}
+
+    def set_artifacts(self, task_id: str, artifacts: list[str]) -> None:
+        """Replace the task's formal file list with a published manifest.
+
+        Unlike ``add_artifacts`` this never merges: what the task publishes is
+        exactly what any reader sees, so a diagnostic tool path can never leak
+        into a handoff again.
+        """
+        self.db.conn.execute(
+            "UPDATE tasks SET artifacts = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(list(dict.fromkeys(artifacts))), _now(), task_id),
+        )
 
     def add_artifacts(self, task_id: str, artifacts: list[str]) -> None:
         if not artifacts:
@@ -439,6 +523,22 @@ class SqliteTaskRepo:
         node = self.get(task_id)
         return node.retries if node else 0
 
+    def _has_live_dependency(self, dependencies: list[TaskNode]) -> bool:
+        pending, seen = list(dependencies), set()
+        while pending:
+            dep = pending.pop()
+            if dep.id in seen:
+                continue
+            seen.add(dep.id)
+            if dep.status in {"READY", "RUNNING", "WAITING_HUMAN"}:
+                return True
+            if dep.status == "PENDING":
+                inputs = [self.get(task_id) for task_id in dep.deps]
+                if all(item is not None and item.status == "DONE" for item in inputs):
+                    return True
+                pending.extend(item for item in inputs if item is not None)
+        return False
+
     # -- the one derived rule --------------------------------------------
     def promote(self) -> int:
         """Resolve pending dependencies, including failure propagation, to a fixed point."""
@@ -451,8 +551,39 @@ class SqliteTaskRepo:
                     self.transition(node.id, "DEAD", "missing_dependency")
                 else:
                     failed = [dep for dep in deps if dep.status == "DEAD"]
+                    blocked = [dep for dep in deps if dep.status == "BLOCKED"]
+                    own = [dep for dep in blocked + failed if dep.parent_id == node.id
+                           and (dep.status == "BLOCKED" or self.targeted_recovery)]
+                    fresh = [dep for dep in own if not (dep.blocker or {}).get("escalated")]
+                    if fresh:
+                        with self.db.transaction():
+                            for dep in fresh:
+                                self.set_blocker(
+                                    dep.id, {**(dep.blocker or {}), "escalated": True}
+                                )
+                            self.bump_wakeups(node.id)
+                            self.transition(node.id, "READY", "child_needs_attention")
+                        promoted += 1
+                        continue
+                    if own:
+                        if any(dep.status == "DONE" and dep.updated_at > node.updated_at
+                               for dep in deps):
+                            with self.db.transaction():
+                                self.bump_wakeups(node.id)
+                                self.transition(node.id, "READY", "new_handoff_for_blocker")
+                            promoted += 1
+                            continue
+                        if self._has_live_dependency(deps):
+                            continue
+                        self.transition(node.id, "DEAD", "unresolved_child")
+                        promoted += 1
+                        continue
                     if failed:
                         if any(dep.parent_id != node.id for dep in failed):
+                            parent = self.get(node.parent_id) if node.parent_id else None
+                            if (self.targeted_recovery and parent and not parent.is_terminal
+                                    and all(dep.parent_id == parent.id for dep in failed)):
+                                continue
                             # A consumer cannot repair another branch's failed input.
                             self.transition(node.id, "DEAD", "upstream_failed")
                         elif not all(dep.is_terminal for dep in deps):

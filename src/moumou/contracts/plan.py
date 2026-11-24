@@ -46,6 +46,9 @@ class SubtaskSpec(BaseModel):
     goal: str
     role: str                                     # existing role name or one from plan.roles
     deps: list[str] = Field(default_factory=list)
+    replaces: str | None = Field(
+        default=None, description="ID of the direct child this repair replaces."
+    )
     acceptance: list[Acceptance] = Field(
         default_factory=list,
         description=(
@@ -72,10 +75,24 @@ class SubtaskSpec(BaseModel):
         return v
 
 
+class ResumeSpec(BaseModel):
+    task_id: str
+    resolution: str = Field(min_length=1, max_length=1500)
+    deps: list[str] = Field(default_factory=list, description="New completed input producer IDs.")
+
+
+class BlockerReport(BaseModel):
+    reason: str = Field(min_length=1, max_length=1000)
+    required_input: str = Field(min_length=1, max_length=1000)
+    progress: str = Field(max_length=1500)
+    evidence_refs: list[str] = Field(max_length=8)
+
+
 class Plan(BaseModel):
     reasoning: str = ""
     roles: list[RoleDraft] = Field(default_factory=list)
-    subtasks: list[SubtaskSpec] = Field(description=(
+    resume: ResumeSpec | None = None
+    subtasks: list[SubtaskSpec] = Field(default_factory=list, description=(
         "Delegated specialist work only; respect any explicit task count and dependency "
         "structure in the goal. The parent automatically resumes to review and finalize; "
         "do not create another lead/finalization subtask."

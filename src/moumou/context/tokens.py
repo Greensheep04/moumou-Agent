@@ -7,6 +7,7 @@ error is removed by calibrating against the ``usage`` every real call returns.
 
 from __future__ import annotations
 
+import json
 import re
 
 # Official ratios from the DeepSeek token-usage guide.
@@ -44,6 +45,19 @@ def estimate_messages(messages: list[dict]) -> float:
     return total
 
 
+def estimate_tools(tools: list[dict] | None) -> float:
+    """Raw estimate for the tool definitions sent alongside the messages.
+
+    ``estimate_messages`` only walks messages, but the provider also bills the
+    JSON schema of every tool, so a request can exceed a budget that the
+    message-only estimate says is fine.
+    """
+    total = 0.0
+    for tool in tools or []:
+        total += estimate_text(json.dumps(tool, ensure_ascii=False))
+    return total
+
+
 class TokenBudget:
     """Estimator plus a correction factor learned from real usage.
 
@@ -60,6 +74,29 @@ class TokenBudget:
 
     def estimate_text(self, text: str) -> int:
         return int(estimate_text(text) * self.correction)
+
+    def estimate_request(
+        self, messages: list[dict], tools: list[dict] | None = None
+    ) -> int:
+        """Estimate the whole request: messages plus separately sent tool schemas."""
+        return self.estimate(messages) + int(estimate_tools(tools) * self.correction)
+
+    def split_request(
+        self, messages: list[dict], tools: list[dict] | None = None
+    ) -> dict:
+        """Same estimate, but itemised so a capacity error can name the source."""
+        messages_tokens = self.estimate(messages)
+        tool_tokens = int(estimate_tools(tools) * self.correction)
+        tool_results = 0
+        for message in messages:
+            if message.get("role") == "tool":
+                tool_results += self.estimate_text(str(message.get("content") or ""))
+        return {
+            "messages_tokens": messages_tokens,
+            "tools_tokens": tool_tokens,
+            "tool_result_tokens": tool_results,
+            "total_tokens": messages_tokens + tool_tokens,
+        }
 
     def observe(self, estimated: int, actual: int) -> float:
         """Feed back a real ``usage.prompt_tokens`` measurement."""

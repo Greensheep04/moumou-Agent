@@ -20,6 +20,7 @@ ActionClass = Literal[
     "git_push",
     "network",
     "install",
+    "external_write",
 ]
 
 #: Default approval policy. A policy object may override this, but the
@@ -33,6 +34,7 @@ DEFAULT_APPROVAL: dict[str, bool] = {
     "git_push": True,
     "network": False,
     "install": True,
+    "external_write": True,
 }
 
 
@@ -43,6 +45,8 @@ class ToolContext(BaseModel):
     task_id: str
     workspace: Path            # the tool may not touch anything outside this
     env: dict[str, str] = Field(default_factory=dict)
+    execution_root: Path | None = None
+    external_access: bool = False
 
 
 class HumanApprovalFeedback(BaseModel):

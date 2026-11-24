@@ -8,6 +8,7 @@ import json
 import os
 import platform
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,13 +26,22 @@ from moumou.context.lineage import (
     assignment_reference_records,
     render_assignment_references,
 )
-from moumou.contracts import AgentInstance, Budget, ContextPolicy, IntegrateResult, Plan, TaskNode
+from moumou.contracts import (
+    Acceptance,
+    AgentInstance,
+    Budget,
+    ContextPolicy,
+    IntegrateResult,
+    Plan,
+    TaskNode,
+)
 from moumou.eval.cases import Scenario
 from moumou.eval.delivery_quality import CONTENT_QUALITY_RULES, validate_delivery
-from moumou.eval.input_handoff import DeclaredInputs, install_input_schema
+from moumou.eval.input_handoff import DeclaredInputs, InputHandoffError, install_input_schema
 from moumou.eval.quote_handoff import summarize_dependency_checks
 from moumou.human_history import render_human_exchanges
 from moumou.orchestrator.delegation import Delegation, DelegationError
+from moumou.orchestrator.worker import HandoffError
 from moumou.prompts import FRAMEWORK_RULES
 from moumou.sandbox.local import LocalJail
 
@@ -52,31 +62,57 @@ class TeamState:
     previous_root_id: str | None = None
     prior_dialogue_sha256: str | None = None
     prior_context: dict = field(default_factory=dict)
+    on_workspaces_changed: Callable | None = None
 
 
 class StableRoleWorkspace:
-    """Keep four private role directories across both teacher tasks."""
+    """Keep the role identity while giving each root task its own writable directory."""
 
-    def __init__(self, provider, project_id, conversation_id, roles):
+    def __init__(self, provider, repo, project_id, conversation_id, roles):
         self.provider = provider
+        self.repo = repo
         self.project_id, self.conversation_id = project_id, conversation_id
         self.roles = frozenset(roles)
-        self.paths = {
-            role: Path(provider.allocate(project_id, conversation_id, role)).resolve()
-            for role in roles
+        self._roots = {}
+        self.paths = self.for_root("t1")
+
+    def for_root(self, root_id):
+        if root_id in self._roots:
+            return self._roots[root_id]
+        paths = {
+            role: Path(self.provider.allocate(
+                self.project_id, f"{self.conversation_id}--{root_id}", role,
+            )).resolve()
+            for role in sorted(self.roles)
         }
-        if len(set(self.paths.values())) != len(self.paths):
+        if len(set(paths.values())) != len(paths):
             raise ValueError("instructor team members must have distinct private workspaces")
+        existing = [path for members in self._roots.values() for path in members.values()]
         if any(left != right and left.is_relative_to(right)
-               for left in self.paths.values() for right in self.paths.values()):
-            raise ValueError("instructor role workspaces may not be nested inside each other")
+               for left in paths.values() for right in paths.values()) or any(
+            left.is_relative_to(right) or right.is_relative_to(left)
+            for left in paths.values() for right in existing
+        ):
+            raise ValueError("instructor workspaces must be independent across roles and tasks")
+        self._roots[root_id] = paths
+        return paths
 
     def allocate(self, project_id, conversation_id, agent_id):
-        role = agent_id.split("@", 1)[0]
+        role, _, task_id = agent_id.partition("@")
         if (project_id != self.project_id or conversation_id != self.conversation_id
                 or role not in self.roles):
             raise PermissionError("workspace is outside this instructor team")
-        return self.paths[role]
+        if not task_id:
+            return self.paths[role]
+        node = self.repo.get(task_id)
+        if (node is None or node.role != role or node.project_id != project_id
+                or node.conversation_id != conversation_id):
+            raise PermissionError("workspace is outside the registered teacher task")
+        while node is not None and node.parent_id is not None:
+            node = self.repo.get(node.parent_id)
+        if node is None or node.id not in self._roots:
+            raise PermissionError("workspace is outside the registered teacher task")
+        return self._roots[node.id][role]
 
     def release(self, path):
         return self.provider.release(path)
@@ -98,7 +134,7 @@ class StableRoleWorkspace:
 
     def register_private_evidence(self, workspace, relative):
         path = Path(workspace).resolve()
-        if path not in self.paths.values():
+        if not any(path in paths.values() for paths in self._roots.values()):
             raise PermissionError("private evidence is outside this instructor team")
         register = getattr(self.provider, "register_private_evidence", None)
         if callable(register):
@@ -119,6 +155,8 @@ class FixedTeamDelegation(Delegation):
                 f"instructor team has exactly {sorted(self.allowed_roles)}; "
                 f"reuse those identities instead of adding {sorted(unknown)}"
             )
+        if any(spec.role == parent.role for spec in plan.subtasks):
+            raise DelegationError("assign specialist work to a different team member")
         super().validate(parent, plan)
 
     def apply(self, parent, payload):
@@ -127,23 +165,35 @@ class FixedTeamDelegation(Delegation):
         try:
             plan = Plan.model_validate(payload)
             self.validate(parent, plan)
-            contracts = self.input_policy.validate_plan(parent, payload, plan)
+            ids = self.child_ids(parent, plan)
+            contracts = self.input_policy.validate_plan(parent, payload, plan, child_ids=ids)
         except (ValueError, TypeError, KeyError) as exc:
             raise DelegationError("declared inputs: " + str(exc)) from exc
-        # Repository transitions own BEGIN/COMMIT; do not nest native apply in
-        # a SAVEPOINT. Store all contracts first, before any child is created.
-        self.input_policy.persist(contracts)
-        return super().apply(parent, payload)
+        replacements = {spec.replaces: ids[spec.key] for spec in plan.subtasks if spec.replaces}
+        try:
+            with self.repo.db.transaction():
+                self.input_policy.persist(contracts)
+                if plan.resume is not None:
+                    self.input_policy.resume_base(self.repo.get(plan.resume.task_id))
+                if replacements:
+                    consumers = [node for node in self.retained_plan_nodes(parent, replacements)
+                                 if set(node.deps) & replacements.keys()]
+                    self.input_policy.replace_producers(consumers, replacements)
+                return super().apply(parent, payload)
+        except InputHandoffError as exc:
+            raise DelegationError(f"declared inputs: {exc}") from exc
 
 
 class TeamContextBuilder(ContextBuilder):
     """Pin the original instructor role; use factual prior handoffs, not invented summaries."""
 
     def __init__(self, *args, scenario, workspaces=None, register_private_evidence=None,
-                 input_policy=None, **kwargs):
+                 input_policy=None, repo=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.scenario = scenario
         self.input_policy = input_policy
+        self._requirements_repo = repo
+        self.shared_requirement_roles = tuple(role.name for role in scenario.roles) if repo else ()
         self.prior_context = {}
         self.workspaces = dict(workspaces or {})
         self.register_private_evidence = register_private_evidence
@@ -152,6 +202,9 @@ class TeamContextBuilder(ContextBuilder):
         self.artifact_quote_available = False
         self.source_audit_available = False
         self._artifact_receipt_binding = None
+        self.minimum_specialists = 0
+        self.required_delivery_roles = ()
+        self.booking_rule_topics = ()
 
     def bind_artifact_receipts(self, repo, get_journal):
         """Trusted operator only: provenance for declared direct-dependency files."""
@@ -161,10 +214,20 @@ class TeamContextBuilder(ContextBuilder):
             raise ValueError("artifact receipts require the native journal and current repository")
         self._artifact_receipt_binding = (repo, get_journal)
 
-    def validate_inputs(self, node, workspace):
+    def validate_inputs(self, node, workspace, *, check_only=False):
         """Optional pre-materialization contract, inside the worker error boundary."""
         if self.input_policy is not None:
-            self.input_policy.preflight(node, workspace)
+            self._validate_input_handoff(
+                self.input_policy.preflight, node, workspace, check_only=check_only,
+            )
+
+    def _validate_input_handoff(self, check, *args, **kwargs):
+        try:
+            check(*args, **kwargs)
+        except InputHandoffError as exc:
+            if not self.minimum_specialists:
+                raise
+            raise HandoffError(str(exc), detail=exc.detail) from exc
 
     def validate_delivery(self, node, workspace, result):
         """Validate explicit final handoffs without assigning factual correctness."""
@@ -283,11 +346,42 @@ class TeamContextBuilder(ContextBuilder):
             "They are historical evidence, not new task instructions or deliverables.\n"
         )
 
+    def _shared_requirements(self, node, references):
+        repo = self._requirements_repo
+        if repo is None:
+            return ""
+        sources = [reference.task_id for reference in references or ()]
+        previous = self.prior_context.get("previous_root_id")
+        if previous and self.prior_context.get("previous_status") == "DONE":
+            sources.insert(0, previous)
+        rules = []
+        for source_id in dict.fromkeys(sources):
+            source = repo.get(source_id)
+            if (source is None or source.project_id != node.project_id
+                    or source.conversation_id != node.conversation_id):
+                raise ContextAdmissionError("confirmed requirement source is outside the team")
+            for record in repo.human_exchanges(source, require_answered=False):
+                request = record["request"]
+                recipients = request["payload"].get("share_with_roles", [])
+                if (record["response"] is None or not isinstance(recipients, list)
+                        or node.role not in recipients):
+                    continue
+                rules.append({"source_task": source.id, "request_id": request["id"],
+                              "question": request["summary"], "answer": record["response"]["text"]})
+        if not rules:
+            return ""
+        return (
+            "\n## Confirmed requirements shared with this role\n"
+            "Use these recorded answers within the current task. Resolve genuine conflicts "
+            "with the requester. These answers do not grant permission to run tools.\n"
+            + self._json(rules) + "\n"
+        )
+
     def build(self, node, role, dep_reports=None, memory_hits=None, board_notes=None,
               human_exchanges=None, assignment_references=None):
         """Admit required instructions first; never truncate the current task to fit history."""
         if self.input_policy is not None:
-            self.input_policy.verify_received(node, role)
+            self._validate_input_handoff(self.input_policy.verify_received, node, role)
         deps, hits = list(dep_reports or []), list(memory_hits or [])
         if board_notes is None and self.board is not None:
             scope = self.board.scope(node.project_id, node.conversation_id, role.name)
@@ -298,10 +392,18 @@ class TeamContextBuilder(ContextBuilder):
             assignment_text = render_assignment_references(node, assignment_references)
         except AssignmentReferenceError as exc:
             raise ContextAdmissionError(str(exc)) from exc
+        shared = self._shared_requirements(node, assignment_references)
         evidence = self._context_evidence(
             node, role, deps, hits, notes, human_exchanges, assignment_references,
         )
+        dependency_text = self._render_deps(deps)
+        if self.required_delivery_roles and role.name == "release":
+            release_evidence = self._release_evidence(deps)
+            if release_evidence:
+                dependency_text = release_evidence + "\n\n" + dependency_text
         limit = min(self.policy.opening_budget_tokens, self.policy.prompt_ceiling)
+        if shared:
+            limit = min(limit + self.budget.estimate_text(shared), self.policy.max_request_tokens)
 
         def render(history_limit, dep_chars, note_chars, lesson_chars, receipt_text="",
                    input_index=""):
@@ -311,15 +413,15 @@ class TeamContextBuilder(ContextBuilder):
                 node, role, deps, selected_lessons, selected_notes,
                 len(deps), len(selected_lessons) if lesson_chars else 0, None,
                 history_text=self._preview(self._history_summary(), history_limit),
-                dependency_text=(self._preview(self._render_deps(deps), dep_chars)
-                                 if deps else self._render_deps([])),
+                dependency_text=(self._preview(dependency_text, dep_chars)
+                                 if deps else dependency_text),
                 evidence=evidence,
             )
             if receipt_text:
                 system += "\n\n" + receipt_text
             if input_index:
                 system += "\n" + input_index
-            return system, brief + assignment_text + recorded_answers
+            return system, brief + assignment_text + recorded_answers + shared
 
         def estimate(messages):
             return self.budget.estimate([
@@ -369,6 +471,46 @@ class TeamContextBuilder(ContextBuilder):
         # The final candidate equals the already-checked mandatory admission.
         raise ContextAdmissionError("mandatory context no longer fits its opening budget")
 
+    @staticmethod
+    def _release_evidence(deps) -> str:
+        published = [dep for dep in deps if dep.get("publication_files")]
+        lines = []
+        for developer in published:
+            if developer["role"] != "dev":
+                continue
+            task, version = developer["id"], developer["delivery"]["version"]
+            files = developer["publication_files"]
+            lines.append(f"Selected development files from {task}/{version}:")
+            lines.extend(f"- {item['path']} sha256={item['sha256']}" for item in files)
+            matched = False
+            for reviewer in published:
+                verdict = reviewer.get("acceptance") or {}
+                if (reviewer["role"] != "qa" or verdict.get("ok") is not True
+                        or verdict.get("versions", {}).get(task) != version):
+                    continue
+                commands = [check for check in verdict.get("checks", [])
+                            if check.get("ok") and check.get("kind") in {"command", "pytest"}]
+                hashes = verdict.get("checked_files", {})
+                modes = verdict.get("checked_execute_bits", {})
+                verified = [
+                    item["path"] for item in files
+                    if hashes.get(item["path"]) == item["sha256"]
+                    and ("execute_bits" not in item
+                         or modes.get(item["path"]) == item["execute_bits"])
+                ]
+                if not commands or not verified:
+                    continue
+                matched = True
+                paths = ", ".join(item["path"] for item in reviewer["publication_files"])
+                lines.append(f"- QA {reviewer['id']} evidence files: {paths}")
+                lines.append("- QA checked candidate paths: " + ", ".join(verified))
+                for check in commands:
+                    lines.append(f"  - {str(check['target'])[:200]} "
+                                 f"exit_code={check.get('exit_code')}")
+            if not matched:
+                lines.append("- Same-version QA evidence is pending.")
+        return "## Release verification evidence\n" + "\n".join(lines) if lines else ""
+
     def _render(self, node, role, deps, lessons, notes, dep_limit, lesson_limit, goal_limit,
                 *, history_text=None, dependency_text=None, evidence=""):
         members = "\n".join(f"- {item.name}: {item.title}" for item in self.scenario.roles)
@@ -379,6 +521,12 @@ class TeamContextBuilder(ContextBuilder):
             "Coordinate the workflow and completion criteria with the actual human requester. "
             "Ask genuine questions through ask_human; do not invent a human answer.\n"
         )
+        if self.shared_requirement_roles:
+            system += (
+                "When clarifying a design rule that specialists need, pass their role names "
+                "in ask_human.share_with_roles so the recorded answer is included in their "
+                "opening context. Leave it empty for private questions.\n"
+            )
         command_shell = os.environ.get("COMSPEC", "cmd.exe") if os.name == "nt" else "/bin/sh"
         system += (
             "\n## Execution environment (runtime facts)\n"
@@ -407,12 +555,102 @@ class TeamContextBuilder(ContextBuilder):
             "human for an explicit grant rather than inventing evidence.\n"
         )
         system += getattr(self, "search_budget_notice", "")
+        if self.minimum_specialists:
+            system += (
+                "Before submit_result, call check_delivery with the same files and "
+                "acceptance_files. Put scripts and fixtures used only by the assigned checks "
+                "in acceptance_files. Declare actual deliverables in files. Correct any "
+                "reported declaration issue on this task and submit again. Once mandatory "
+                "edits are complete, call check_delivery with freeze_candidate=true and "
+                "open_required_items=[]. Use its hashes for final checks and submit promptly. "
+                "Group evidence checks and required edits. Reuse same-version results and "
+                "draft release notes in one pass from the publication and QA evidence.\n"
+            )
         if role.name == self.scenario.leader:
             system += (
                 "You receive the group's human tasks, coordinate the other fixed members, "
-                "integrate their declared work and explain evidence and remaining uncertainty. "
-                "Delegate with submit_plan when useful, referencing the existing role IDs.\n"
+                "integrate declared work and explain evidence and remaining uncertainty.\n"
             )
+            if self.minimum_specialists:
+                system += (
+                    "For each team task, confirm any design-changing ambiguity with the human, "
+                    "then use submit_plan early. Assign at least two existing specialist roles "
+                    "with distinct deliverables and machine acceptance criteria. "
+                    "Let independent assignments start without dependencies. Name each required "
+                    "publication and its producer in the assignment and declare the dependency "
+                    "so the framework delivers the registered version. When a handoff is blocked, "
+                    "check the reported producer, version and path. Assign the specific correction "
+                    "and use resume or replaces once the required inputs are ready. At delivery, "
+                    "reuse current version and acceptance evidence. Check missing requirements "
+                    "or changed files and call submit_result when ready. Define mandatory findings "
+                    "and a reviewable deliverable before assigning open-ended work. Keep an "
+                    "explicit list of unresolved requirements and reserve time for submission.\n"
+                )
+            if self.required_delivery_roles:
+                system += (
+                    "Require dev to publish a complete runnable candidate and qa to run "
+                    "independent checks on that version and deliver its evidence. Assign QA test "
+                    "preparation and release launch notes as independent work in the initial plan "
+                    "when their inputs are known. After dev publishes, installation checks and "
+                    "functional QA can run in parallel. Release preparation and installation "
+                    "checks publish Markdown or text evidence. For final release, declare the "
+                    "selected development and QA tasks in deps and use their matched version. "
+                    "Confirm room names, "
+                    "operating hours and weekend "
+                    "rules when unknown. In a dashboard assignment, require QA to recompute "
+                    "usage from valid bookings in a future date range using the agreed rules. "
+                    "Release may prepare independently and must use verified product bytes.\n"
+                )
+                if node.id == "t1":
+                    system += (
+                        "Ask for room names, operating hours and weekend policy in one question. "
+                        "Tag the rules with requirement_topics if the tool offers it. "
+                        "Before the answer, only dispatch QA or release preparation independent "
+                        "of those rules, with booking_independent_preparation=true. "
+                        "Follow up if a reply leaves a rule open. QA must use confirmed rules.\n"
+                    )
+            if self.prior_context.get("previous_root_id"):
+                previous = self.prior_context["previous_root_id"]
+                system += (
+                    f"Assign {previous} as a direct dependency to any specialist who needs "
+                    "the prior accepted deliverable. Carry the confirmed requirements forward.\n"
+                )
+        if self.minimum_specialists and role.name != self.scenario.leader:
+            system += (
+                "Use report_blocked when a missing dependency, permission, or decision "
+                "prevents useful progress. Name the required file, producer and version if known, "
+                "and the path of your saved progress. Write a reviewable draft early. Work through "
+                "the mandatory findings, record the remaining uncertainty, and submit once the "
+                "declared checks can pass.\n"
+            )
+        saved_drafts = (node.blocker or {}).get("saved_drafts")
+        if saved_drafts:
+            system += (
+                "Your replacement starts from the admitted input versions. Compare the "
+                "previous assignment's private drafts below and reuse verified edits. "
+                "Declare only the final deliverable paths.\n"
+                f"Saved drafts: {self._json(saved_drafts)}\n"
+            )
+        if self.required_delivery_roles and role.name == "release":
+            system += (
+                "Plan the document sections and claims together. Start with Release verification "
+                "evidence and the listed QA reports for the same candidate. Group uncovered claims "
+                "by source file or interface and verify them in batches. Write one complete draft "
+                "of each deliverable, check launch commands, parameters, links, and version "
+                "references together, then apply any needed revisions in one batch. Record "
+                "unverified claims as pending. Treat other QA records as historical evidence "
+                "until the selected files and version match. Run the assigned release checks. "
+                "Independent "
+                "preparation can proceed while final version evidence is pending.\n"
+            )
+        if self.required_delivery_roles and role.name == "qa":
+            system += (
+                "For release, group verified behavior, important interface parameters, and "
+                "test limitations in the declared QA report. Identify the tested candidate and "
+                "point to that evidence in your result summary.\n"
+            )
+        if node.blocker and node.blocker.get("resolution"):
+            system += "\n## Saved work and resolution\n" + self._json(node.blocker) + "\n"
         progress = getattr(self, "research_progress", None)
         if progress is not None:
             system += (
@@ -470,7 +708,10 @@ class TeamContextBuilder(ContextBuilder):
             system += (
                 "\nAfter the last edit, use verify_artifact_quote on literal quotation slices "
                 "of the actual UTF-8 file, using its Unicode code-point [start,end) offsets "
-                "and the exact source metadata hash. A pasted quote-string check does not "
+                "and the exact source metadata hash. Supply checks in batches of up to 12 "
+                "with expected_artifact_sha256 for each slice. If a file changes, recheck "
+                "that file and reuse receipts for files whose hashes match. "
+                "A pasted quote-string check does not "
                 "certify an emitted file. Receipts apply only to their full artifact hash; "
                 "later changes require new checks. A match is lexical evidence only, never "
                 "a claim that every quotation or factual statement was verified.\n"
@@ -495,11 +736,23 @@ class TeamContextBuilder(ContextBuilder):
             "arranges final-file specialist review; writers return declared files for an "
             "already assigned downstream reviewer, rather than recursively adding review. "
             "If require_declared_inputs is enabled, every subtask explicitly supplies inputs: "
-            "[{producer: sibling_key, path: relative_file}] and lists that producer in deps. "
+            "[{producer: dependency_reference, path: relative_file}] with the exact producer "
+            "reference from deps. "
             "Use inputs: [] only when no external file is required. Missing declared input "
             "files block first admission; omitted declarations cannot be inferred from prose. "
+            "ACCEPTANCE FROM THE REQUIREMENTS: before delegating, turn the original task "
+            "text and every recorded human answer into explicit pass conditions, and "
+            "attach them as `acceptance` on the subtask that produces the deliverable. "
+            "Name the counter-example you must fail, not just the happy path. Anything the "
+            "requester actually stated - business rules, opening hours, units, thresholds, "
+            "data scope - is mandatory and must be encoded as a check; do not substitute "
+            "your own default for a stated rule. Prefer execution or content checks over "
+            "mere existence, and make each check runnable in that child's own workspace. "
+            "For command checks, assert the HTTP status or output inside the script and "
+            "expect process exit code 0 when the assertion passes.\n"
             "Every submit_plan subtask must explicitly supply deps: use [] only for "
-            "independent work, otherwise list the sibling producer keys. Mentioning "
+            "independent work, otherwise list sibling producer keys, retained direct "
+            "child IDs, or an authorized inherited input ID. Mentioning "
             "an input filename in a goal does not create a dependency or file transfer. "
             "Prior-phase archives and imported source task IDs are historical provenance, "
             "not current dependencies or live sibling-result channels. "
@@ -507,9 +760,9 @@ class TeamContextBuilder(ContextBuilder):
             "Labelled ancestor assignment-goal references also preserve the original shared "
             "scope; consult them for relevant source facts and qualifications. "
             "Parent-private conversations, answers, files and approvals remain isolated. "
-            "If required files are missing, use submit_plan, when depth permits, to "
-            "request a concrete artifact handoff from an existing role that owns them, "
-            "or report the missing input through ask_human. Do not search parent, "
+            "If required files are missing, use report_blocked to request a concrete "
+            "handoff from your parent. Use ask_human for requester decisions. "
+            "Do not search parent, "
             "sibling or other run directories to bypass isolation. A rejected approval "
             "does not grant access; repeating an equivalent request will not deliver "
             "missing artifacts.\n"
@@ -564,7 +817,8 @@ def teacher_opening_policy(opening_budget_tokens=None, *, policy=None):
 
 
 def configure_team(engine, scenario: Scenario, previous_dialogue_path=None, *,
-                   require_declared_inputs=False, opening_budget_tokens=None) -> TeamState:
+                   require_declared_inputs=False, opening_budget_tokens=None,
+                   enforce_collaboration=False) -> TeamState:
     """Install a fixed-team adapter once, before submitting any scenario task."""
     if getattr(engine, _TEAM_ATTR, None) is not None:
         raise ValueError("this Engine already has an instructor team")
@@ -577,12 +831,14 @@ def configure_team(engine, scenario: Scenario, previous_dialogue_path=None, *,
     identities = tuple(role.name for role in scenario.roles)
     if type(require_declared_inputs) is not bool:
         raise ValueError("require_declared_inputs must be a boolean")
-    workspace = StableRoleWorkspace(engine.workspace, project, conversation, identities)
+    workspace = StableRoleWorkspace(
+        engine.workspace, engine.repo, project, conversation, identities,
+    )
     input_policy = None
     if require_declared_inputs:
         install_input_schema(engine)
         input_policy = DeclaredInputs(engine.repo, workspace.paths, project, conversation,
-                                      engine.trace)
+                                      engine.trace, engine.runner._read_published_file)
     tools = sorted(engine.tools.names())
     for role in scenario.roles:
         engine.roles.create(role.model_copy(update={"project_id": project, "tools": tools}))
@@ -592,21 +848,32 @@ def configure_team(engine, scenario: Scenario, previous_dialogue_path=None, *,
         context_policy, engine.budget, board=engine.board, scenario=scenario,
         workspaces=workspace.paths,
         register_private_evidence=workspace.register_private_evidence,
-        input_policy=input_policy,
+        input_policy=input_policy, repo=engine.repo,
     )
+    engine.scheduler.serial_roles = True
+    engine.background_reflection = True
+    engine.repo.targeted_recovery = enforce_collaboration
+    if enforce_collaboration:
+        context.minimum_specialists = 2
+        if scenario.id == "scenario_1":
+            context.required_delivery_roles = ("dev", "qa")
+            context.booking_rule_topics = ("room_names", "operating_hours", "weekend_policy")
     context.source_tools_available = {"source_history", "read_source"} <= engine.tools.names()
     context.source_quote_available = "verify_source_quote" in engine.tools.names()
     context.artifact_quote_available = "verify_artifact_quote" in engine.tools.names()
     context.source_audit_available = "source_access_audit" in engine.tools.names()
     delegation = FixedTeamDelegation(
         engine.repo, engine.roles, engine.trace, engine.tools.names(), allowed_roles=identities,
-        require_subtask_acceptance=engine.settings.require_subtask_acceptance,
+        require_subtask_acceptance=(engine.settings.require_subtask_acceptance
+                                    or enforce_collaboration),
         input_policy=input_policy,
+        handoff_preflight=engine.runner.check_handoff_recovery,
     )
     engine.workspace = workspace
     engine.context, engine.runner.context = context, context
     engine.delegation, engine.runner.delegation = delegation, delegation
     engine.runner.workspace = workspace
+    engine.runner.stable_role_imports = True
     locks = {identity: asyncio.Lock() for identity in identities}
     original_run = engine.runner.run
 
@@ -616,7 +883,9 @@ def configure_team(engine, scenario: Scenario, previous_dialogue_path=None, *,
         return AgentInstance(
             id=role.name, role=role.name, project_id=node.project_id,
             conversation_id=node.conversation_id,
-            workspace=str(workspace.allocate(node.project_id, node.conversation_id, role.name)),
+            workspace=str(workspace.allocate(
+                node.project_id, node.conversation_id, f"{role.name}@{node.id}",
+            )),
         )
 
     async def run(node):
@@ -638,7 +907,7 @@ def configure_team(engine, scenario: Scenario, previous_dialogue_path=None, *,
     return state
 
 
-def _previous_context(engine, state, previous):
+def _previous_context(engine, state, previous, workspaces):
     result = previous.result.model_dump(mode="json") if previous.result else None
     context = {
         "previous_root_id": previous.id, "previous_goal": previous.goal,
@@ -672,14 +941,16 @@ def _previous_context(engine, state, previous):
                     exchanges.append({"request": questions.pop(request_id), "response": response})
                 else:
                     raise ValueError("previous human response has no matching actual request")
-        for workspace in state.workspaces.values():
+        targets = []
+        for workspace in workspaces.values():
             target = workspace / _HISTORY_FILE
             if target.is_symlink() or not target.resolve().is_relative_to(workspace):
                 raise PermissionError("prior dialogue copy escapes the role workspace")
-            target.parent.mkdir(parents=True, exist_ok=True)
             if target.exists() and state.context.register_private_evidence is not None:
-                # Reject tracked/aliased evidence before replacing any old bytes.
                 state.context.register_private_evidence(workspace, _HISTORY_FILE)
+            targets.append((workspace, target))
+        for workspace, target in targets:
+            target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(raw)
             if state.context.register_private_evidence is not None:
                 state.context.register_private_evidence(workspace, _HISTORY_FILE)
@@ -704,6 +975,8 @@ def submit_teacher_task(
     if not isinstance(text, str) or not text.strip():
         raise ValueError("teacher task text must be nonempty")
     previous = None
+    workspace = engine.workspace
+    root_id = f"t{engine.repo.count_root_tasks() + 1}"
     if previous_root is not None:
         previous_id = previous_root if isinstance(previous_root, str) else previous_root.id
         previous = engine.repo.get(previous_id)
@@ -711,13 +984,25 @@ def submit_teacher_task(
                 or previous.project_id != state.project_id
                 or previous.conversation_id != state.conversation_id):
             raise ValueError("previous root must be this same team's actual terminal task")
-        state.prior_context = _previous_context(engine, state, previous)
-        state.context.prior_context = state.prior_context
-        state.previous_root_id = previous.id
+    paths = workspace.for_root(root_id)
+    prior_context = _previous_context(engine, state, previous, paths) if previous else {}
+    if paths is not state.workspaces:
+        if state.on_workspaces_changed is not None:
+            state.on_workspaces_changed(paths)
+        if state.context.input_policy is not None:
+            state.context.input_policy.bind_workspaces(paths)
+        workspace.paths = state.workspaces = paths
+        state.context.workspaces = dict(paths)
+    state.prior_context = state.context.prior_context = prior_context
+    state.previous_root_id = previous.id if previous else None
     node = TaskNode(
-        id=f"t{engine.repo.count_root_tasks() + 1}", project_id=state.project_id,
+        id=root_id, project_id=state.project_id,
         conversation_id=state.conversation_id, goal=text, role=state.leader,
-        budget=budget.model_copy(deep=True), acceptance=acceptance or [],
+        budget=budget.model_copy(deep=True), acceptance=[
+            *(acceptance or []),
+            *([Acceptance(kind="subtree_accepted", target="root")]
+              if state.context.minimum_specialists else []),
+        ],
         deps=[previous.id] if previous is not None and previous.status == "DONE" else [],
     )
     engine.repo.add(node)

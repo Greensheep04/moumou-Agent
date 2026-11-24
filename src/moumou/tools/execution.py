@@ -11,13 +11,15 @@ from pathlib import Path
 from moumou.contracts import ToolResult
 from moumou.sandbox.local import LocalJail
 from moumou.sandbox.process import run_command, timeout_value
+from moumou.sandbox.workspace import TOOL_TEMP_DIR, run_workspace_command
 from moumou.tools.filesystem import _walk
 
 
 def snapshot(jail):
     result = {}
     for path in _walk(jail, jail.root):
-        if path.name.startswith(".p1-"):
+        relative = path.relative_to(jail.root)
+        if path.name.startswith(".p1-") or relative.parts[0] == TOOL_TEMP_DIR:
             continue
         digest = hashlib.sha256()
         with path.open("rb") as stream:
@@ -29,7 +31,10 @@ def snapshot(jail):
 
 class ShellTool:
     name = "shell"
-    description = "Run an approved shell command; this is trusted code, not OS isolation."
+    description = (
+        "Run a shell command in the role workspace. Use approval_scope for package installs "
+        "or external writes. Local test servers should bind to 127.0.0.1."
+    )
     action_class = "shell"
     timeout_s = 120.0
     params_schema = {
@@ -37,6 +42,7 @@ class ShellTool:
         "properties": {
             "command": {"type": "string"},
             "timeout_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 110},
+            "approval_scope": {"type": "string", "enum": ["install", "external_write"]},
         },
         "required": ["command"],
     }
@@ -56,7 +62,21 @@ class ShellTool:
             raise ValueError("tool timeout_s must be at most 110")
         jail = LocalJail(ctx.workspace)
         before = await asyncio.to_thread(snapshot, jail)
-        result = await run_command(command, jail.root, timeout, ctx.env)
+        if ctx.execution_root is not None:
+            result = await run_workspace_command(
+                command, jail.root, timeout, ctx.execution_root,
+                external_access=ctx.external_access,
+            )
+            if (not result.ok and not ctx.external_access
+                    and ("Operation not permitted" in result.stderr
+                         or "Permission denied" in result.stderr)):
+                result.error = (
+                    f"{result.error}. Workspace execution confines writes to the role workspace "
+                    "and network access to this host. For external reads use the source tools. "
+                    "For an intended install or external network write, set approval_scope."
+                )
+        else:
+            result = await run_command(command, jail.root, timeout, ctx.env)
         after = await asyncio.to_thread(snapshot, jail)
         result.artifacts = sorted(
             k for k in before.keys() | after.keys() if before.get(k) != after.get(k)
@@ -66,7 +86,10 @@ class ShellTool:
 
 class RunPythonTool(ShellTool):
     name = "run_python"
-    description = "Run a workspace Python file or code snippet using the project interpreter."
+    description = (
+        "Run workspace Python using the project interpreter. Use approval_scope for package "
+        "installs or external network writes. Use tempfile and loopback for local tests."
+    )
     params_schema = {
         "type": "object",
         "properties": {
@@ -74,6 +97,7 @@ class RunPythonTool(ShellTool):
             "code": {"type": "string"},
             "args": {"oneOf": [{"type": "array", "items": {"type": "string"}}, {"type": "string"}]},
             "timeout_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 110},
+            "approval_scope": {"type": "string", "enum": ["install", "external_write"]},
         },
         "oneOf": [{"required": ["path"]}, {"required": ["code"]}],
     }

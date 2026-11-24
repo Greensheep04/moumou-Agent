@@ -146,6 +146,117 @@ def _render_result(result: ToolResult) -> str:
     return "\n".join(parts)
 
 
+#: How much of a long stdout/stderr survives the first hop into the messages.
+DEFAULT_TOOL_RESULT_CHARS = 4_000
+
+
+def _persist_tool_output(workspace, call_id: str, stream: str, text: str) -> dict | None:
+    """Keep the captured body so the same role can re-read it later.
+
+    Returns provenance (relative path, bytes, sha256) or ``None`` when the
+    workspace is unavailable or not writable.
+    """
+    if workspace is None:
+        return None
+    try:
+        import hashlib
+        from pathlib import Path
+
+        folder = Path(workspace) / ".evaluation" / "tool_outputs"
+        folder.mkdir(parents=True, exist_ok=True)
+        name = f"{call_id or 'call'}-{stream}.txt".replace("/", "_")
+        target = folder / name
+        data = text.encode("utf-8", "replace")
+        target.write_bytes(data)
+        relative = target.relative_to(Path(workspace)).as_posix()
+        return {
+            "path": relative,
+            "bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest()[:16],
+        }
+    except Exception:
+        return None
+
+
+def _bounded_stream(
+    label: str, text: str, *, call_id: str, workspace, limit: int
+) -> list[str]:
+    """One stream (stdout/stderr), shortened with a reference when it is long."""
+    if len(text) <= limit:
+        return [f"{label}:\n{text}"]
+
+    head_chars = limit * 2 // 3
+    tail_chars = limit - head_chars
+    head = text[:head_chars]
+    tail = text[-tail_chars:]
+    omitted = len(text) - len(head) - len(tail)
+    saved = _persist_tool_output(workspace, call_id, label, text)
+    lines = [
+        f"{label}:\n{head}",
+        f"...[{omitted} of {len(text)} chars omitted]...",
+    ]
+    lines.append(tail)
+    if saved:
+        lines.append(
+            f"{label}_full: {saved['path']} ({saved['bytes']} bytes, "
+            f"sha256:{saved['sha256']}); re-read it with read_file path={saved['path']} "
+            "offset=0 if you need the whole body"
+        )
+    else:
+        lines.append(
+            f"[{label} shortened; the full body was not captured here - re-run the tool "
+            "if you need it in full]"
+        )
+    return lines
+
+
+def _render_result_bounded(
+    result: ToolResult,
+    *,
+    call_id: str = "",
+    tool_name: str | None = None,
+    workspace=None,
+    limit: int = DEFAULT_TOOL_RESULT_CHARS,
+) -> str:
+    """Render a tool result for the messages, bounded but re-readable.
+
+    Status is never dropped: ok/exit_code/error/artifacts/human feedback always
+    survive, because the caller needs them to decide the next step.
+    """
+    parts = [f"ok={str(result.ok).lower()}"]
+    if tool_name:
+        parts[0] += f" tool={tool_name}"
+    if result.exit_code is not None:
+        parts.append(f"exit_code={result.exit_code}")
+    if result.stdout:
+        parts.extend(
+            _bounded_stream("stdout", result.stdout, call_id=call_id,
+                            workspace=workspace, limit=limit)
+        )
+    if result.stderr:
+        parts.extend(
+            _bounded_stream("stderr", result.stderr, call_id=call_id,
+                            workspace=workspace, limit=limit)
+        )
+    if result.error:
+        parts.append("error: " + result.error)
+    if result.artifacts:
+        parts.append("artifacts: " + ", ".join(result.artifacts))
+    if result.truncated:
+        parts.append(
+            "truncated_by_executor: true - part of this stream was dropped before "
+            "capture, so the full body is NOT available for re-read"
+        )
+    if result.human_approval is not None:
+        parts.append(
+            "human_approval_feedback (scoped to this task, role and tool call only; "
+            "not standing permission, a new search allowance, clarification history "
+            "or quality acceptance):\n"
+            + json.dumps(result.human_approval.model_dump(mode="json"), ensure_ascii=False)
+        )
+    return "\n".join(parts)
+
+
 class AgentContext:
     """One agent's message list. Mutable, but only through the methods below."""
 
@@ -179,9 +290,34 @@ class AgentContext:
             ]
         self._messages.append(msg)
 
-    def add_tool_result(self, call_id: str, result: ToolResult) -> None:
+    def add_tool_result(
+        self,
+        call_id: str,
+        result: ToolResult,
+        *,
+        tool_name: str | None = None,
+        workspace=None,
+        limit: int = DEFAULT_TOOL_RESULT_CHARS,
+    ) -> None:
+        """Append one tool result, bounded on first entry.
+
+        The body that first enters the conversation is capped; the captured text
+        is kept under the role's own ``.evaluation/tool_outputs`` so the same
+        agent can re-read it with ``read_file`` instead of re-running the tool or
+        re-reading a whole file.
+        """
         self._messages.append(
-            {"role": "tool", "tool_call_id": call_id, "content": _render_result(result)}
+            {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": _render_result_bounded(
+                    result,
+                    call_id=call_id,
+                    tool_name=tool_name,
+                    workspace=workspace,
+                    limit=limit,
+                ),
+            }
         )
 
     def inject_steering(self, texts: list[str]) -> None:
@@ -358,6 +494,17 @@ class ContextBuilder:
             status = dep.get("status")
             files = ", ".join(dep.get("artifacts") or []) or "(none)"
 
+            if status == "BLOCKED":
+                blocker = dep.get("blocker") or {}
+                blocks.append(
+                    f"### {dep['id']} — {dep['role']} — BLOCKED\n"
+                    f"reason: {blocker.get('reason', '')}\n"
+                    f"required input: {blocker.get('required_input', '')}\n"
+                    f"saved progress: {blocker.get('progress', '')}\n"
+                    f"evidence: {blocker.get('evidence_refs', [])}\n"
+                    f"input versions: {blocker.get('versions', {})}"
+                )
+                continue
             if status == "DEAD":
                 reason = (dep.get("error") or "unknown")[:MAX_REASON_CHARS]
                 blocks.append(f"### {dep['id']} — {dep['role']} — FAILED\nreason: {reason}")
@@ -370,6 +517,7 @@ class ContextBuilder:
                 f"files: {files}\n"
                 f"{_check_summary(dep.get('acceptance'))}\n"
                 f"{_delivery_summary(dep.get('delivery'))}\n"
+                f"publication: {(dep.get('delivery') or {}).get('version')}\n"
                 f"report: {report}"
             )
         return "\n\n".join(blocks)

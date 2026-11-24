@@ -16,12 +16,13 @@ import sys
 from pathlib import Path
 
 from moumou.contracts import RoleRevisionDraft, TaskResult, ToolContext, ToolResult
-from moumou.contracts.plan import Plan
+from moumou.contracts.plan import BlockerReport, Plan
 from moumou.sandbox.local import LocalJail
 from moumou.sandbox.process import run_process as run_process
 from moumou.tools.execution import RunPythonTool, ShellTool
 from moumou.tools.filesystem import (
     ApplyPatchTool,
+    CheckDeliveryTool,
     DeleteFileTool,
     ListFilesTool,
     ReadFileTool,
@@ -99,8 +100,9 @@ class SubmitResultTool:
 
     name = "submit_result"
     description = (
-        "Hand the finished work back. Include a summary, the files you touched, "
-        "anything the next agent should know, and anything still blocking."
+        "Hand the finished work back. Put published deliverables in files, and scripts or "
+        "test data only needed to run acceptance in acceptance_files. Include a summary, "
+        "handoff notes, and any remaining blockers."
     )
     action_class = "fs_read"
     timeout_s = 1.0
@@ -135,8 +137,8 @@ class SubmitPlanTool:
 
     name = "submit_plan"
     description = (
-        "Submit a decomposition plan. Call this exactly once when the task must be "
-        "split across sub-agents. Do not call it for tasks you can finish yourself."
+        "Assign specialist work with explicit dependencies. To repair a blocked branch, "
+        "send resume with task_id and resolution, or use replaces on an affected subtask."
     )
     action_class = "fs_read"
     timeout_s = 1.0
@@ -144,6 +146,20 @@ class SubmitPlanTool:
 
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
         return ToolResult(ok=False, error="submit_plan is handled by the orchestrator")
+
+
+class ReportBlockedTool:
+    name = "report_blocked"
+    description = (
+        "Pause a delegated task and tell its parent what specific input or decision "
+        "is needed. Include saved progress and workspace-relative evidence references."
+    )
+    action_class = "fs_read"
+    timeout_s = 1.0
+    params_schema = flatten_schema(BlockerReport.model_json_schema())
+
+    async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
+        return ToolResult(ok=False, error="report_blocked is handled by the orchestrator")
 
 
 def default_tools() -> list:
@@ -156,6 +172,7 @@ def default_tools() -> list:
         WriteFileTool(),
         DeleteFileTool(),
         ListFilesTool(),
+        CheckDeliveryTool(),
         SearchFilesTool(),
         ApplyPatchTool(),
         ShellTool(),
@@ -164,4 +181,5 @@ def default_tools() -> list:
         SubmitResultTool(),
         SubmitRevisionTool(),
         SubmitPlanTool(),
+        ReportBlockedTool(),
     ]

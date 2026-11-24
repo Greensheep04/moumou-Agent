@@ -29,7 +29,8 @@ _GROUPS = {
 }
 _STATUSES = {"succeeded", "unverified", "failed", "incomplete", "error", "cancelled"}
 _NODE_STATUSES = {
-    "PENDING", "READY", "RUNNING", "WAITING_HUMAN", "DONE", "FAILED", "DEAD", "CANCELLED",
+    "PENDING", "READY", "RUNNING", "WAITING_HUMAN", "BLOCKED", "DONE", "FAILED", "DEAD",
+    "CANCELLED",
 }
 _MODEL_FIELDS = ("provider", "model", "client", "endpoint_host", "timeout_s", "max_retries",
                  "client_factory")

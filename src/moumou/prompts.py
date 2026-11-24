@@ -89,9 +89,10 @@ Do not ask about anything you can settle from the request or the code.
 
 ## When a specialist fails
 
-You will receive its error. Do not forward the failure to the human unchanged.
-Create a fresh specialist for that task, hand it the current state and the error,
-and let it continue. If it fails twice, say so plainly and lay out the options.
+Use the reported blocker, saved progress and dependency versions to resolve the
+affected assignment. Use submit_plan with resume when its prerequisite is ready,
+or use replaces when the assignment requires a different goal or input. Keep
+independent work and verified outputs. Escalate decisions requiring the human.
 
 ## Finishing
 

@@ -25,6 +25,7 @@ TaskStatus = Literal[
     "READY",          # deps satisfied, eligible for scheduling
     "RUNNING",        # an agent is working on it
     "WAITING_HUMAN",  # parked on a human approval
+    "BLOCKED",        # 接到明确的处理结果后才继续
     "DONE",           # finished and verified
     "FAILED",         # this attempt failed; may be retried
     "DEAD",           # terminal failure, no more retries
@@ -36,12 +37,13 @@ TERMINAL_STATUSES: frozenset[str] = frozenset({"DONE", "DEAD"})
 #: Anything not listed here is a bug in the scheduler, not a feature.
 LEGAL_TRANSITIONS: dict[str, frozenset[str]] = {
     "PENDING": frozenset({"READY", "DEAD"}),          # DEAD = an upstream dep died
-    "READY": frozenset({"RUNNING"}),
+    "READY": frozenset({"RUNNING", "PENDING", "DEAD"}),
     # PENDING here means "handed off to children": the parent's deps are
     # rewritten to its child ids, so it re-enters READY once they all finish.
     # DEAD is reachable from RUNNING for a human abort.
-    "RUNNING": frozenset({"WAITING_HUMAN", "DONE", "FAILED", "PENDING", "DEAD"}),
+    "RUNNING": frozenset({"WAITING_HUMAN", "BLOCKED", "DONE", "FAILED", "PENDING", "DEAD"}),
     "WAITING_HUMAN": frozenset({"RUNNING", "FAILED", "DEAD"}),
+    "BLOCKED": frozenset({"PENDING", "DEAD"}),
     "FAILED": frozenset({"READY", "DEAD"}),           # READY = retry
     "DONE": frozenset(),
     "DEAD": frozenset(),
@@ -60,6 +62,8 @@ AcceptanceKind = Literal[
     "file_not_exists",
     "file_contains",  # ``expect`` is a regex that must match ``target``'s content
     "json_key",       # ``expect`` is "a.b.c" or "a.b.c=<json literal>"
+    "subtree_accepted",  # every descendant is DONE and each one that declared
+                         # criteria passed its own machine verdict
 ]
 
 
@@ -88,8 +92,9 @@ class Acceptance(BaseModel):
     expect: str | None = Field(
         default=None,
         description=(
-            "Required and non-null for command (string exit code, e.g. '0'), "
-            "file_contains (regex), and json_key (dotted key or key=JSON value). "
+            "Required for command (process exit code as a string), file_contains (regex), "
+            "and json_key (dotted key or key=JSON value). Assert HTTP status or printed "
+            "values inside a command script and use expect='0' for a successful assertion. "
             "For pytest, omitted/null means exit code 0. File existence checks need no expect."
         ),
     )
@@ -122,6 +127,10 @@ class TaskResult(BaseModel):
     files: list[str] = Field(default_factory=list)
     notes: str = ""
     blockers: list[str] = Field(default_factory=list)
+    #: Files this submission needs *for acceptance only* (e.g. the role's own
+    #: test package, a conftest.py or test data). They are copied into the
+    #: isolated acceptance directory but are not part of the published delivery.
+    acceptance_files: list[str] = Field(default_factory=list)
 
     def as_text(self, limit: int = MAX_RESULT_CHARS) -> str:
         parts: list[str] = []
@@ -173,6 +182,9 @@ class TaskNode(BaseModel):
     error: str | None = None
     result: TaskResult | None = None                     # structured hand-off to the parent
     wakeups: int = Field(default=0, ge=0)                # times a dead child woke this task
+    blocker: dict | None = None
+    recovery_used: bool = False
+    superseded_by: str | None = None
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

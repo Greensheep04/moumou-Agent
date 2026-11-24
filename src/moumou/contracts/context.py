@@ -23,6 +23,18 @@ class ContextPolicy(BaseModel):
     compact_trigger_tokens: int = Field(default=600_000, ge=1_000)
     compact_target_tokens: int = Field(default=256_000, ge=1_000)
 
+    #: Hard cap on a single request's *estimated* size, checked after compaction
+    #: and before the request is sent. Distinct from the compaction trigger: the
+    #: trigger decides when to tidy up, this decides what must never be sent.
+    #: Default sits just above the default compaction target (256k) and well
+    #: below the 616k prompt ceiling. Override it explicitly when a run uses a
+    #: smaller compaction target - the two are validated against each other.
+    max_request_tokens: int = Field(default=300_000, ge=1_000)
+
+    #: Longest tool body admitted into the message list on first entry. Anything
+    #: longer is replaced by a head/tail window plus a re-readable reference.
+    max_tool_result_chars: int = Field(default=4_000, ge=500)
+
     opening_budget_tokens: int = Field(default=8_000, ge=500)
 
     memory_recall_k: int = Field(default=8, ge=1)
@@ -46,6 +58,16 @@ class ContextPolicy(BaseModel):
 
     @model_validator(mode="after")
     def _coherent(self) -> ContextPolicy:
+        # A smaller endpoint window must not inherit the 1M-window defaults: when
+        # the caller did not choose a trigger/target, derive a coherent pair from
+        # the ceiling instead of rejecting the policy outright.
+        ceiling = self.prompt_ceiling
+        if ("compact_trigger_tokens" not in self.model_fields_set
+                and self.compact_trigger_tokens > ceiling):
+            self.compact_trigger_tokens = int(ceiling * 0.95)
+        if ("compact_target_tokens" not in self.model_fields_set
+                and self.compact_target_tokens >= self.compact_trigger_tokens):
+            self.compact_target_tokens = int(self.compact_trigger_tokens * 0.85)
         if self.compact_trigger_tokens > self.prompt_ceiling:
             raise ValueError(
                 f"compact_trigger_tokens ({self.compact_trigger_tokens}) exceeds the prompt "
@@ -55,6 +77,24 @@ class ContextPolicy(BaseModel):
             raise ValueError(
                 "compact_target_tokens must be below compact_trigger_tokens, otherwise "
                 "compaction never creates headroom"
+            )
+        # When the send cap was not given explicitly it is kept coherent with the
+        # rest of the policy: never above the prompt ceiling, never below the
+        # compaction target. An explicitly supplied cap is still validated strictly.
+        if "max_request_tokens" not in self.model_fields_set:
+            self.max_request_tokens = max(
+                self.compact_target_tokens,
+                min(self.max_request_tokens, self.prompt_ceiling),
+            )
+        if self.compact_target_tokens > self.max_request_tokens:
+            raise ValueError(
+                "compact_target_tokens must not exceed max_request_tokens, otherwise a "
+                "compacted request can still be over the send cap"
+            )
+        if self.max_request_tokens > self.prompt_ceiling:
+            raise ValueError(
+                "max_request_tokens exceeds the prompt ceiling: the request would have "
+                "no room for the response"
             )
         if self.memory_top_k > self.memory_recall_k:
             raise ValueError("memory_top_k must not exceed memory_recall_k")

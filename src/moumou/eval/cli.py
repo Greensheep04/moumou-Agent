@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import functools
 import json
+import math
 import os
 import platform
 import re
@@ -19,6 +21,11 @@ from time import monotonic
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from moumou.config import LLM_PROFILES, LLMSettings
+from moumou.contracts import Budget, ContextPolicy
+from moumou.orchestrator.timing import ROOT_CLOSEOUT_SECONDS, ExecutionClock, ExecutionDeadline
+from moumou.sandbox.workspace import workspace_sandbox_available
+
 
 class _TaskIncomplete(Exception):
     pass
@@ -28,7 +35,22 @@ class _QualityRejected(Exception):
     pass
 
 
+_NODE_TIMEOUT_S = 300
+_SCENARIO_CLOSEOUT_S = 1500
+_SCENARIO_TIMEOUT_S = 1800
 _LEGACY_STREAM_CONTENT_CHARS = 2 * 1024 * 1024
+
+
+def _execution_policy(scenario_timeout):
+    return {
+        "phase_time_policy": "lead_estimate",
+        "root_closeout_allowance_s": ROOT_CLOSEOUT_SECONDS,
+        "scenario_closeout_s": min(_SCENARIO_CLOSEOUT_S, scenario_timeout),
+        "scenario_timeout_s": scenario_timeout,
+        "human_wait_in_node_budget": False,
+        "scenario_timeout_excludes_quality_review": True,
+        "scenario_timeout_excludes_human_wait": True,
+    }
 
 
 def _stream_output_options(args, transport):
@@ -55,7 +77,9 @@ def _opening_context_options(args):
     from moumou.eval.team import teacher_opening_policy
 
     requested = getattr(args, "opening_context_tokens", None)
-    policy = teacher_opening_policy(requested)
+    policy = teacher_opening_policy(
+        requested, policy=ContextPolicy(**(getattr(args, "llm_limits", None) or {}))
+    )
     return {
         "requested_tokens": requested,
         "effective_tokens": policy.opening_budget_tokens,
@@ -96,12 +120,35 @@ def _research_progress_enabled(args):
     return enabled
 
 
+def _tool_approval(args):
+    requested = getattr(args, "approval_mode", "manual")
+    sandboxed = requested != "manual" and workspace_sandbox_available()
+    if requested == "workspace" and not sandboxed:
+        raise ValueError("workspace approval mode requires a working macOS sandbox-exec")
+    return {
+        "requested": requested,
+        "shell_python": "workspace" if sandboxed else "manual",
+        "workspace_delete": "manual" if requested == "manual" else "automatic",
+    }
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Run the instructor's continuous team scenarios")
     parser.add_argument("--tasks", default="eval/tasks", help="instructor Markdown directory")
     parser.add_argument("--scenario", default="all", help="scenario id, or all in source order")
     parser.add_argument("--out", default=None, help="fresh suite directory under local runs")
     parser.add_argument("--human", choices=("console", "files"), default="console")
+    parser.add_argument(
+        "--approval-mode", choices=("auto", "workspace", "manual"), default="auto",
+        help="auto-detect bounded macOS execution, require it with workspace, or use manual",
+    )
+    parser.add_argument(
+        "--llm-profile",
+        default=None,
+        choices=sorted(LLM_PROFILES),
+        help="model endpoint: 'deepseek' (official default) or 'hkgai' "
+             "(course gateway). Also settable via MOUMOU_LLM_PROFILE.",
+    )
     parser.add_argument(
         "--llm-transport", choices=("buffered", "stream"), default="buffered",
         help="explicit optional school SSE transport; default buffered client is unchanged",
@@ -163,33 +210,154 @@ def parse_args(argv=None):
         "--search-requests",
         type=int,
         default=6,
-        help="new Tavily requests per scenario, shared by both tasks",
+        help="new search provider requests per scenario, shared by both tasks",
     )
     parser.add_argument("--max-steps", type=int, default=80, help="per-node safety bound")
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=2_000_000,
+        default=Budget().max_tokens,
         help="per-node cumulative safety bound, not a price ceiling",
     )
     parser.add_argument(
         "--task-timeout",
         type=int,
-        default=3600,
-        help="cooperative per-node seconds, including real human waiting",
+        default=_NODE_TIMEOUT_S,
+        help="execution seconds per node, excluding its waits for human responses",
+    )
+    parser.add_argument(
+        "--scenario-timeout", type=float, default=_SCENARIO_TIMEOUT_S,
+        help="execution deadline for both tasks in a scenario, excluding waits for human responses",
+    )
+    parser.add_argument(
+        "--compact-trigger-tokens",
+        type=int,
+        default=None,
+        help="prompt-estimate threshold that starts compaction; defaults to the built-in "
+             "guardrail. Choose it from the target group's own request distribution, not "
+             "from a guess: the baseline software group ran at a median of ~21k and a 75th "
+             "percentile of ~29k estimated tokens per request.",
+    )
+    parser.add_argument(
+        "--max-request-tokens",
+        type=int,
+        default=None,
+        help="hard cap on one request's estimated size, checked after compaction and "
+             "before sending; must sit above the compaction target",
+    )
+    parser.add_argument(
+        "--max-tool-result-chars",
+        type=int,
+        default=None,
+        help="longest tool body admitted into the messages on first entry; longer "
+             "bodies become a head/tail window plus a re-readable file reference",
+    )
+    parser.add_argument(
+        "--compact-target-tokens",
+        type=int,
+        default=None,
+        help="prompt estimate compaction aims for; must sit below the trigger",
     )
     args = parser.parse_args(argv)
     if args.llm_reasoning_effort is not None and args.llm_transport != "stream":
         parser.error("--llm-reasoning-effort requires --llm-transport stream")
     try:
+        # Resolve the endpoint profile up front: its context window fixes the
+        # prompt ceiling, and the compaction options below are validated against
+        # that ceiling.
+        args.llm_settings = LLMSettings.public_from_env(profile=args.llm_profile)
+        spec = LLM_PROFILES[args.llm_settings.profile]
+        args.llm_profile_name = spec.name
+        args.llm_limits = {
+            "context_window": spec.context_window,
+            "max_output_tokens": spec.max_output_tokens,
+        }
         _stream_output_options(args, args.llm_transport)
         _opening_context_options(args)
         _stream_tool_choice_options(args, args.llm_transport)
         _stream_http_retry_options(args, args.llm_transport)
         _research_progress_enabled(args)
+        _compact_options(args)
     except ValueError as exc:
         parser.error(str(exc))
     return args
+
+
+def _compact_options(args):
+    """Resolve and record one context policy for preview and execution."""
+    trigger = args.compact_trigger_tokens
+    target = args.compact_target_tokens
+    limits = getattr(args, "llm_limits", None) or {}
+    policy = ContextPolicy(**limits)
+    ceiling = policy.prompt_ceiling
+    if getattr(args, "llm_profile_name", None) == "deepseek":
+        default_trigger, default_target, default_cap = 600_000, 400_000, 610_000
+        default_tool_chars = 8_192
+    else:
+        default_trigger, default_target, default_cap = (
+            policy.compact_trigger_tokens, policy.compact_target_tokens, policy.max_request_tokens
+        )
+        default_tool_chars = policy.max_tool_result_chars
+    cap = args.max_request_tokens if args.max_request_tokens is not None else min(
+        default_cap, ceiling
+    )
+    if type(cap) is not int or cap < 1_000:
+        raise ValueError("--max-request-tokens must be an integer >= 1000")
+    if cap > ceiling:
+        raise ValueError(f"--max-request-tokens exceeds the prompt ceiling ({ceiling})")
+    if trigger is None:
+        trigger = min(default_trigger, ceiling)
+        if args.max_request_tokens is not None:
+            trigger = min(trigger, cap)
+    if target is None:
+        target = min(default_target, cap)
+        if target >= trigger:
+            target = int(trigger * 0.85)
+    if type(trigger) is not int or trigger < 1_000:
+        raise ValueError("--compact-trigger-tokens must be an integer >= 1000")
+    if type(target) is not int or target < 1_000:
+        raise ValueError("--compact-target-tokens must be an integer >= 1000")
+    if target >= trigger:
+        raise ValueError(
+            "--compact-target-tokens must be below --compact-trigger-tokens, otherwise "
+            "compaction never creates headroom"
+        )
+    if trigger > ceiling:
+        raise ValueError(
+            f"--compact-trigger-tokens exceeds the prompt ceiling ({ceiling})"
+        )
+    if target > cap:
+        raise ValueError("--max-request-tokens must be at least the compaction target")
+    tool_chars = args.max_tool_result_chars if args.max_tool_result_chars is not None else (
+        default_tool_chars
+    )
+    if type(tool_chars) is not int or tool_chars < 500:
+        raise ValueError("--max-tool-result-chars must be an integer >= 500")
+    args.compact_effective = {
+        "requested_trigger": args.compact_trigger_tokens,
+        "requested_target": args.compact_target_tokens,
+        "effective_trigger": trigger,
+        "effective_target": target,
+        "max_request_tokens": cap,
+        "max_tool_result_chars": tool_chars,
+        "context_window": policy.context_window,
+        "max_output_tokens": policy.max_output_tokens,
+        "prompt_ceiling": ceiling,
+        "basis": "profile defaults with operator overrides; thresholds include tool schemas",
+    }
+
+
+def _compact_settings(args):
+    """Settings kwargs for the policy resolved against the selected endpoint."""
+    effective = getattr(args, "compact_effective", None)
+    if not effective:
+        return {}
+    return {
+        "compact_trigger_tokens": effective["effective_trigger"],
+        "compact_target_tokens": effective["effective_target"],
+        "max_request_tokens": effective["max_request_tokens"],
+        "max_tool_result_chars": effective["max_tool_result_chars"],
+    }
 
 
 def _now():
@@ -214,23 +382,45 @@ def _tree(repo, root_id):
 
 
 def _task_record(engine, node, elapsed, phase):
-    from moumou.eval.session_evidence import capture_failure_snapshot, capture_memory_snapshot
+    from moumou.eval.session_evidence import (
+        capture_failure_snapshot,
+        capture_memory_snapshot,
+        capture_node_usage,
+    )
 
     nodes = _tree(engine.repo, node.id)
+    active = engine.repo.active_descendants(node.id)
     current = engine.repo.get(node.id)
+    events = {item.id: engine.trace.query(item.id) for item in nodes}
+    exit_reasons = {}
+    for item in nodes:
+        if item.is_terminal or item.status == "FAILED":
+            transitions = engine.repo.event_log(item.id)
+            if transitions:
+                exit_reasons[item.id] = transitions[-1]["reason"]
+    posted = next((event.t0.isoformat() for event in events[node.id]
+                   if event.name == "instructor_task_posted"), None)
     verdicts = [
         event
-        for event in engine.trace.query(node.id)
+        for event in events[node.id]
         if event.kind == "acceptance" and event.name == "verdict"
     ]
     has_criteria = bool(current.acceptance)
     machine_accepted = verdicts[-1].payload.get("ok") is True if has_criteria and verdicts else None
+    time_plan = next((event.payload for event in reversed(events[node.id])
+                      if event.name == "phase_time_planned"), None)
     return {
         "phase": phase,
         "root_task_id": current.id,
         "root_role": current.role,
         "root_status": current.status,
+        "instructor_task_posted_at": posted,
         "elapsed_s": round(elapsed, 6),
+        "phase_time_plan": time_plan,
+        "root_closeout_used_s": round(sum(
+            event.payload.get("root_closeout_used_s", 0)
+            for event in events[node.id] if event.name == "execution"
+        ), 6),
         "nodes": [
             {
                 "id": item.id,
@@ -244,14 +434,22 @@ def _task_record(engine, node, elapsed, phase):
                 "deps": list(item.deps),
                 "artifacts": list(item.artifacts),
                 "error": item.error,
+                "exit_reason": exit_reasons.get(item.id),
+                "budget": item.budget.model_dump(mode="json"),
+                "llm": capture_node_usage(events[item.id]),
                 "retries": item.retries,
                 "wakeups": item.wakeups,
+                "blocked": item.blocker,
+                "superseded_by": item.superseded_by,
+                "published_version": engine.repo.published_version(item.id),
                 "machine_criteria": len(item.acceptance),
                 "result": item.result.model_dump(mode="json") if item.result else None,
             }
             for item in nodes
         ],
         "observed_subtasks": len(nodes) - 1,
+        "active_subtasks": len(active),
+        "active_subtasks_done": sum(item.status == "DONE" for item in active),
         "observed_subtasks_done": sum(
             item.id != current.id and item.status == "DONE" for item in nodes
         ),
@@ -272,6 +470,7 @@ def _report(manifest):
         "",
         f"Status: {manifest['status']}",
         f"Dataset source: {manifest['dataset_kind']}",
+        f"Search provider: {manifest.get('search_provider', 'tavily')}",
         "Protocol: sequential team conversation scenarios.",
         "Agent completion, machine evidence and reviewed quality are reported separately.",
         "",
@@ -287,9 +486,43 @@ def _report(manifest):
             )
     lines += [
         "",
+        "## Scenario time",
+        "",
+        "| scenario | status | wall seconds | execution seconds | human wait seconds "
+        "| quality-review wait seconds |",
+        "|---|---|---:|---:|---:|---:|",
+    ]
+    for scenario in manifest["scenarios"]:
+        lines.append(
+            f"| {scenario['scenario_id']} | {scenario.get('status', '-')} | "
+            f"{scenario.get('elapsed_s', '-')} | {scenario.get('execution_elapsed_s', '-')} | "
+            f"{scenario.get('human_wait_s', '-')} | "
+            f"{scenario.get('quality_review_wait_s', '-')} |"
+        )
+    lines += [
+        "",
+        "## Model prompt cache",
+        "",
+        "The rate is weighted by input tokens across calls with provider cache data.",
+        "",
+        "| scenario | measured calls / all calls | hit tokens | miss tokens | hit rate |",
+        "|---|---|---|---|---|",
+    ]
+    for scenario in manifest["scenarios"]:
+        total = scenario.get("llm", {}).get("total", {})
+        cache = total.get("prompt_cache", {})
+        hit, miss, rate = (cache.get(key) for key in ("hit_tokens", "miss_tokens", "hit_rate"))
+        lines.append(
+            f"| {scenario['scenario_id']} | {cache.get('measured_calls', 0)}/"
+            f"{total.get('calls', 0)} | {hit if hit is not None else 'unknown'} | "
+            f"{miss if miss is not None else 'unknown'} | "
+            f"{f'{rate:.1%}' if rate is not None else 'unknown'} |"
+        )
+    lines += [
+        "",
         "Full dialogue is in each scenario's dialogue.jsonl; actual human exchanges "
         "are also retained under human/. Task 2 uses the same team, experience and "
-        "delivered files. Search cache hits are not fresh Tavily requests.",
+        "delivered files. Search cache hits are not fresh provider requests.",
         "Human wait spans are measured separately and can overlap; they are not "
         "subtracted blindly from end-to-end wall time.",
         "",
@@ -297,10 +530,17 @@ def _report(manifest):
     return "\n".join(lines)
 
 
+def _bind_phase_workspaces(paths, quote, artifact_quote, source_audit, research, *, phase_change):
+    quote.bind_workspaces(paths.values(), phase_change=phase_change)
+    artifact_quote.bind_workspaces(paths.values(), phase_change=phase_change)
+    source_audit.bind_workspaces(paths, phase_change=phase_change)
+    if phase_change and research is not None:
+        research.bind_workspaces(paths)
+
+
 async def run_suite(args, scenarios):
     from moumou.adapters import DeepSeekClient
-    from moumou.config import LLMSettings
-    from moumou.contracts import Budget, HumanRequest
+    from moumou.contracts import HumanRequest
     from moumou.eval.artifacts import _code_version, atomic_json, atomic_text, redact
     from moumou.eval.human import ConsoleHuman, FileHuman, RecordingLLM
     from moumou.eval.quote_delivery import capture_artifact_quote_evidence
@@ -316,11 +556,15 @@ async def run_suite(args, scenarios):
     from moumou.orchestrator import Engine, Settings
     from moumou.tools import ToolRegistry, default_tools
     from moumou.tools.artifact_quote import VerifyArtifactQuoteTool
+    from moumou.tools.search import WebSearchTool
     from moumou.tools.source import ReadSourceTool, SourceHistoryTool
     from moumou.tools.source_audit import SourceAccessAuditTool
     from moumou.tools.source_quote import VerifySourceQuoteTool
 
     dataset_kind = _dataset_kind(scenarios)
+    approval = _tool_approval(args)
+    workspace_execution = approval["shell_python"] == "workspace"
+    node_retries = 0 if dataset_kind == "instructor" else 1
     llm_transport = getattr(args, "llm_transport", "buffered")
     reasoning_effort = getattr(args, "llm_reasoning_effort", None)
     if llm_transport not in {"buffered", "stream"}:
@@ -344,14 +588,21 @@ async def run_suite(args, scenarios):
     require_inputs = getattr(args, "require_declared_inputs", False)
     if type(require_inputs) is not bool:
         raise ValueError("require_declared_inputs must be a boolean")
+    scenario_timeout = getattr(args, "scenario_timeout", _SCENARIO_TIMEOUT_S)
+    if not math.isfinite(scenario_timeout) or scenario_timeout <= 0:
+        raise ValueError("scenario timeout must be positive and finite")
     opening_context_options = _opening_context_options(args)
-    settings = LLMSettings.from_env()
+    settings = LLMSettings.from_env(profile=getattr(args, "llm_profile_name", args.llm_profile))
+    search_backend = WebSearchTool()
     settings.require_key()
+    search_backend.api_key = os.getenv(search_backend.key_env)
     root = (Path(args.out) if args.out else Path("runs/test") / uuid4().hex[:10]).resolve()
     if root.exists():
         raise ValueError("test needs a fresh output directory; existing sessions are preserved")
     root.mkdir(parents=True)
-    secrets = tuple(value for value in (settings.api_key, os.getenv("TAVILY_API_KEY")) if value)
+    secrets = tuple(value for value in (
+        settings.api_key, os.getenv("TAVILY_API_KEY"), os.getenv("SERPAPI_API_KEY"),
+    ) if value)
     manifest = {
         "schema_version": 1,
         "kind": "instructor_test",
@@ -360,13 +611,19 @@ async def run_suite(args, scenarios):
         "status": "running",
         "started_at": _now(),
         "human_mode": args.human,
+        "search_provider": search_backend.provider,
         "search_requests_per_scenario": args.search_requests,
+        "context_policy": getattr(args, "compact_effective", None),
         "planned_root_goals": sum(len(scenario.tasks) for scenario in scenarios),
         "scenarios": [],
         "code": _code_version(),
         "model": {
+            "profile": settings.profile,
+            "profile_label": LLM_PROFILES[settings.profile].label,
             "model": settings.model,
+            "base_url": settings.base_url,
             "endpoint_host": urlsplit(settings.base_url).hostname,
+            "api_key_env": settings.api_key_env or None,
             "timeout_s": settings.timeout_s,
             "max_retries": 2 if llm_transport == "buffered" else None,
             "transport": llm_transport,
@@ -376,10 +633,10 @@ async def run_suite(args, scenarios):
             "max_steps": args.max_steps,
             "max_tokens": args.max_tokens,
             "max_wall_s": args.task_timeout,
-            "max_retries": 1,
+            "max_retries": node_retries,
         },
         "school_llm_policy": "quality first; token bound only guards runaway loops",
-        "human_wait_in_node_budget": True,
+        **_execution_policy(scenario_timeout),
         "automatic_quality_pass": False,
         "input_handoff_policy": {
             "required": require_inputs, "scope": "declared files at first admission",
@@ -394,6 +651,7 @@ async def run_suite(args, scenarios):
         },
         "execution_progress_policy": {"enabled": execution_progress_enabled},
         "quality_review_mode": args.quality_review,
+        "tool_approval": approval,
     }
     if llm_transport == "stream":
         manifest["model"].update(
@@ -416,7 +674,7 @@ async def run_suite(args, scenarios):
         max_steps=args.max_steps,
         max_tokens=args.max_tokens,
         max_wall_s=args.task_timeout,
-        max_retries=1,
+        max_retries=node_retries,
     )
     print(f"test session: {root}", flush=True)
     unsuccessful_scenarios = []
@@ -432,7 +690,7 @@ async def run_suite(args, scenarios):
             )
             search = SearchBudgetTool(
                 folder / "search", max_requests=args.search_requests, namespace=scenario.id,
-                source_store=source_evidence,
+                delegate=search_backend, source_store=source_evidence,
             )
 
             def accept_response(request, response, *, search_budget=search):
@@ -568,7 +826,13 @@ async def run_suite(args, scenarios):
                         max_slots=4,
                         role_review_enabled=False,
                         execution_progress_enabled=execution_progress_enabled,
-                        approval={"git_commit": True},
+                        approval={
+                            "git_commit": not workspace_execution,
+                            "fs_delete": approval["workspace_delete"] == "manual",
+                        },
+                        workspace_execution_root=root if workspace_execution else None,
+                        **(getattr(args, "llm_limits", None) or {}),
+                        **_compact_settings(args),
                     ),
                 )
             except BaseException:
@@ -577,6 +841,7 @@ async def run_suite(args, scenarios):
                 finally:
                     persist_transport()
                 raise
+            human.waiting = engine.runner.wait_for_human
             entry = {
                 "scenario_id": scenario.id,
                 "name": scenario.name,
@@ -592,8 +857,14 @@ async def run_suite(args, scenarios):
             manifest["scenarios"].append(entry)
             previous = None
             scenario_ready = False
+            scenario_began = None
+            scenario_clock = None
+            phase_clock = None
+            active_node = None
             try:
                 team_options = {"previous_dialogue_path": transcript}
+                if scenario.source_kind == "instructor":
+                    team_options["enforce_collaboration"] = True
                 if require_inputs:
                     team_options["require_declared_inputs"] = True
                 if opening_context_options["requested_tokens"] is not None:
@@ -601,15 +872,20 @@ async def run_suite(args, scenarios):
                         opening_context_options["requested_tokens"]
                     )
                 team = configure_team(engine, scenario, **team_options)
+                team.on_workspaces_changed = functools.partial(
+                    _bind_phase_workspaces, quote=quote_verifier, artifact_quote=artifact_verifier,
+                    source_audit=source_audit, research=research_progress, phase_change=True,
+                )
                 if research_progress is not None:
                     research_progress.bind(engine.repo, team.workspaces, engine.trace)
                     team.context.research_progress = research_progress
-                quote_verifier.bind_workspaces(team.workspaces.values())
-                artifact_verifier.bind_workspaces(team.workspaces.values())
-                source_audit.bind_workspaces(team.workspaces)
+                _bind_phase_workspaces(
+                    team.workspaces, quote_verifier, artifact_verifier, source_audit,
+                    research_progress, phase_change=False,
+                )
                 team.context.bind_artifact_receipts(engine.repo, artifact_verifier.audit_records)
                 team.context.search_budget_notice = (
-                    f"This group initially has {args.search_requests} new Tavily requests "
+                    f"This group initially has {args.search_requests} new search requests "
                     "shared across both tasks and all four roles. Cache hits are separate. "
                     "The school model API is available for quality reasoning; this search "
                     "quota is not a token allowance. A human can grant more searches with "
@@ -618,6 +894,8 @@ async def run_suite(args, scenarios):
                 entry["workspaces"] = {role: str(path) for role, path in team.workspaces.items()}
                 scenario_ready = True
                 for index, goal in enumerate(scenario.tasks, start=1):
+                    if scenario_clock is not None and scenario_clock.remaining <= 0:
+                        raise ExecutionDeadline("scenario")
                     phase = f"task_{index}"
                     llm.set_phase(phase)
                     human.set_phase(phase)
@@ -631,20 +909,54 @@ async def run_suite(args, scenarios):
                             "manifest": str(root / "test.json"),
                         },
                     )
-                    began = monotonic()
                     search_before = search.stats()
                     node = submit_teacher_task(
                         engine, scenario, goal, budget, previous_root=previous
                     )
+                    entry["workspaces"] = {
+                        role: str(path) for role, path in team.workspaces.items()
+                    }
+                    began = monotonic()
+                    if scenario_began is None:
+                        scenario_began = began
+                        scenario_clock = ExecutionClock(
+                            "scenario", scenario_timeout, started=began,
+                            closeout_s=min(_SCENARIO_CLOSEOUT_S, scenario_timeout),
+                        )
+                        entry["instructor_task_posted_at"] = next(
+                            event.t0.isoformat() for event in engine.trace.query(node.id)
+                            if event.name == "instructor_task_posted"
+                        )
+                    active_node = node
+                    phase_clock = ExecutionClock("phase", float("inf"), started=began)
+                    engine.runner.scenario_clock = scenario_clock
+                    engine.runner.phase_clock = phase_clock
+                    engine.runner.later_tasks = len(scenario.tasks) - index
                     atomic_json(root / "test.json", manifest)
-                    await engine.run()
+                    try:
+                        async with scenario_clock.enforce():
+                            await engine.run()
+                    except ExecutionDeadline as exc:
+                        if engine.repo.get(node.id).status != "DONE":
+                            raise
+                        # A formally published result survives cancellation during cleanup.
+                        entry["deadline_reached_after_publication"] = node.id
+                        entry["deadline_after_publication_scope"] = exc.scope
                     task = _task_record(engine, node, monotonic() - began, phase)
+                    task["execution_elapsed_s"] = round(phase_clock.active_seconds, 6)
+                    task["human_wait_s"] = round(phase_clock.paused_seconds, 6)
                     task["delivery_elapsed_s"] = task["elapsed_s"]
                     task["workspaces"] = entry["workspaces"]
                     capture_started = monotonic()
                     current = engine.repo.get(node.id)
+                    artifact_source = Path(entry["workspaces"][current.role])
+                    publication = engine.repo.published_version(current.id)
+                    if current.status == "DONE" and publication and publication["files"]:
+                        artifact_source, _ = engine.runner._published_source(
+                            artifact_source, current.id
+                        )
                     task["artifact_snapshot"] = capture_artifact_snapshot(
-                        folder, entry["workspaces"][current.role], current, phase,
+                        folder, artifact_source, current, phase,
                         secrets=secrets,
                     )
                     task["artifact_quote_evidence"] = capture_artifact_quote_evidence(
@@ -675,9 +987,13 @@ async def run_suite(args, scenarios):
                             options=["approve", "reject"],
                             payload={"scenario_root": str(folder), "task": task},
                         )
-                        review_started = monotonic()
-                        review = await human.ask(request)
-                        task["quality_review_wait_s"] = round(monotonic() - review_started, 6)
+                        paused_before_review = scenario_clock.paused_seconds
+                        try:
+                            review = await human.ask(request)
+                        finally:
+                            task["quality_review_wait_s"] = round(
+                                scenario_clock.paused_seconds - paused_before_review, 6,
+                            )
                         task["quality_status"] = (
                             "human_accepted" if review.decision == "approve" else "human_rejected"
                         )
@@ -687,6 +1003,10 @@ async def run_suite(args, scenarios):
                             and task["root_machine_accepted"] is not False
                         )
                         task["quality_method"] = "actual_human_review"
+                        if index == len(scenario.tasks):
+                            entry["through_review_elapsed_s"] = round(
+                                monotonic() - scenario_began, 6
+                            )
                     task["total_to_review_s"] = round(monotonic() - began, 6)
                     task["llm"] = llm.summary()["by_phase"].get(phase, {})
                     task["human"] = human.summary()["by_phase"].get(phase, {})
@@ -731,6 +1051,26 @@ async def run_suite(args, scenarios):
                     if args.quality_review == "human"
                     else "agent_completed_quality_unreviewed"
                 )
+            except (ExecutionDeadline, asyncio.CancelledError, KeyboardInterrupt) as exc:
+                timed_out = isinstance(exc, ExecutionDeadline)
+                entry["status"] = "deadline_exceeded" if timed_out else "interrupted"
+                if timed_out:
+                    entry["deadline_scope"] = exc.scope
+                if active_node is not None and not any(
+                    item["root_task_id"] == active_node.id for item in entry["tasks"]
+                ):
+                    partial = sanitize_evidence(
+                        _task_record(engine, active_node, monotonic() - began, phase), secrets
+                    )
+                    partial["attempt_interrupted"] = True
+                    partial["execution_elapsed_s"] = round(phase_clock.active_seconds, 6)
+                    partial["human_wait_s"] = round(phase_clock.paused_seconds, 6)
+                    entry["tasks"].append(partial)
+                    atomic_json(folder / f"{phase}-result.json", partial)
+                if not timed_out:
+                    raise
+                entry["outcome_detail"] = str(exc)
+                unsuccessful_scenarios.append(scenario.id)
             except (_TaskIncomplete, _QualityRejected) as exc:
                 # Later tasks in this group depend on its earlier delivery.
                 # Other instructor groups are independent and still need an attempt.
@@ -751,6 +1091,13 @@ async def run_suite(args, scenarios):
                 entry["error_message"] = sanitize_evidence(redact(str(exc), settings), secrets)
                 unsuccessful_scenarios.append(scenario.id)
             finally:
+                if scenario_began is not None:
+                    entry["elapsed_s"] = round(monotonic() - scenario_began, 6)
+                    entry["execution_elapsed_s"] = round(scenario_clock.active_seconds, 6)
+                    entry["human_wait_s"] = round(scenario_clock.paused_seconds, 6)
+                    entry["quality_review_wait_s"] = round(sum(
+                        task.get("quality_review_wait_s", 0) for task in entry["tasks"]
+                    ), 6)
                 entry["search"] = search.stats()
                 entry["llm"] = llm.summary()
                 entry["human"] = human.summary()
@@ -778,11 +1125,13 @@ async def run_suite(args, scenarios):
             else "agent_completed_quality_unreviewed"
         )
         if unsuccessful_scenarios:
-            manifest["status"] = (
-                "quality_rejected" if manifest["scenarios"][0]["status"] == "quality_rejected"
-                else "error" if manifest["scenarios"][0]["status"] == "error"
-                else "agent_incomplete"
-            ) if len(scenarios) == 1 else "partially_completed"
+            if len(scenarios) == 1:
+                status = manifest["scenarios"][0]["status"]
+                manifest["status"] = status if status in {
+                    "quality_rejected", "deadline_exceeded", "error",
+                } else "agent_incomplete"
+            else:
+                manifest["status"] = "partially_completed"
             manifest["unsuccessful_scenarios"] = unsuccessful_scenarios
             return 1
     except (_TaskIncomplete, _QualityRejected) as exc:
@@ -806,7 +1155,7 @@ async def run_suite(args, scenarios):
         successes = sum(task["verified_goal_success"] is True for task in tasks)
         manifest["goal_metrics"] = {
             "planned_root_goals": manifest["planned_root_goals"],
-            "persisted_task_deliveries": len(tasks),
+            "persisted_task_deliveries": sum(not task.get("attempt_interrupted") for task in tasks),
             "agent_declared_complete": sum(task["agent_declared_complete"] for task in tasks),
             "reviewed_goals": sum(task["verified_goal_success"] is not None for task in tasks),
             "verified_successes": successes,
@@ -825,6 +1174,8 @@ def main(argv=None):
         or args.max_steps < 1
         or args.max_tokens < 1000
         or args.task_timeout < 10
+        or not math.isfinite(args.scenario_timeout)
+        or args.scenario_timeout <= 0
     ):
         print("invalid search or task safety bound", file=sys.stderr)
         return 2
@@ -843,6 +1194,13 @@ def main(argv=None):
                         "kind": "instructor_test",
                         "dataset_kind": _dataset_kind(scenarios),
                         "human": args.human,
+                        "tool_approval": _tool_approval(args),
+                        "model": {
+                            "profile": args.llm_settings.profile,
+                            "model": args.llm_settings.model,
+                            "base_url": args.llm_settings.base_url,
+                            "timeout_s": args.llm_settings.timeout_s,
+                        },
                         "llm_transport": args.llm_transport,
                         "llm_reasoning_effort": args.llm_reasoning_effort,
                         "llm_completion_cap": args.llm_completion_cap,
@@ -864,6 +1222,10 @@ def main(argv=None):
                             args, "require_declared_inputs", False,
                         ),
                         "opening_context_policy": _opening_context_options(args),
+                        "context_policy": args.compact_effective,
+                        "task_budget": {"max_tokens": args.max_tokens, "max_steps": args.max_steps,
+                                        "max_wall_s": args.task_timeout},
+                        **_execution_policy(args.scenario_timeout),
                         "search_requests_per_scenario": args.search_requests,
                         "planned_root_goals": sum(len(case.tasks) for case in scenarios),
                         "scenarios": [

@@ -293,6 +293,21 @@ def capture_memory_snapshot(engine, nodes):
     return snapshot
 
 
+def capture_node_usage(events):
+    calls = [event for event in events if event.kind == "llm"]
+    call_ids = {event.span_id for event in calls}
+    call_ids.update(event.payload["request_id"] for event in events
+                    if event.kind == "task" and event.name == "llm_request_started")
+    measured = [event for event in calls if event.payload.get("usage_present") is True]
+    return {
+        "calls": len(call_ids),
+        "usage_missing_calls": len(call_ids) - len(measured),
+        "known_tokens_in": sum(event.tokens_in for event in measured),
+        "known_tokens_out": sum(event.tokens_out for event in measured),
+        "budget_tokens_used": sum(event.tokens_in + event.tokens_out for event in calls),
+    }
+
+
 def capture_failure_snapshot(engine, nodes):
     """Keep observed operational failures separate from final goal quality."""
     events, errors = [], []

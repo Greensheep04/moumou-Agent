@@ -7,6 +7,7 @@ import inspect
 import json
 import re
 import threading
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
@@ -59,11 +60,14 @@ class RecordingLLM:
     def set_phase(self, phase):
         self.phase = str(phase)
 
-    async def chat(self, messages, tools=None):
+    async def chat(self, messages, tools=None, diag=None):
         phase, call_id, started = self.phase, uuid4().hex, monotonic()
         self.recorder.write("llm_request", phase, call_id=call_id, messages=messages, tools=tools)
         try:
-            response = await self.delegate.chat(messages, tools)
+            if "diag" in inspect.signature(self.delegate.chat).parameters:
+                response = await self.delegate.chat(messages, tools, diag=diag)
+            else:
+                response = await self.delegate.chat(messages, tools)
         except BaseException as exc:
             elapsed = monotonic() - started
             self.calls.append(
@@ -84,8 +88,17 @@ class RecordingLLM:
                 error_message=str(exc),
             )
             raise
-        elapsed = monotonic() - started
+        self._record_completed_call(phase, call_id, monotonic() - started, response)
+        return response
+
+    def _record_completed_call(self, phase, call_id, elapsed, response):
         measured = getattr(response, "usage_present", None) is True
+        usage = response.usage_raw
+        prompt = usage.get("prompt_tokens")
+        hit = usage.get("prompt_cache_hit_tokens")
+        miss = usage.get("prompt_cache_miss_tokens")
+        cache_measured = (hit is not None and miss is not None and hit >= 0 and miss >= 0
+                          and hit + miss == prompt)
         self.calls.append(
             {
                 "phase": phase,
@@ -93,6 +106,8 @@ class RecordingLLM:
                 "elapsed_s": elapsed,
                 "tokens_in": response.tokens_in if measured else None,
                 "tokens_out": response.tokens_out if measured else None,
+                "cache_hit_tokens": hit if cache_measured else None,
+                "cache_miss_tokens": miss if cache_measured else None,
             }
         )
         self.recorder.write(
@@ -102,11 +117,13 @@ class RecordingLLM:
             elapsed_s=elapsed,
             response=response.model_dump(mode="json"),
         )
-        return response
 
     def summary(self):
         def count(rows):
             missing = sum(row["tokens_in"] is None or row["tokens_out"] is None for row in rows)
+            cache_rows = [row for row in rows if row.get("cache_hit_tokens") is not None]
+            hits = sum(row["cache_hit_tokens"] for row in cache_rows)
+            misses = sum(row["cache_miss_tokens"] for row in cache_rows)
             return {
                 "calls": len(rows),
                 "error_calls": sum(row["status"] == "error" for row in rows),
@@ -116,6 +133,12 @@ class RecordingLLM:
                 "tokens_in": None if missing else sum(row["tokens_in"] for row in rows),
                 "tokens_out": None if missing else sum(row["tokens_out"] for row in rows),
                 "cumulative_call_s": sum(row["elapsed_s"] for row in rows),
+                "prompt_cache": {
+                    "measured_calls": len(cache_rows),
+                    "hit_tokens": hits if cache_rows else None,
+                    "miss_tokens": misses if cache_rows else None,
+                    "hit_rate": hits / (hits + misses) if hits + misses else None,
+                },
             }
 
         return {
@@ -156,6 +179,10 @@ class FileHuman:
         self.poll_interval_s = poll_interval_s
         self.exchanges = []
         self._begin_lock = asyncio.Lock()
+        self.waiting = None
+
+    def _waiting(self, req):
+        return nullcontext() if self.waiting is None else self.waiting(req)
 
     def set_phase(self, phase):
         self.phase = str(phase)
@@ -239,8 +266,10 @@ class FileHuman:
 
     async def _wait_response(self, req, phase, started):
         path = self.root / "responses" / f"{req.id}.json"
-        while not path.exists():
-            await asyncio.sleep(self.poll_interval_s)
+        if not path.exists():
+            with self._waiting(req):
+                while not path.exists():
+                    await asyncio.sleep(self.poll_interval_s)
         return await self._finish(req, self._read_transport_json(path), phase, started)
 
     async def ask(self, req):
@@ -309,10 +338,18 @@ class FileHuman:
         return {
             "answered_requests": len(self.exchanges),
             "cumulative_wait_s": sum(row["wait_s"] for row in self.exchanges),
+            "answered_by_kind": {
+                kind: sum(row["kind"] == kind for row in self.exchanges)
+                for kind in ("approval", "question", "review")
+            },
             "by_phase": {
                 phase: {
                     "answered_requests": len(rows),
                     "cumulative_wait_s": sum(row["wait_s"] for row in rows),
+                    "answered_by_kind": {
+                        kind: sum(row["kind"] == kind for row in rows)
+                        for kind in ("approval", "question", "review")
+                    },
                 }
                 for phase in sorted({row["phase"] for row in self.exchanges})
                 if (rows := [row for row in self.exchanges if row["phase"] == phase])
@@ -346,7 +383,8 @@ class ConsoleHuman(FileHuman):
         safe = self.recorder.clean(req.model_dump(mode="json"))
         print(json.dumps(safe, ensure_ascii=False, indent=2), flush=True)
         while True:
-            text = await asyncio.to_thread(input, "Your answer: ")
+            with self._waiting(req):
+                text = await asyncio.to_thread(input, "Your answer: ")
             if req.kind in {"approval", "review"}:
                 decision, _, note = text.strip().partition(" ")
                 if decision.lower() not in {"approve", "reject"}:

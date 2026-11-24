@@ -77,9 +77,9 @@ class VerifySourceQuoteTool:
         if workspaces is not None:
             self.bind_workspaces(workspaces)
 
-    def bind_workspaces(self, workspaces):
-        """Bind once before execution; this method is not a model-facing tool."""
-        if self._workspaces is not None:
+    def bind_workspaces(self, workspaces, *, phase_change=False):
+        """Bind actual workspaces before execution and at a trusted phase boundary."""
+        if self._workspaces is not None and not phase_change:
             raise ValueError("source quote workspaces are already bound")
         if isinstance(workspaces, (str, bytes, Path)):
             raise ValueError("source quote requires a collection of actual workspace paths")

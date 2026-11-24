@@ -23,6 +23,7 @@ _MAX_QUOTE_CHARS = 4096
 _MAX_QUOTE_BYTES = 16384
 _MAX_OUTPUT_BYTES = 16384
 _MAX_AUDIT_RECORDS = 256
+_MAX_BATCH_ITEMS = 12
 _PRIVATE_PARTS = {".git", ".evaluation", ".aws", ".ssh", ".codex"}
 _PRIVATE_NAMES = {"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "credentials.json"}
 _PRIVATE_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
@@ -129,18 +130,27 @@ class VerifyArtifactQuoteTool:
         "Read a literal slice of an actual UTF-8 artifact in your own workspace and check "
         "it against exact retained source metadata. start/end are Unicode code-point offsets, "
         "zero-based [start,end). No quote text is accepted. Return file/slice hashes; later "
-        "rewrites invalidate applicability. Lexical matching is not truth or approval."
+        "rewrites invalidate applicability. Use checks for up to 12 slices in one call, "
+        "each with expected_artifact_sha256. Lexical matching is not truth or approval."
     )
     action_class = "fs_read"
     timeout_s = 10.0
-    params_schema = {"type": "object", "additionalProperties": False, "properties": {
+    _item_properties = {
         "metadata_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "path": {"type": "string", "minLength": 1, "maxLength": 2048},
         "start": {"type": "integer", "minimum": 0},
         "end": {"type": "integer", "minimum": 1},
         "mode": {"type": "string", "enum": ["exact", "collapse_whitespace"], "default": "exact"},
         "expected_artifact_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    }, "required": ["metadata_sha256", "path", "start", "end"]}
+    }
+    _required = ["metadata_sha256", "path", "start", "end"]
+    params_schema = {"type": "object", "additionalProperties": False, "properties": {
+        **_item_properties,
+        "checks": {"type": "array", "minItems": 1, "maxItems": _MAX_BATCH_ITEMS,
+                   "items": {"type": "object", "additionalProperties": False,
+                             "properties": _item_properties,
+                             "required": [*_required, "expected_artifact_sha256"]}},
+    }, "oneOf": [{"required": _required}, {"required": ["checks"]}]}
 
     def __init__(self, store, *, workspaces=None):
         self._source = VerifySourceQuoteTool(store)
@@ -150,14 +160,15 @@ class VerifyArtifactQuoteTool:
         if workspaces is not None:
             self.bind_workspaces(workspaces)
 
-    def bind_workspaces(self, workspaces):
-        """Trusted operator only: bind actual workspace-provider paths exactly once."""
-        if self._workspaces is not None or isinstance(workspaces, (str, bytes, Path)):
+    def bind_workspaces(self, workspaces, *, phase_change=False):
+        """Bind actual workspace-provider paths for the active teacher task."""
+        if ((self._workspaces is not None and not phase_change)
+                or isinstance(workspaces, (str, bytes, Path))):
             raise ValueError("artifact quote requires an unbound collection of actual workspaces")
         paths = frozenset(_canonical(path) for path in workspaces)
         if not paths or any(not path.is_dir() for path in paths):
             raise ValueError("artifact quote requires existing actual workspace directories")
-        self._source.bind_workspaces(paths)
+        self._source.bind_workspaces(paths, phase_change=phase_change)
         self._workspaces = paths
 
     def audit_records(self):
@@ -202,6 +213,28 @@ class VerifyArtifactQuoteTool:
         return self._finish(payload, ctx)
 
     async def run(self, args, ctx):
+        if isinstance(args, dict) and "checks" in args:
+            checks = args["checks"]
+            if (set(args) != {"checks"} or not isinstance(checks, list)
+                    or not 1 <= len(checks) <= _MAX_BATCH_ITEMS
+                    or any(not isinstance(item, dict)
+                           or not isinstance(item.get("expected_artifact_sha256"), str)
+                           or not _HASH.fullmatch(item["expected_artifact_sha256"])
+                           for item in checks)):
+                return ToolResult(ok=False, error="Each batch item requires an artifact SHA256.")
+            results = []
+            for item in checks:
+                checked = await self._check(item, ctx)
+                receipt = json.loads(checked.stdout)
+                results.append({key: receipt[key] for key in
+                                ("check_id", "status", "lexical_match", "reason")
+                                if key in receipt})
+            ok = all(item["lexical_match"] is True for item in results)
+            return ToolResult(ok=ok, stdout=json.dumps({"checks": results}),
+                              error=None if ok else "Inspect individual quotation check results.")
+        return await self._check(args, ctx)
+
+    async def _check(self, args, ctx):
         artifact = None
         try:
             allowed = {"metadata_sha256", "path", "start", "end", "mode",

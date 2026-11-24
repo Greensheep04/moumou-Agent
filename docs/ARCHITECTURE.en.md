@@ -1,237 +1,70 @@
-# System architecture
+# Moumou Agent Architecture
 
-[简体中文](ARCHITECTURE.md) · [English](ARCHITECTURE.en.md)
+[简体中文](ARCHITECTURE.md) · [Command-line guide](SETUP.en.md)
 
-Moumou turns a human request into a persisted task graph. Agents can clarify the
-request, delegate work, execute tools in private working directories and return
-declared artifacts. Machine acceptance, agent completion and reviewed goal quality
-are separate observations.
-
-This document describes the implementation. Regressions, real tasks and content reviews
-are bound to their actual source versions; implementation presence is not accepted task
-quality. See the [performance report](PERFORMANCE.en.md) for identities, checks and open findings.
-
-## Runtime components
+## Task lifecycle
 
 ```mermaid
-flowchart LR
-    H[Human console or file port] --> C[Formal task session]
-    C --> E[Engine and scheduler]
-    E --> R[Task runner]
-    R --> L[Course DeepSeek or HKGAI model]
-    R --> G[Approval gate]
-    G --> T[Tools and private workspaces]
-    R --> A[Machine acceptance]
-    E --> M[Role-scoped memory]
-    E --> D[Task state and human-question ledger]
-    E --> J[JSONL trace and SQLite projection]
-    C --> S[Saved delivery and phase evidence]
-    S --> O[Offline report, review, analysis and replay]
+flowchart TD
+    A[User provides a goal and delivery requirements] --> B[Lead clarifies requirements and submits a plan]
+    B --> C[Validate roles, dependencies, and checks]
+    C --> D[Schedule ready subtasks]
+    D --> E[Agents use tools in their own workspaces]
+    E --> F[Check and publish a version]
+    E -->|Missing input or blocked work| G[Notify the direct parent]
+    G -->|Resume or replace affected work| C
+    F --> H[Lead assembles and submits the final delivery]
+    H --> I[Human review and report]
+    I -->|Next task in the same scenario| B
 ```
 
-| Component | Files | Responsibility |
-| --- | --- | --- |
-| Contracts | `src/moumou/contracts/` | Task, role, message, tool, human and storage interfaces |
-| Orchestration | `src/moumou/orchestrator/` | State transitions, scheduling, delegation, approvals and acceptance |
-| Context and memory | `src/moumou/context/`, `src/moumou/memory/` | Admission, compaction, retrieval, reflection and scoring |
-| Tools and workspaces | `src/moumou/tools/`, `src/moumou/sandbox/`, `src/moumou/workspace/` | Files, subprocesses, Git, search and artifact integration |
-| Interaction adapters | `src/moumou/adapters/`, `src/moumou/eval/human.py` | Channel/HumanIO adapters and recorded dialogue |
-| Trace storage | `src/moumou/trace/recorder.py`, `src/moumou/store/trace.py` | Journal, exact-task queries and SQLite recovery |
-| Formal evaluation | `src/moumou/eval/` | Original sources, continuing teams, accounting and offline evidence |
+The command line loads user-provided Markdown tasks and teams. The general Python engine can also receive a goal directly. SQLite stores task relationships, status, roles, published versions, human decisions, and memory. The scheduler picks ready nodes. Each worker builds a request for its current node and runs through model calls, tools, and submissions.
 
-`Engine` accepts injected tool, workspace, channel, human and memory implementations.
-Its default task state uses SQLite. Extension conventions are defined in
-[INTERFACES.en.md](INTERFACES.en.md).
-
-## One task's execution
-
-1. The Engine persists a root task and changes it from `PENDING` to `READY`.
-2. The scheduler dispatches eligible tasks, subject to its slot limit, as `RUNNING`.
-3. The runner resolves its workspace, materializes explicit dependency artifacts,
-   restores recorded clarification and assembles context.
-4. The model can call tools, ask a human, submit a result or propose a plan.
-5. The framework validates plans before creating children. A delegated parent becomes
-   `PENDING` with child dependencies and runs again after they complete.
-6. Submitted files are validated, machine criteria are evaluated and accepted declared
-   files are published through the integration contract.
-7. Terminal tasks generate conclusion-board notes and eligible memory maintenance.
-8. The formal session saves delivery evidence and obtains a human quality decision,
-   or retains unknown quality when review is deferred.
-
-```mermaid
-stateDiagram-v2
-    [*] --> PENDING
-    PENDING --> READY: dependencies satisfied
-    READY --> RUNNING: dispatched
-    RUNNING --> WAITING_HUMAN: question or approval
-    WAITING_HUMAN --> RUNNING: valid response
-    RUNNING --> PENDING: delegated to children
-    RUNNING --> DONE: accepted completion
-    RUNNING --> FAILED: attempt failed
-    FAILED --> READY: retry allowed
-    FAILED --> DEAD: retries exhausted
-    PENDING --> DEAD: dependency cannot complete
-    WAITING_HUMAN --> FAILED: interrupted attempt
-    RUNNING --> DEAD: cancellation or abort
-```
-
-The diagram highlights common paths; `LEGAL_TRANSITIONS` in `contracts/task.py` is
-the complete authority. State changes and their audit events share one transaction.
-Restart recovery uses stored state and remaining retry budget; it does not convert an
-interrupted execution into success.
-
-## Delegation and identity
-
-A plan declares roles, subtask goals, acceptance and dependencies. Validation checks
-role/tool permissions, dependency existence, acyclicity and size/depth limits. The
-general Engine supports generated roles up to configured limits.
-
-The formal adapter installs exactly the four original members of each scenario,
-refuses additional identities and serializes concurrent work for the same member.
-Each member keeps a private role directory and stable agent ID across sequential tasks.
-
-| Data | Scope |
+| Source directory | Responsibility |
 | --- | --- |
-| Role definition and long-term lessons | project + role |
-| Conclusion board | project + conversation + role |
-| Recorded clarification | project + conversation + task + role |
-| Trace query | exact task ID within the saved run |
-| Formal team workspace | scenario project + conversation + stable role ID |
+| `orchestrator/` | Validate plans, schedule dependencies, run nodes, recover blocked work, and check results |
+| `context/`, `memory/` | Select request context, compact history, and retrieve lessons by role |
+| `workspace/`, `sandbox/`, `tools/` | Allocate directories, run tools, and scope file and process operations |
+| `contracts/`, `bus/`, `trace/`, `store/` | Define task and message structures and store collaboration state and evidence |
+| `adapters/`, `config.py` | Connect model and human interfaces and read settings and usage data |
+| `eval/`, `ui/` | Load consecutive tasks, handle human interaction, and save reports and replays |
 
-Generic Engine instances use `role@task` runtime IDs with the existing project-role
-memory policy. That sharing differs from the formal team's stable logical identities;
-universal per-runtime-instance memory separation is not claimed. Separate scenario/run
-directories and databases isolate formal teams.
+## Delegation, concurrency, and recovery
 
-## Context and human decisions
+The lead calls `submit_plan` with each subtask's goal, role, dependencies, and checks. The general engine starts with a lead. The model can reuse registered roles or propose a role with a reason and a tool list. The Markdown team runner uses roles declared by the task author and takes the first role as the lead. In either entry point, the lead decides how to assign the work. The framework validates roles, tools, dependency cycles, and limits on task count and depth.
 
-Both context builders preserve the full current role, goal, acceptance and recorded
-same-task answers. Delegated tasks also retain exact ancestor goals in root-to-parent
-order. Worker follows only the current repository's `parent_id` edges, validating
-identity, project, conversation, depth and cycles; dependencies and prior phases do not
-define ancestry. Full references and their UTF-8 SHA-256 hashes are mandatory pinned
-opening content. Optional dependency reports, lessons and board/history yield first.
-Unfit mandatory content or a delegated builder dropping references causes
-`ContextAdmissionError` before a model call.
+Tasks whose inputs are ready can run in parallel. In continuous team runs, the same role uses its workspace in sequence. Test preparation can run alongside development, and checks on a candidate wait for the designated developer delivery. A later task keeps the team and scenario identity and receives the declared files and confirmed rules from the preceding task.
 
-References remain separate from the child's own goal, role and acceptance, preserving
-qualifications and unknowns without automatically resolving conflicts. They contain
-ancestor goals only, never parent-private answers, approvals, memories, results or files,
-and grant no extra tools or search allowance. A Task 2 root has no ancestor references
-even when it depends on a prior phase. Re-entry, same-task answer refresh and compaction
-retain mandatory references. Availability does not prove model use or correct conclusions.
+The framework reports missing dependency files and versions before work starts. In team runs with targeted recovery enabled, a subtask can use `report_blocked` to tell its direct parent what it needs and what it has done. The lead can resume the original node or name it in `replaces`. Replacement updates pending dependencies. Root acceptance uses the active nodes, while history keeps prior attempts. A recovered node carries forward its spent budget.
 
-The formal adapter saves auxiliary context and exact ancestor-goal records in private
-`.evaluation/context/<digest-prefix>.json` archives, including lineage-only context.
-New filenames use a 32-hex prefix,
-with full SHA-256 references and collision checks. These are framework evidence,
-not delivered project artifacts.
+## Context, memory, and cache use
 
-Questions are persisted before waiting. After delegation, retry or process recovery,
-the runner restores answered exchanges into its pinned opening. Supported human ports
-resume an original scoped pending question or recover its consumed response without
-inventing a request ID. Missing or conflicting evidence fails explicitly. Tool approvals
-remain fresh per action; rejection feedback returns in that action's tool result.
+The opening request includes role and tool rules, the goal, confirmed user answers, dependency versions, and relevant lessons. Each agent retains its own tool history. Handoffs carry the files and summaries another agent needs. Long-term lessons are retrieved by project and role, and team handoffs keep their own scope.
 
-See [CONTEXT-MEMORY.en.md](CONTEXT-MEMORY.en.md) for admission and evolution.
+Calls reuse stable opening messages and tool definitions. Step counts, time remaining, and closeout notices are appended when needed. Providers with prefix caching can reuse matching input at the start of the request. A task change, a new confirmed answer, or compaction can change that prefix. Cache statistics use hit and miss counts reported by the provider.
 
-## Execution, artifacts and isolation
+Long tool outputs enter the conversation as a short preview with a reference that can be read again. At the compaction threshold, the framework shortens older tool results and drops the oldest complete turns first. It prioritizes the opening rules, recent steps, and error evidence. Routine compaction makes no extra model call. The runner checks request capacity before sending and reports a capacity problem if essential context cannot fit.
 
-Tools pass through the Gate, which applies action-class approval policy and records
-structured results/spans. Formal evaluation also requires approval for Git staging and
-committing. Tavily search has a shared per-scenario allowance; school model access is
-accounted separately.
+For official DeepSeek, the command-line defaults are a 600,000-token compaction trigger, a 400,000-token target, and a 610,000-token per-request cap. These are estimated input counts including tool definitions. The cumulative node budget adds usage across the node's model requests and responses.
 
-Artifacts are explicit workspace-relative paths. Dependencies do not share whole
-directories or make transitive files available. Missing input must be delivered through
-the integration interface or clarified.
+## Workspaces and tool permissions
 
-Local path validation is application isolation, not an operating-system security
-sandbox: arbitrary executed code can have broader host access. Native Windows process
-management and the internal evaluation supervisor have their own cleanup bounds.
-The interactive formal session uses cooperative node limits and tool/model timeouts,
-not a universal hard process deadline.
+The continuous runner allocates a workspace for each scenario, task, and role. Agents use file tools within their own directories. The framework imports declared files from published versions into downstream workspaces. Path handling checks boundaries, links, and reserved framework areas. Tool access and approval policy are controlled by the framework.
 
-## Evidence and evaluation
+With the macOS workspace sandbox available, Shell and Python use the selected workspace, a restricted process environment, and a separate temporary directory. Ordinary commands and in-workspace cleanup can proceed automatically. Automatic commands may use local loopback, with external networking restricted. Dependency installation, explicit external access, and pushes involve human decisions. The sandbox still enforces write boundaries after approval. It permits access to system tools and libraries and applies separate restrictions to other roles' run files and `.env`.
 
-The only bundled source is the instructor mid-test's original Markdown in
-`eval/tasks/`: three teams and six root goals. Compatible external Markdown sources
-can still be selected explicitly. Historical and external results remain separate
-from instructor scores.
+Where the workspace sandbox is unavailable, `auto` requests human approval for Shell and Python. In manual mode, file tools still check paths. Shell and Python run with the launcher's OS permissions. Use a controlled container or virtual machine when process-level isolation is required.
 
-Each fresh run records source/code/configuration identity, dialogue, human exchanges,
-task results, trace and search accounting. New delivery captures add selected immutable
-file copies, active memory metadata and recorded failure events. Scenario-close
-snapshots can include unfinished nodes as diagnostics; they are not deliveries or
-extra goals. Old missing captures remain unknown.
+## Delivery, automated checks, and review
 
-Recorder flushes JSONL before its SQLite projection. Projection failure remains visible
-and falls back to the journal; valid reopening imports missing events. The files do not
-share a transaction. Automatic span parents describe the runtime call hierarchy,
-separate from task dependencies.
+An agent submits a delivery list and any files needed for acceptance. The framework stages the candidate, checks dependency versions, paths, and hashes, and runs conditions such as file presence, content matching, and command exit status. For a missing test script, it reports the path and declaration issue so the agent can correct the submission. Passed files are published under a version identifier. Its manifest records paths, sizes, and SHA-256 hashes.
 
-Offline tools validate saved evidence without rerunning agents or acceptance:
+Downstream nodes import a named version. The framework reports missing files, path conflicts, and hash mismatches before proceeding. QA records the version under test and the result. When a scenario requires independent QA, the framework checks that evidence against the final files. Human review records a separate judgment about the goal and output quality. Reports show the automated and human decisions separately.
 
-- `eval.report`: plan denominator, timing, raw/effective quality and saved evidence.
-- `eval.review`: explicit append-only human decisions and supersession history.
-- `eval.analysis`: failure and memory observations without inferred causal benefit.
-- `eval.replay`: original source-linked records for a P2 consumer.
+## Models, search, timing, and records
 
-Task-stage failure or quality rejection skips later dependent work in its group and
-allows independent groups to continue. Setup/configuration, cleanup failure or global
-cancellation stops the suite. Unposted and unreviewed goals remain in the original plan.
+The CLI supports official DeepSeek and HKGAI profiles and defaults to buffered requests. The client handles transient transport issues within the call timeout according to its retry policy. Tavily and SerpApi are selectable. Search allowance is shared within a scenario. Reads of registered sources, quote checks, and new search requests are recorded separately. These records support source tracing, while reviewers judge the content against the task.
 
-A `DONE` node with no machine criteria is self-report. Reviewed quality requires its own
-evidence; a regression result, memory record or export does not establish that all
-instructor goals passed or a teammate accepted the integration.
+A scenario budget covers consecutive tasks, and the lead can estimate time for each task. Each node also has step, cumulative token, and execution time limits. The framework records real waits for clarification, approval, and review separately. As the deadline approaches, the worker prompts the team to finish checks and deliver. The default execution limits are 1,800 seconds per scenario and 300 seconds per node. Both can be configured from the CLI.
 
-## Public evidence and final delivery checks
-
-Formal teacher engines keep public research in a scenario-owned source-evidence store,
-separate from private role workspaces, task memory and immutable delivery snapshots.
-Metered search records the actual query, request, role/task, URL, snippet and original
-time. `source_history` exposes that evidence across the four roles; `read_source` adds
-bounded original text and read/network provenance without making a new search.
-Only registered public sources and explicit same-document formats are accepted. Failed
-reads remain failures; neither snippets nor successful retrieval certify factual claims.
-
-Teacher context preserves original role/task text and adds a generic source/claim,
-date/unit and independent-calculation protocol. Its root-delivery hook checks declared
-document references before acceptance and publication. It asks the model to correct
-missing/undeclared support files instead of publishing private or inferred files.
-Packaging evidence and semantic quality remain separate; human review is never forged.
-Explicit public research reuse retains original times and is labeled separately in the
-run manifest. It does not import previous answers, deliverables, memories or grades.
-
-## Delivery references
-
-Data handoff uses explicit graph edges: every model plan states each child's `deps`,
-and a missing field receives corrective feedback before delegation changes state.
-Python plan defaults remain compatible. This exposes silent omission; it does not
-infer data flow from prose or prove that chosen edges are right.
-
-Approval notes have a separate typed feedback path from Gate to the next agent
-observation. Their request/call/scope identity is retained without modifying tool
-content channels or widening authorization. Question history, approvals and
-independent content acceptance remain distinct records.
-
-Public-source retention separates immutable raw/text blobs and retrieval metadata
-versions from the mutable latest-URL pointer. GETs retain their identities and dates;
-cache/page serving is not a new retrieval. Verified legacy current rows can be
-backfilled, while missing historical versions remain unavailable. Storage integrity
-and supplemental operator captures do not establish claim accuracy.
-
-`verify_source_quote` checks a literal against the current source store's retained
-`metadata_sha256`. After configuring the team, the operator binds the tool once to
-actual provider-returned role paths, without assuming LocalDirs or Git worktree layout.
-It reads only the exact version, with no HTTP, search or latest-page fallback. Exact
-code-point matching is the default; optional normalization changes whitespace only.
-Match, non-match and unavailable evidence yield `true`, `false` and `null`. Coordinates
-identify saved extractor text or the explicitly normalized derived text. A lexical
-match does not establish truth, attribution, metric/date scope or human acceptance.
-
-- [Setup](SETUP.en.md)
-- [Evaluation workflow](EVAL.en.md)
-- [Metrics](metrics.md)
-- [Shared interfaces](INTERFACES.en.md)
-- [P3 responsibility](roles/P3-data-and-evaluation.en.md)
+Each run keeps a manifest, model and tool traces, dialogue, human decisions, and version evidence. The optional `--research-progress` summarizes sources already read. The optional `--execution-progress` flags a successful Shell or Python call repeated with the same arguments and an unchanged workspace in the same attempt. An agent can give a reason to execute it again under the usual approval policy.

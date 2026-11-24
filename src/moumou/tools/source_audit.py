@@ -91,9 +91,9 @@ class SourceAccessAuditTool:
         if workspaces is not None:
             self.bind_workspaces(workspaces)
 
-    def bind_workspaces(self, workspaces):
-        """Trusted operator binds actual agent IDs to actual provider paths once."""
-        if self._workspaces is not None:
+    def bind_workspaces(self, workspaces, *, phase_change=False):
+        """Bind trusted provider paths for the same agents across teacher tasks."""
+        if self._workspaces is not None and not phase_change:
             raise ValueError("source audit workspaces are already bound")
         if (not isinstance(workspaces, Mapping) or not workspaces or len(workspaces) > 64
                 or any(not _identifier(agent) or agent == "*" for agent in workspaces)):
@@ -101,6 +101,8 @@ class SourceAccessAuditTool:
         bound = {agent: _workspace(path) for agent, path in workspaces.items()}
         if len(set(bound.values())) != len(bound):
             raise ValueError("source audit requires independent actor workspaces")
+        if self._workspaces is not None and bound.keys() != self._workspaces.keys():
+            raise ValueError("source audit phase requires the same actors")
         self._workspaces = bound
 
     def _selection(self, args, ctx):

@@ -76,10 +76,16 @@ class TeacherResearchProgress:
     def bind(self, repo, workspaces, trace):
         if self._repo is not None:
             raise ValueError("research progress is already bound")
+        self.bind_workspaces(workspaces)
+        self._repo, self._trace = repo, trace
+
+    def bind_workspaces(self, workspaces):
         paths = {actor: Path(path).resolve() for actor, path in workspaces.items()}
         if not paths or len(set(paths.values())) != len(paths):
             raise ValueError("research progress needs distinct role workspaces")
-        self._repo, self._workspaces, self._trace = repo, paths, trace
+        if self._workspaces is not None and paths.keys() != self._workspaces.keys():
+            raise ValueError("research progress phase requires the same actors")
+        self._workspaces = paths
 
     def _key(self, task_id, actor, workspace):
         if self._repo is None:

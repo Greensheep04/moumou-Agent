@@ -1,178 +1,24 @@
 # Changelog
 
-> These dated entries preserve historical implementations, commands and measured results. Current formal runs use the [shared task protocol](docs/EVAL.en.md): instructor first, retained supplementary tasks explicitly selected; framework pytest uses make unit-test.
+[简体中文](CHANGELOG.md)
 
-[简体中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
+## Current system release
 
-## Unreleased · Human context and evaluation delivery
+Changes since GitHub baseline `c96fab2`, the starting point for this development round.
 
-Current development adds scoped same-task question recovery, fresh approval feedback,
-automatic trace parent/agent metadata, immutable phase evidence, group task-stage
-failure isolation, append-only explicit review and instructor analysis/read-only replay.
-Regressions are written but have not been executed for this candidate. The 905/8 result
-below belongs to the previously published e35e820 baseline. Current readiness is recorded
-in [the performance report](docs/PERFORMANCE.en.md).
-
-Delivery documentation now provides current setup, architecture, interface and evidence
-indexes. Fourteen dated planning/progress/validation notes are retired from the current
-tree; their original content remains in Git history. The bundled GitHub Actions workflow
-is removed. Framework tests remain available through explicit local commands.
-
-### Published e35e820 context/archive behavior
-
-The formal team adapter preserves complete original role prompts, current goals and
-all acceptance criteria before allocating opening-context space to optional history,
-dependencies, board content or lessons. Exact auxiliary content remains recoverable in
-private `.evaluation/context/<digest-prefix>.json`. New filenames use the first 32 digest
-hex characters; references/validation retain full SHA-256, differing-content collisions
-are rejected, and existing archives are not renamed. Mandatory content that cannot fit raises
-`ContextAdmissionError` before an LLM call. The generic P0 context builder is unchanged.
-Framework/context failures retain their original goal denominator and evidence.
-
-Published e35e820 full regression on native Windows / activated Conda nlp: 905 passed,
-8 skipped in 209.43 seconds; Ruff passes across src/tests. These are implementation
-checks, not verified completion of the six instructor goals.
-
-- Worker now publishes validated existing/unchanged files declared in
-  `submit_result.files` after acceptance, preserving tracked artifacts and rejecting
-  invalid declarations atomically with correctable feedback. Publication/team checks:
-  21 passed; archive-path/orchestration/session checks: 31 passed, followed by the
-  successful full regression above. The earlier failed full run remains preserved.
-
-## 2026-10-23 · Role review
-
-A model may now propose a change to a role, but nothing takes effect without a human
-approving it.
-
-### Added
-
-**Trigger**: every three finished tasks, once a run has ended, the model is asked whether
-any role description would have changed an outcome. Running at the end rather than
-between tasks keeps it from blocking work in flight.
-
-**Structured proposal**: the model submits `role` / `proposed_description` / `reason` /
-`evidence` through `submit_revision`; an empty role means "nothing worth changing".
-
-**Human approval**: through `HumanIO.ask(kind="review")`, with the current and proposed
-descriptions side by side. Approve bumps the version; reject with a note feeds the next
-round, up to three; reject with no note ends the cycle.
-
-**Record**: every proposal and decision lands in the `role_revisions` table and the trace.
-
-**Documentation**: a new "Role evolution" section in the sub-agent document.
-
-### Verified
-
-- 151 automated tests pass (9 new: approve, reject, iteration with a note, empty
-  proposal, unknown role, length cap, engine-level trigger)
-
-## 2026-10-23 · Sub-agent hand-off and failure recovery
-
-The hand-off from a sub-agent changed from prose to structured fields, and a parent is now woken
-when a child fails so it can re-dispatch.
-
-### Added
-
-**Structured hand-off**: a sub-agent calls `submit_result` with `summary` / `files` / `notes` /
-`blockers`; the parent renders those fields, and the cap rose from 800 to 3000 characters. A plain
-text reply still works and is wrapped as `summary`.
-
-**Failure recovery**: a `DEAD` child no longer takes its parent down. The parent is woken (twice at
-most) and may re-dispatch; the replacement children carry a round prefix `t1.r1.a` so ids cannot
-collide with the first attempt.
-
-**Lead prompt**: a dedicated lead prompt spelling out the criteria for "do it yourself or delegate",
-that sub-task goals must be self-contained, that acceptance criteria must be one of six forms, and
-that a failure should not be forwarded to the human unchanged. The framework rules are appended
-after the role text, so they win on conflict.
-
-**Documentation**: a new "Sub-agents" document in Chinese and English.
-
-### Verified
-
-- 142 automated tests pass (new: hand-off rendering, `submit_result` end to end, wake-up and round
-  prefix)
-- `s2_bugfix` against the live API: the model did call `submit_result`, and the fields landed in the
-  database
-
-
-## 2026-10-22 · Context and memory system
-
-This milestone delivers the context and long-term memory systems: four-layer context assembly,
-three-layer compaction triggered by budget, the conclusion board, and an experience memory that
-retires itself.
-
-### Added
-
-**Context**: thresholds centralised in `ContextPolicy` (1M window / 600K trigger / 256K target);
-token estimation on the vendor's ratios with automatic calibration; three-layer compaction
-(deterministic extraction → whole-turn dropping → model summary, the summary is off by default);
-an opening-message budget and admission rules.
-
-**Memory**: SQLite storage with character-bigram retrieval; reflection runs only for tasks that
-failed, needed retries, or took more than eight steps, and produces structured lessons; scoring,
-decay, soft delete and a permanent purge after thirty days; citation write-back so the scoring
-actually takes effect.
-
-**Conclusion board**: hand-off notes between instances of one role, scoped precisely to
-project:conversation:role.
-
-### Verified
-
-- 127 automated tests pass
-- three evaluation tasks run against the live API with a 1.0 completion rate, ¥0.057 in total
-- memory loop demo: task A fails and writes a lesson, task B retrieves it and finishes
-
-### Changed
-
-- Chinese retrieval moved from FTS5 trigram to character bigrams: measurement showed trigram is
-  sensitive to word order and cannot match two-character queries
-- `Budget.max_tokens` default raised from 200K to 12M; it is a runaway guard, not a bill
-
-## 2026-10-21 · Initial framework skeleton
-
-This upload completed the initial framework skeleton. The whole path — task submission, automatic
-decomposition, assignment to sub-agents, execution, acceptance and delivery — is connected, and the
-remaining modules can be built on top of it.
-
-### Added
-
-**Data contracts**: 8 core models, 6 port protocols, and the task state machine (8 states with a
-table of legal transitions).
-
-**Orchestration core**: an event-driven scheduler (parallel or serial by dependency), autonomous
-decomposition (the model submits a structured plan; the framework checks for cycles, validates
-roles and enforces count and depth limits), roles created at runtime (look before you create, a new
-role must justify itself), an approval gate (risky actions pause for a human), machine acceptance
-(6 kinds of check with automatic retry), and crash recovery.
-
-**Execution and tools**: 8 built-in tools; one isolated workspace per agent with path-escape checks
-everywhere.
-
-**Evaluation**: task YAML format, loader, batch runner, 3 sample tasks, and a completion-rate and
-timing report.
-
-**Documentation**: bilingual README, interface spec, architecture note, project status, evaluation
-guide, FAQ and three role briefs.
-
-### Verified
-
-- 65 automated tests pass, three of which are interface contract suites
-- the live DeepSeek API works (model `deepseek-flash`): plain chat, function calling and tool
-  registration all behave
-- the end-to-end demo runs, all 3 tasks complete, completion rate 1.0
-
-### Pending integration
-
-These modules already have ports reserved and are waiting for their owners:
-
-- execution sandbox (currently application-level path checks; a Docker backend is pending)
-- Git / GitHub integration
-- web search
-- persistent message bus
-- command line interface and approval interaction
-- persistent storage and metrics reporting
-- the evaluation task set grown to 15
-- ablations (memory on/off, parallel on/off)
-
-Owners, acceptance methods and progress per module are tracked in [docs/STATUS.md](docs/STATUS.md).
+- Make the official DeepSeek Flash profile the default and keep HKGAI selectable.
+- Add SerpApi and record search allowances and retrieved sources per scenario.
+- Keep the start of model requests stable to improve prefix cache reuse.
+- Compact less often and prioritize confirmed requirements, delivery versions, and recent work.
+- Limit individual request size and cumulative node usage separately, with diagnostics for both.
+- Let the lead specify assignments, dependencies, and checks so independent work can run in parallel.
+- Let a blocked subtask report missing material so the lead can resume or replace the affected node.
+- Update pending dependencies after replacement and reuse other accepted work.
+- Give each role a writable directory for each task and carry forward accepted files and rules.
+- Hand over numbered versions with file checksums and detect missing or conflicting inputs before testing.
+- Check delivery declarations, test scripts, and QA versions before publication so agents can fix specific defects.
+- Save QA progress against the tested version and use delivery and QA records to prepare the release.
+- Run ordinary commands and cleanup automatically inside the workspace sandbox, with human approval for dependency installation and other controlled actions.
+- Track time per node and scenario, let the lead estimate time for each task, and record human waits separately.
+- Add closeout checks and traces for diagnosing request timeouts, failed checks, and blocked nodes.
+- Keep GitHub's source tracking fix and optional check for repeated commands.

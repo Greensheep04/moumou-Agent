@@ -197,6 +197,11 @@ class GitWorkspaces:
             ) as exc:
                 return IntegrateResult(ok=False, error=str(exc)[:1024])
 
+    def integrate_published(self, src, snapshot, dst, artifacts):
+        """在原有 Git 交付流程中只导入已发布的文件内容。"""
+        with self._lock:
+            return self._integrate(src, dst, artifacts, snapshot=snapshot)
+
     def _ref(self, path, name, fallback):
         result = self.git(path, "rev-parse", "--verify", name, check=False)
         return result.stdout.strip() if result.returncode == 0 else fallback
@@ -220,7 +225,7 @@ class GitWorkspaces:
             index.unlink(missing_ok=True)
             Path(str(index) + ".lock").unlink(missing_ok=True)
 
-    def _integrate(self, src, dst, artifacts):
+    def _integrate(self, src, dst, artifacts, *, snapshot=None):
         src, dst = self._managed(src), self._managed(dst)
         src_common = self.git(
             src, "rev-parse", "--path-format=absolute", "--git-common-dir"
@@ -234,7 +239,7 @@ class GitWorkspaces:
             raise ValueError("artifacts must be a list of relative paths")
         if not artifacts or src == dst:
             return IntegrateResult()
-        source_jail, dest_jail = LocalJail(src), LocalJail(dst)
+        source_jail, dest_jail = LocalJail(snapshot or src), LocalJail(dst)
         entries = {}
         for rel in artifacts:
             if Path(rel).is_absolute():
@@ -246,7 +251,7 @@ class GitWorkspaces:
                 raise ValueError("artifacts must name files, not directories")
             if path.is_file():
                 oid = self.git(
-                    src, "hash-object", "-w", "--no-filters", "--", str(path)
+                    src, "hash-object", "-w", "--stdin", data=path.read_bytes()
                 ).stdout.strip()
                 mode = "100755" if os.name != "nt" and os.access(path, os.X_OK) else "100644"
                 entries[normalized] = (mode, oid)

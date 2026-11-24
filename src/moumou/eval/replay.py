@@ -18,7 +18,9 @@ from moumou.eval.report import _canonical, build_report
 
 _LINE_LIMIT = 32 * 1024**2
 _RAW_NAMES = {"test.json", "midtest.json", "active.json", "review.json", "intent.json"}
-_NODE_STATUSES = {"PENDING", "READY", "RUNNING", "WAITING_HUMAN", "DONE", "FAILED", "DEAD"}
+_NODE_STATUSES = {
+    "PENDING", "READY", "RUNNING", "WAITING_HUMAN", "BLOCKED", "DONE", "FAILED", "DEAD",
+}
 
 
 def _pairs(pairs):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
@@ -42,6 +43,7 @@ class Settings(BaseModel):
     max_slots: int = 4
     max_rounds: int = 500
     approval: dict[str, bool] = Field(default_factory=dict)
+    workspace_execution_root: Path | None = None
     require_subtask_acceptance: bool = Field(
         default=False,
         description="Reject delegated subtasks without machine acceptance checks; opt-in.",
@@ -52,6 +54,8 @@ class Settings(BaseModel):
     max_output_tokens: int = 384_000
     compact_trigger_tokens: int = 600_000
     compact_target_tokens: int = 256_000
+    max_request_tokens: int = 300_000
+    max_tool_result_chars: int = 4_000
     memory_enabled: bool = True
 
     role_review_enabled: bool = True
@@ -107,18 +111,24 @@ class Engine:
             self.tools.register_all(*default_tools())
 
         self.gate = Gate(
-            self.repo, self.tools, self.human, self.trace, ApprovalPolicy(self.settings.approval)
+            self.repo, self.tools, self.human, self.trace, ApprovalPolicy(self.settings.approval),
+            execution_root=self.settings.workspace_execution_root,
         )
         self.delegation = Delegation(
             self.repo, self.roles, self.trace, self.tools.names(),
             require_subtask_acceptance=self.settings.require_subtask_acceptance,
         )
-        self.acceptance = AcceptanceChecker(self.trace)
+        self.acceptance = AcceptanceChecker(
+            self.trace, subtree_verdict=self._subtree_verdict,
+            execution_root=self.settings.workspace_execution_root,
+        )
         self.policy = ContextPolicy(
             context_window=self.settings.context_window,
             max_output_tokens=self.settings.max_output_tokens,
             compact_trigger_tokens=self.settings.compact_trigger_tokens,
             compact_target_tokens=self.settings.compact_target_tokens,
+            max_request_tokens=self.settings.max_request_tokens,
+            max_tool_result_chars=self.settings.max_tool_result_chars,
         )
         self.budget = TokenBudget(
             correction=float(self.db.get_meta("token_correction", "1.0") or 1.0)
@@ -170,8 +180,48 @@ class Engine:
             self.settings.max_rounds,
             on_terminal=self._on_terminal,
         )
+        self.background_reflection = False
+        self._reflections: set[asyncio.Task] = set()
 
     # -- submitting work -------------------------------------------------
+    def _subtree_verdict(self, root_id: str) -> tuple[bool, dict]:
+        """Aggregate the machine evidence of a root's subtree into one verdict.
+
+        A root that declares ``subtree_accepted`` is no longer graded on its own
+        self-report: it passes only when every descendant finished and every
+        descendant that declared criteria actually passed them.
+        """
+        descendants = self.repo.active_descendants(root_id)
+        unfinished = sorted(t.id for t in descendants if t.status != "DONE")
+        checked = [t for t in descendants if t.acceptance]
+        failed: list[str] = []
+        missing: list[str] = []
+        for task in checked:
+            verdicts = [
+                event for event in self.trace.query(task.id)
+                if event.kind == "acceptance" and event.name == "verdict"
+            ]
+            if not verdicts:
+                missing.append(task.id)
+            elif verdicts[-1].payload.get("ok") is not True:
+                failed.append(task.id)
+        detail = {
+            "descendants": len(descendants),
+            "checked_descendants": len(checked),
+            "unfinished": unfinished,
+            "failed_verdicts": failed,
+            "missing_verdicts": missing,
+        }
+        if not descendants:
+            return False, {**detail, "error": "root has no subtasks to aggregate"}
+        if unfinished:
+            return False, {**detail, "error": "descendants did not finish"}
+        if not checked:
+            return False, {**detail, "error": "no descendant declared machine criteria"}
+        if failed or missing:
+            return False, detail
+        return True, detail
+
     def submit(
         self,
         goal: str,
@@ -217,7 +267,17 @@ class Engine:
         self._recover()
         started_dt = datetime.now(UTC)
         started = monotonic()
-        await self.scheduler.run()
+        try:
+            await self.scheduler.run()
+            if self._reflections:
+                wait_s = max(0.0, min(8.0, self.runner.execution_remaining() - 1))
+                await asyncio.wait(self._reflections, timeout=wait_s)
+        finally:
+            pending = tuple(self._reflections)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
         wall = monotonic() - started
 
         tasks = self.repo.all_tasks()
@@ -286,7 +346,12 @@ class Engine:
             if self.reflection.should_reflect(node, steps):
                 role = self.roles.get(node.project_id, node.role)
                 if role is not None:
-                    await self.reflection.reflect(node, role, steps=steps)
+                    if self.background_reflection:
+                        task = asyncio.create_task(self._reflect_in_background(node, role, steps))
+                        self._reflections.add(task)
+                        task.add_done_callback(self._reflections.discard)
+                    else:
+                        await self.reflection.reflect(node, role, steps=steps)
         except Exception as exc:
             self.trace.record(
                 task_id=node.id,
@@ -294,6 +359,14 @@ class Engine:
                 name="reflection_failed",
                 error=f"{type(exc).__name__}: {exc}",
             )
+
+    async def _reflect_in_background(self, node, role, steps):
+        with self.trace.span(task_id=node.id, kind="memory", name="background_reflection"):
+            try:
+                await self.reflection.reflect(node, role, steps=steps)
+            except Exception as exc:
+                self.trace.record(task_id=node.id, kind="memory", name="reflection_failed",
+                                  error=f"{type(exc).__name__}: {exc}")
 
     async def _maybe_review_roles(self, tasks: list[TaskNode], run_started) -> None:
         """Ask for one role improvement every N finished tasks, never mid-run."""
@@ -344,7 +417,9 @@ class Engine:
         for node in self.repo.by_status("WAITING_HUMAN"):
             self.repo.transition(node.id, "FAILED", "crashed_while_waiting")
         for node in self.repo.by_status("FAILED"):
-            if node.retries < node.budget.max_retries:
+            if self.repo.targeted_recovery or node.recovery_used:
+                self.repo.transition(node.id, "DEAD", "node_failure_requires_repair")
+            elif node.retries < node.budget.max_retries:
                 self.repo.bump_retries(node.id)
                 self.repo.transition(node.id, "READY", "recovered")
             else:
@@ -365,6 +440,8 @@ class Engine:
 
     def abort(self) -> None:
         self.scheduler.abort()
+        for task in self._reflections:
+            task.cancel()
 
     # -- lifecycle -------------------------------------------------------
     def close(self) -> None:

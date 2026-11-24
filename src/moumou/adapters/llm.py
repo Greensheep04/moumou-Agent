@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
+import time
 from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
@@ -63,7 +63,18 @@ class FakeLLM:
         self._script = script
         self.calls: list[list[dict]] = []
 
-    async def chat(self, messages: list[dict], tools: list[dict] | None = None) -> LLMResponse:
+    async def chat(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        diag: list[dict] | None = None,
+    ) -> LLMResponse:
+        """One completion call.
+
+        ``diag`` (optional) collects one record per HTTP attempt so a timeout can
+        be attributed: which attempt, what status, how long it took. The caller
+        owns the list; nothing is shared between calls.
+        """
         self.calls.append(messages)
         if callable(self._script):
             return self._script(messages, tools)
@@ -73,24 +84,28 @@ class FakeLLM:
 
 
 class DeepSeekClient:
-    """Real client. Set DEEPSEEK_API_KEY (or pass api_key)."""
+    """Buffered client for either configured model endpoint."""
 
     def __init__(
         self,
         api_key: str | None = None,
         base_url: str | None = None,
         model: str | None = None,
-        timeout_s: float = 180.0,
-        max_retries: int = 3,
+        timeout_s: float | None = None,
+        max_retries: int = 2,
     ):
-        from moumou.config import DEFAULT_BASE_URL, DEFAULT_MODEL, load_dotenv
+        from moumou.config import LLMSettings
 
-        load_dotenv()
-        self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
-        self.base_url = (
-            base_url or os.environ.get("DEEPSEEK_BASE_URL") or DEFAULT_BASE_URL
-        ).rstrip("/")
-        self.model = model or os.environ.get("DEEPSEEK_MODEL") or DEFAULT_MODEL
+        if api_key is None or base_url is None or model is None or timeout_s is None:
+            settings = (LLMSettings.from_env() if api_key is None
+                        else LLMSettings.public_from_env())
+            api_key = settings.api_key if api_key is None else api_key
+            base_url = base_url or settings.base_url
+            model = model or settings.model
+            timeout_s = settings.timeout_s if timeout_s is None else timeout_s
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.model = model
         self.timeout_s = timeout_s
         self.max_retries = max_retries
         self._client: httpx.AsyncClient | None = None
@@ -104,11 +119,21 @@ class DeepSeekClient:
         if self._client is not None and not self._client.is_closed:
             await self._client.aclose()
 
-    async def chat(self, messages: list[dict], tools: list[dict] | None = None) -> LLMResponse:
+    async def chat(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        diag: list[dict] | None = None,
+    ) -> LLMResponse:
+        """One completion call.
+
+        ``diag`` (optional) collects one record per HTTP attempt so a timeout can
+        be attributed: which attempt, what status, how long it took. The caller
+        owns the list; nothing is shared between calls.
+        """
         if not self.api_key:
             raise RuntimeError(
-                "DEEPSEEK_API_KEY is not set. cp .env.example .env and put your "
-                "own key there (.env is gitignored)."
+                "No model API key configured. See .env.example for the selected profile."
             )
 
         payload: dict = {"model": self.model, "messages": messages, "temperature": 0.2}
@@ -121,28 +146,51 @@ class DeepSeekClient:
             "Content-Type": "application/json",
         }
 
-        last_err: Exception | None = None
+        async with asyncio.timeout(self.timeout_s):
+            return await self._request(payload, headers, diag)
+
+    async def _request(self, payload, headers, diag) -> LLMResponse:
         for attempt in range(self.max_retries):
+            started = time.monotonic()
             try:
                 resp = await self._http().post(
                     f"{self.base_url}/chat/completions", json=payload, headers=headers
                 )
-            except httpx.HTTPError as exc:              # network blip: back off
-                last_err = exc
+            except (httpx.TransportError, asyncio.CancelledError) as exc:
+                retrying = isinstance(exc, httpx.TransportError) and attempt + 1 < self.max_retries
+                if diag is not None:
+                    diag.append({
+                        "attempt": attempt + 1, "status": "transport_error",
+                        "error": type(exc).__name__,
+                        "elapsed_s": round(time.monotonic() - started, 3),
+                        "retrying": retrying,
+                    })
+                if not retrying:
+                    raise
                 await asyncio.sleep(2**attempt)
                 continue
 
-            if resp.status_code in (429, 500, 502, 503, 504) and attempt < self.max_retries - 1:
+            elapsed = round(time.monotonic() - started, 3)
+            if resp.status_code in (429, 502, 503, 504) and attempt < self.max_retries - 1:
+                if diag is not None:
+                    diag.append({
+                        "attempt": attempt + 1, "status": resp.status_code,
+                        "elapsed_s": elapsed, "retrying": True,
+                    })
                 await asyncio.sleep(2**attempt)
-                last_err = RuntimeError(f"HTTP {resp.status_code}")
                 continue
 
+            if diag is not None:
+                diag.append({
+                    "attempt": attempt + 1, "status": resp.status_code,
+                    "elapsed_s": elapsed, "retrying": False,
+                })
             if resp.status_code != 200:
                 raise RuntimeError(f"DeepSeek HTTP {resp.status_code}: {resp.text[:500]}")
 
             return self._parse(resp.json())
 
-        raise RuntimeError(f"DeepSeek failed after {self.max_retries} attempts: {last_err}")
+        raise ValueError("max_retries must allow at least one HTTP attempt")
 
     def _parse(self, data: dict) -> LLMResponse:
         choice = (data.get("choices") or [{}])[0]
